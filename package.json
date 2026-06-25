@@ -1,0 +1,16 @@
+{
+  "name": "ebay-lister-pro",
+  "version": "1.0.0",
+  "description": "Zero-dependency enterprise-grade Multi-Channel eBay Lister & Reseller Platform",
+  "main": "start.js",
+  "type": "commonjs",
+  "scripts": {
+    "bootstrap": "node bootstrap.js",
+    "start": "node start.js",
+    "test": "node test-suite.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "private": true
+}

@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "eBay Multi-Lister Cross-posting Companion",
+  "version": "1.0.0",
+  "description": "Scrapes product pages from Amazon, eBay, Shopify, Poshmark, and Mercari, and saves them directly as drafts on your local multichannel dashboard.",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:45911/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.amazon.com/*",
+        "*://*.ebay.com/*",
+        "*://*.shopify.com/*",
+        "*://*.poshmark.com/*",
+        "*://*.mercari.com/*"
+      ],
+      "js": ["content.js"]
+    }
+  ]
+}
