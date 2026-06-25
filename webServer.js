@@ -295,6 +295,8 @@ function startWebGuiServer(port = 45900) {
     const openPaths = [
       '/', '/index.html',
       '/landing', '/landing.html',
+      '/privacy', '/privacy.html',
+      '/terms', '/terms.html',
       '/health',
       '/api/status',
       '/api/metrics',
@@ -316,6 +318,34 @@ function startWebGuiServer(port = 45900) {
       return;
     }
     
+    // Serve Privacy Page
+    if (req.method === 'GET' && (parsedUrl.pathname === '/privacy' || parsedUrl.pathname === '/privacy.html')) {
+      const privacyPath = path.join(__dirname, 'public', 'privacy.html');
+      try {
+        const content = fs.readFileSync(privacyPath, 'utf8');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(content);
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end(`Error loading privacy policy: ${err.message}`);
+      }
+      return;
+    }
+
+    // Serve Terms Page
+    if (req.method === 'GET' && (parsedUrl.pathname === '/terms' || parsedUrl.pathname === '/terms.html')) {
+      const termsPath = path.join(__dirname, 'public', 'terms.html');
+      try {
+        const content = fs.readFileSync(termsPath, 'utf8');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(content);
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end(`Error loading terms of service: ${err.message}`);
+      }
+      return;
+    }
+
     // Serve Landing Page
     if (req.method === 'GET' && (parsedUrl.pathname === '/landing' || parsedUrl.pathname === '/landing.html')) {
       const landingPath = path.join(__dirname, 'public', 'landing.html');
@@ -443,6 +473,35 @@ function startWebGuiServer(port = 45900) {
         'Content-Type': 'application/json'
       });
       res.end(JSON.stringify({ success: true }));
+      return;
+    }
+
+    // API: Delete Account (GDPR / CCPA compliance Right to Erasure)
+    if (req.method === 'DELETE' && parsedUrl.pathname === '/api/user/account') {
+      const cookies = parseCookies(req.headers.cookie);
+      const sessionId = cookies.sessionId;
+      let email = null;
+      if (sessionId && activeSessions.has(sessionId)) {
+        const session = activeSessions.get(sessionId);
+        email = session.user?.email;
+        activeSessions.delete(sessionId);
+      }
+      
+      if (email) {
+        const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+        const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
+        if (billingHistory[email]) {
+          delete billingHistory[email];
+          utils.writeJsonFileSecure(billingDbPath, billingHistory);
+        }
+        utils.logAudit("INFO", `Account data deleted for user: ${email}`);
+      }
+
+      res.writeHead(200, {
+        'Set-Cookie': `sessionId=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT`,
+        'Content-Type': 'application/json'
+      });
+      res.end(JSON.stringify({ success: true, message: "User session and billing record deleted." }));
       return;
     }
 

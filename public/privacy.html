@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Privacy Policy — ListAI Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Syne:wght@700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:       #050810;
+      --bg2:      #0a1120;
+      --surface:  #0f1929;
+      --surface2: #162036;
+      --border:   rgba(255,255,255,0.06);
+      --border2:  rgba(255,255,255,0.11);
+      --brand:    #6366f1;
+      --brand2:   #4f46e5;
+      --glow:     rgba(99,102,241,0.30);
+      --light:    #818cf8;
+      --cyan:     #22d3ee;
+      --text:     #f0f4fc;
+      --muted:    #94a3b8;
+      --dim:      #475569;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 60px 24px; position: relative; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    
+    .bg-grid {
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background-image: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 48px 48px;
+    }
+    .orb { position: fixed; border-radius: 50%; filter: blur(130px); pointer-events: none; z-index: 0; }
+    .orb-1 { width: 500px; height: 500px; background: radial-gradient(circle, rgba(99,102,241,0.08) 0%, transparent 70%); top: -100px; left: -100px; }
+    
+    .card {
+      max-width: 800px; width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; padding: 40px; z-index: 10; position: relative; box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+    }
+    
+    .h1 { font-family: 'Syne', sans-serif; font-size: clamp(2rem, 4vw, 3rem); font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #a5b4fc 0%, #818cf8 30%, #22d3ee 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .subtitle { color: var(--muted); font-size: 0.95rem; margin-bottom: 30px; display: block; }
+    
+    h2 { font-family: 'Syne', sans-serif; font-size: 1.4rem; font-weight: 700; margin: 30px 0 12px; color: var(--light); }
+    p { color: var(--muted); margin-bottom: 16px; font-size: 0.98rem; }
+    ul { margin-left: 20px; margin-bottom: 16px; color: var(--muted); }
+    li { margin-bottom: 8px; }
+    
+    .gdpr-box {
+      background: rgba(16,185,129,0.06); border: 1px solid rgba(16,185,129,0.25); border-radius: 12px; padding: 20px; margin: 24px 0; color: #10b981;
+    }
+    
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 12px 24px; border-radius: 10px; font-size: 0.9rem; font-weight: 700; cursor: pointer; border: none;
+      background: linear-gradient(135deg, var(--brand), var(--brand2)); color: #fff; text-decoration: none; margin-top: 30px;
+      transition: all 0.2s ease;
+    }
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px var(--glow); }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="orb orb-1"></div>
+  
+  <main class="card">
+    <h1 class="h1">Privacy Policy</h1>
+    <span class="subtitle">Last Updated: June 25, 2026</span>
+    
+    <p>Vincent Kinney ("we", "us", or "our") operates <strong>eBay Multi-Channel Lister Pro</strong> (the "Service"). This policy outlines our data collection, processing, and erasure terms under GDPR and CCPA.</p>
+    
+    <h2>1. Information We Collect</h2>
+    <p>We process only the data necessary to sync and cross-post listings:</p>
+    <ul>
+      <li><strong>User Profile</strong>: Name, email address, and profile picture from Google Accounts OAuth sign-in.</li>
+      <li><strong>Listing Metadata</strong>: Titles, descriptions, condition aspects, pricing comps, and local photo directories.</li>
+      <li><strong>API Access Tokens</strong>: Cryptographically handled credentials for eBay, Shopify, WooCommerce, and Etsy.</li>
+      <li><strong>Operational Diagnostics</strong>: Uptime logs, endpoint request latencies, and client IP tailing.</li>
+    </ul>
+    
+    <h2>2. Third-Party Data Processing</h2>
+    <p>We transmit data to the following platforms to complete operations:</p>
+    <ul>
+      <li><strong>Google Gemini</strong>: Listing photos and specifications are analyzed by Gemini AI to extract barcodes and suggest categories.</li>
+      <li><strong>Stripe</strong>: Processing payment subscriptions.</li>
+      <li><strong>Marketplace APIs</strong>: Committing drafts directly to eBay, Shopify, WooCommerce, and Etsy.</li>
+      <li><strong>Temp Image Hosts</strong>: Uploading listing photos to <em>tmpfiles.org</em> or <em>file.io</em> fallbacks for remote URL access.</li>
+    </ul>
+    
+    <h2>3. GDPR Data Deletion & Erasure</h2>
+    <div class="gdpr-box">
+      <strong>🔒 GDPR RIGHT TO ERASURE:</strong> You have the right to request deletion of all your profile, subscription, and inventory history. Since this tool operates locally, you can delete local files under `data/` at any time. To purge your session registry and billing mapping, call `DELETE /api/user/account` or click "Wipe Account" in your profile dashboard.
+    </div>
+    
+    <h2>4. Contact Us</h2>
+    <p>For any privacy requests or GDPR erasure inquiries, email: <strong>privacy@ebaylisterpro.local</strong>.</p>
+    
+    <a href="/" class="btn">Return to Dashboard</a>
+  </main>
+</body>
+</html>

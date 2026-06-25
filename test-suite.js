@@ -1338,6 +1338,95 @@ test('Google OAuth login callback, Stripe Webhook, and WooCommerce/Etsy crosslis
     }
   });
 
+  await t.test('Legal pages (/privacy and /terms) serve HTML and bypass auth', async () => {
+    const testPort = 45923;
+    const server = webServer.startWebGuiServer(testPort);
+    try {
+      const privacyRes = await originalFetch(`http://127.0.0.1:${testPort}/privacy`);
+      assert.strictEqual(privacyRes.status, 200);
+      const privacyHtml = await privacyRes.text();
+      assert.ok(privacyHtml.includes('Privacy Policy'));
+      assert.ok(privacyHtml.includes('Vincent Kinney'));
+
+      const termsRes = await originalFetch(`http://127.0.0.1:${testPort}/terms`);
+      assert.strictEqual(termsRes.status, 200);
+      const termsHtml = await termsRes.text();
+      assert.ok(termsHtml.includes('Terms of Service'));
+      assert.ok(termsHtml.includes('AI Output Disclaimer'));
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test('DELETE /api/user/account deletes account data and active session', async () => {
+    const testPort = 45924;
+    const server = webServer.startWebGuiServer(testPort);
+    const originalGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+    const originalGoogleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    process.env.GOOGLE_CLIENT_ID = "mock-client-id";
+    process.env.GOOGLE_CLIENT_SECRET = "mock-client-secret";
+
+    const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+    const billingHistory = {};
+    billingHistory["google-user@test.com"] = { premium: true, subscriptionId: "sub_delete_123" };
+    utils.writeJsonFileSecure(billingDbPath, billingHistory);
+
+    global.fetch = async (url, options) => {
+      const urlStr = String(url);
+      if (urlStr.includes('oauth2.googleapis.com/token')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({ access_token: "mock-google-token" })
+        };
+      }
+      if (urlStr.includes('googleapis.com/oauth2/v3/userinfo')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({ email: "google-user@test.com", name: "Google Test User" })
+        };
+      }
+      return { status: 404, ok: false };
+    };
+
+    try {
+      // 1. Log in to establish the session
+      const callbackRes = await originalFetch(`http://127.0.0.1:${testPort}/api/auth/google/callback?code=test-auth-code`, {
+        redirect: 'manual'
+      });
+      const cookieHeader = callbackRes.headers.get('set-cookie');
+      assert.ok(cookieHeader && cookieHeader.includes('sessionId='));
+
+      // 2. Confirm user is premium in database
+      let dbState = utils.readJsonFileSecure(billingDbPath, {});
+      assert.strictEqual(dbState["google-user@test.com"]?.premium, true);
+
+      // 3. Call DELETE to erase the account
+      const deleteRes = await originalFetch(`http://127.0.0.1:${testPort}/api/user/account`, {
+        method: 'DELETE',
+        headers: {
+          'Cookie': cookieHeader
+        }
+      });
+      assert.strictEqual(deleteRes.status, 200);
+      const deleteData = await deleteRes.json();
+      assert.strictEqual(deleteData.success, true);
+
+      // 4. Confirm data is deleted in database
+      dbState = utils.readJsonFileSecure(billingDbPath, {});
+      assert.strictEqual(dbState["google-user@test.com"], undefined);
+
+    } finally {
+      process.env.GOOGLE_CLIENT_ID = originalGoogleClientId;
+      process.env.GOOGLE_CLIENT_SECRET = originalGoogleClientSecret;
+      if (fs.existsSync(billingDbPath)) {
+        try { fs.unlinkSync(billingDbPath); } catch (e) {}
+      }
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   global.fetch = originalFetch;
 });
 

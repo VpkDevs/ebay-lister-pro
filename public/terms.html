@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Terms of Service — ListAI Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Syne:wght@700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:       #050810;
+      --bg2:      #0a1120;
+      --surface:  #0f1929;
+      --surface2: #162036;
+      --border:   rgba(255,255,255,0.06);
+      --border2:  rgba(255,255,255,0.11);
+      --brand:    #6366f1;
+      --brand2:   #4f46e5;
+      --glow:     rgba(99,102,241,0.30);
+      --light:    #818cf8;
+      --cyan:     #22d3ee;
+      --text:     #f0f4fc;
+      --muted:    #94a3b8;
+      --dim:      #475569;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 60px 24px; position: relative; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    
+    .bg-grid {
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background-image: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 48px 48px;
+    }
+    .orb { position: fixed; border-radius: 50%; filter: blur(130px); pointer-events: none; z-index: 0; }
+    .orb-1 { width: 500px; height: 500px; background: radial-gradient(circle, rgba(99,102,241,0.08) 0%, transparent 70%); top: -100px; left: -100px; }
+    
+    .card {
+      max-width: 800px; width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; padding: 40px; z-index: 10; position: relative; box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+    }
+    
+    .h1 { font-family: 'Syne', sans-serif; font-size: clamp(2rem, 4vw, 3rem); font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #a5b4fc 0%, #818cf8 30%, #22d3ee 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .subtitle { color: var(--muted); font-size: 0.95rem; margin-bottom: 30px; display: block; }
+    
+    h2 { font-family: 'Syne', sans-serif; font-size: 1.4rem; font-weight: 700; margin: 30px 0 12px; color: var(--light); }
+    p { color: var(--muted); margin-bottom: 16px; font-size: 0.98rem; }
+    ul { margin-left: 20px; margin-bottom: 16px; color: var(--muted); }
+    li { margin-bottom: 8px; }
+    
+    .disclaimer-box {
+      background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.25); border-radius: 12px; padding: 20px; margin: 24px 0; color: #f59e0b;
+    }
+    
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 12px 24px; border-radius: 10px; font-size: 0.9rem; font-weight: 700; cursor: pointer; border: none;
+      background: linear-gradient(135deg, var(--brand), var(--brand2)); color: #fff; text-decoration: none; margin-top: 30px;
+      transition: all 0.2s ease;
+    }
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px var(--glow); }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="orb orb-1"></div>
+  
+  <main class="card">
+    <h1 class="h1">Terms of Service</h1>
+    <span class="subtitle">Last Updated: June 25, 2026</span>
+    
+    <p>Welcome to <strong>eBay Multi-Channel Lister Pro</strong> (the "Service"). Please read these Terms of Service carefully before operating the platform.</p>
+    
+    <h2>1. Acceptable Use</h2>
+    <p>You agree not to use the Service to:</p>
+    <ul>
+      <li>Publish listings that infringe on third-party trademark rights (such as brand names listed on the eBay VeRO restricted list).</li>
+      <li>Bypass rate limiters or run unauthorized scrapers against the Service endpoints or marketplace databases.</li>
+      <li>Publish counterfeit, restricted, or hazardous items violating partner store rules.</li>
+    </ul>
+    
+    <h2>2. Subscriptions & Billing</h2>
+    <p>Premium access is processed securely via Stripe. You agree to pay all charges associated with your subscription tier. Subscriptions automatically renew monthly unless canceled in the user account dashboard.</p>
+    
+    <h2>3. User Content & DMCA Notice</h2>
+    <p>You retain ownership of any product photos, descriptions, and aspects you upload. To report intellectual property violations, contact our DMCA Designated Agent at <strong>legal@ebaylisterpro.local</strong> with a signed infringement notification containing all required DMCA elements.</p>
+    
+    <h2>4. AI Output Disclaimer (FTC & EU AI Act Compliance)</h2>
+    <div class="disclaimer-box">
+      <strong>⚠️ IMPORTANT AI DISCLAIMER:</strong> This Service utilizes Google Gemini artificial intelligence to inspect listing photos, analyze item defects, extract aspect specifications, and generate comps pricing suggestions. AI output may contain errors, hallucinated facts, or pricing mistakes. Do not rely on AI-generated suggestions for business decisions without manual review and verification. Vincent Kinney and the Service are not liable for listings suspended, pricing inaccuracies, or losses resulting from AI-generated actions.
+    </div>
+    
+    <h2>5. Governing Law</h2>
+    <p>These Terms shall be governed by and construed in accordance with the laws of the State of Texas, without regard to its conflict of law provisions.</p>
+    
+    <a href="/" class="btn">Return to Dashboard</a>
+  </main>
+</body>
+</html>
