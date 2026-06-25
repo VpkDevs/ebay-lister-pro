@@ -84,3 +84,42 @@ Lister Pro fits the **Developer Tool / Niche SaaS** profile. Buyers pay a premiu
 1. Launch Stripe billing and secure the first 10 paying subscribers (Revenue Quality).
 2. Maintain a clean, structured ledger of operating expenses (QuickBooks) for 3 months (Clean Books).
 3. Secure the `Lister Pro` brand trademark (IP Ownership).
+
+---
+
+## ☄️ Comet Browser Agent Prompts (Online Actions)
+
+Use these prompts with Comet or any agentic browser to complete online setup steps:
+
+### 1. Stripe Individual Account Setup
+- **Target URL**: https://dashboard.stripe.com/register
+- **Objective**: Create a sole proprietor merchant account and retrieve API keys.
+- **Execution Script**:
+  1. Navigate to https://dashboard.stripe.com/register
+  2. Input user's signup email and details.
+  3. ⏸️ **PAUSE**: Let the user input password and complete verification.
+  4. Navigate to "Developers" > "API Keys".
+  5. Copy the "Secret Key" (`sk_test_...` or `sk_live_...`).
+  6. Present the copied key to the user.
+
+### 2. Google Gemini API Key Creation
+- **Target URL**: https://aistudio.google.com/
+- **Objective**: Generate a free Google Gemini API key.
+- **Execution Script**:
+  1. Navigate to https://aistudio.google.com/
+  2. ⏸️ **PAUSE**: Let the user sign in with their Google account.
+  3. Click "Get API Key" in the left sidebar.
+  4. Click "Create API Key" > Select "Create API Key in new project".
+  5. Copy the generated key string.
+  6. Present the copied key to the user.
+
+### 3. Railway Account & Deployment Token
+- **Target URL**: https://railway.app/login
+- **Objective**: Register and retrieve a deployment CLI token.
+- **Execution Script**:
+  1. Navigate to https://railway.app/login
+  2. ⏸️ **PAUSE**: Let the user sign in via GitHub or Email.
+  3. Click on the user profile icon > Go to "Account Settings" > "Tokens".
+  4. Create a new token named "Lister Pro CLI".
+  5. Copy the generated token string (`cli_...`).
+  6. Present the copied token to the user.
