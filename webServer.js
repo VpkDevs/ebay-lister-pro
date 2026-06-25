@@ -297,6 +297,7 @@ function startWebGuiServer(port = 45900) {
       '/landing', '/landing.html',
       '/privacy', '/privacy.html',
       '/terms', '/terms.html',
+      '/press', '/press.html',
       '/health',
       '/api/status',
       '/api/metrics',
@@ -315,6 +316,20 @@ function startWebGuiServer(port = 45900) {
     if (isAuthRequired && !user) {
       res.writeHead(401, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: "UNAUTHORIZED", message: "Please log in using Google Sign-In." }));
+      return;
+    }
+    
+    // Serve Press Page
+    if (req.method === 'GET' && (parsedUrl.pathname === '/press' || parsedUrl.pathname === '/press.html')) {
+      const pressPath = path.join(__dirname, 'public', 'press.html');
+      try {
+        const content = fs.readFileSync(pressPath, 'utf8');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(content);
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end(`Error loading press kit: ${err.message}`);
+      }
       return;
     }
     

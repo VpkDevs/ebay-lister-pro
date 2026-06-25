@@ -1,0 +1,13 @@
+eBay Multi-Channel Lister Pro Brand Colors (HEX):
+
+- Primary Background: #050810 (Navy Dark)
+- Secondary Background: #0a1120
+- Surface Panel: #0f1929
+- Brand Accent Core: #6366f1 (Indigo)
+- Brand Accent Glow: #818cf8 (Light Indigo)
+- Secondary Accent: #22d3ee (Cyan)
+- Shopify Green: #10b981
+- Etsy Orange/Amber: #f59e0b
+- Error Red: #ef4444
+- Text Primary: #f0f4fc
+- Text Muted: #94a3b8

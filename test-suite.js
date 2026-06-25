@@ -1353,6 +1353,12 @@ test('Google OAuth login callback, Stripe Webhook, and WooCommerce/Etsy crosslis
       const termsHtml = await termsRes.text();
       assert.ok(termsHtml.includes('Terms of Service'));
       assert.ok(termsHtml.includes('AI Output Disclaimer'));
+
+      const pressRes = await originalFetch(`http://127.0.0.1:${testPort}/press`);
+      assert.strictEqual(pressRes.status, 200);
+      const pressHtml = await pressRes.text();
+      assert.ok(pressHtml.includes('Official Press Kit'));
+      assert.ok(pressHtml.includes('Vincent Kinney'));
     } finally {
       await new Promise((resolve) => server.close(resolve));
     }

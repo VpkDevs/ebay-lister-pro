@@ -1,0 +1,13 @@
+eBay Multi-Channel Lister Pro is an enterprise-grade, local-first cross-listing desktop application engineered for e-commerce resellers and merchants. 
+
+### Zero-Dependency Performance
+Lister Pro is written entirely in raw Node.js utilizing native modules. It has zero external package dependencies—no Express, no database drivers, no heavy UI framework assets. This results in startup times under 10 milliseconds, low RAM utilization, and complete exemption from npm package supply-chain vulnerabilities.
+
+### Local-First Security & Privacy
+With traditional cloud-based cross-listers charging expensive monthly subscriptions, sellers must host their shop API credentials and inventory history on remote servers. Lister Pro runs locally on the merchant's machine, saving store access keys in a private local environment file. 
+
+### Concurrency & Outlier Comps
+Lister Pro publishes inventory concurrently to eBay, Shopify, WooCommerce, and Etsy in under 90 seconds. To protect against transaction failures, failed sync operations queue in a local Dead-Letter Queue (DLQ) for automatic exponential backoff retry. During listing creation, the comp analyzer executes real-time queries against active listings, automatically filtering out the top and bottom 10% outliers to suggest true market pricing.
+
+### Automatic Double-Selling Protection
+Inventory sync services run continuously in the background. When an item sells on eBay, Lister Pro immediately detects the transaction and updates Shopify, WooCommerce, and Etsy, keeping inventory aligned across channels.

@@ -1,0 +1,1 @@
+Zero-dependency local-first multi-channel cross-lister for eBay, Shopify, and Etsy.

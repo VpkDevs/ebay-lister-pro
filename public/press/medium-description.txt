@@ -1,0 +1,5 @@
+eBay Multi-Channel Lister Pro is a lightweight, zero-dependency, local-first cross-listing software built for professional resellers. Written entirely in raw Node.js with zero external npm packages, it boots in under 10 milliseconds. 
+
+Lister Pro addresses two key problems of modern reseller software: expensive subscription overhead and data privacy. Running locally on the user's machine, the app secures API credentials in a local .env file. 
+
+Merchants snap a photo, let local Gemini Vision API hooks extract item condition and aspects, analyze outlier-filtered eBay market comps, and publish to eBay, Shopify, WooCommerce, and Etsy concurrently in under 90 seconds. Native double-selling protection actively ends cross-channel listings on sale, securing seller ratings.

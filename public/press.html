@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Press Kit — eBay Multi-Channel Lister Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Syne:wght@700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:       #050810;
+      --bg2:      #0a1120;
+      --surface:  #0f1929;
+      --surface2: #162036;
+      --border:   rgba(255,255,255,0.06);
+      --border2:  rgba(255,255,255,0.11);
+      --brand:    #6366f1;
+      --brand2:   #4f46e5;
+      --glow:     rgba(99,102,241,0.30);
+      --light:    #818cf8;
+      --cyan:     #22d3ee;
+      --green:    #10b981;
+      --amber:    #f59e0b;
+      --red:      #ef4444;
+      --text:     #f0f4fc;
+      --muted:    #94a3b8;
+      --dim:      #475569;
+      --r:        0.22s cubic-bezier(.4,0,.2,1);
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding-top: 100px; }
+    .container { max-width: 900px; margin: 0 auto; padding: 0 24px 60px 24px; }
+    header { margin-bottom: 48px; border-bottom: 1px solid var(--border); padding-bottom: 30px; }
+    .logo { font-family: 'Syne', sans-serif; font-size: 1.8rem; font-weight: 800; color: #fff; display: inline-flex; align-items: center; gap: 8px; }
+    .logo span { background: linear-gradient(135deg, #a5b4fc 0%, #818cf8 50%, #22d3ee 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+    h1 { font-family: 'Syne', sans-serif; font-size: 2.5rem; font-weight: 800; margin-top: 20px; letter-spacing: -0.03em; }
+    h2 { font-family: 'Syne', sans-serif; font-size: 1.6rem; font-weight: 800; margin: 40px 0 20px 0; border-left: 3px solid var(--brand); padding-left: 14px; letter-spacing: -0.02em; }
+    p { color: var(--muted); margin-bottom: 20px; font-size: 1.05rem; }
+    .mono { font-family: 'JetBrains Mono', monospace; font-size: 0.95rem; }
+    .block { background: var(--surface); border: 1px solid var(--border); padding: 24px; border-radius: 12px; margin-bottom: 24px; }
+    .color-swatch { display: inline-flex; align-items: center; gap: 10px; background: var(--surface2); padding: 8px 16px; border-radius: 8px; border: 1px solid var(--border); margin-right: 12px; margin-bottom: 12px; }
+    .color-box { width: 20px; height: 20px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.1); }
+    footer { margin-top: 80px; text-align: center; border-top: 1px solid var(--border); padding-top: 30px; color: var(--dim); font-size: 0.9rem; }
+    a { color: var(--light); text-decoration: none; transition: color var(--r); }
+    a:hover { color: var(--cyan); }
+    .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 10px 20px; border-radius: 8px; font-size: 0.95rem; font-weight: 700; cursor: pointer; border: none; background: linear-gradient(135deg, var(--brand), var(--brand2)); color: #fff; margin-top: 10px; }
+    .btn:hover { box-shadow: 0 8px 24px var(--glow); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="logo">⚡ <span>Lister Pro</span></div>
+      <h1>Official Press Kit</h1>
+    </header>
+
+    <main>
+      <section>
+        <h2>Elevator Pitch (One-Liner)</h2>
+        <div class="block mono">
+          Zero-dependency local-first multi-channel cross-lister for eBay, Shopify, and Etsy.
+        </div>
+      </section>
+
+      <section>
+        <h2>Short Description</h2>
+        <p>eBay Multi-Channel Lister Pro is a 100% zero-dependency, local-first cross-listing application. It lets professional resellers upload images, extract aspects with Gemini Vision, analyze active comp pricing, and post concurrently to eBay, Shopify, WooCommerce, and Etsy in 90 seconds, keeping all credentials securely local.</p>
+      </section>
+
+      <section>
+        <h2>Long Description</h2>
+        <p>eBay Multi-Channel Lister Pro is an enterprise-grade, local-first cross-listing desktop application engineered for e-commerce resellers and merchants.</p>
+        <p><strong>Zero-Dependency Performance:</strong> Written entirely in raw Node.js utilizing native modules. It has zero external package dependencies—no Express, no database drivers, no heavy UI framework assets. This results in startup times under 10 milliseconds, low RAM utilization, and complete exemption from npm package supply-chain vulnerabilities.</p>
+        <p><strong>Local-First Security & Privacy:</strong> With traditional cloud-based cross-listers charging expensive monthly subscriptions, sellers must host their shop API credentials and inventory history on remote servers. Lister Pro runs locally on the merchant's machine, saving store access keys in a private local environment file.</p>
+        <p><strong>Concurrency & Outlier Comps:</strong> Lister Pro publishes inventory concurrently to eBay, Shopify, WooCommerce, and Etsy in under 90 seconds. To protect against transaction failures, failed sync operations queue in a local Dead-Letter Queue (DLQ) for automatic exponential backoff retry. During listing creation, the comp analyzer executes real-time queries against active listings, automatically filtering out the top and bottom 10% outliers to suggest true market pricing.</p>
+      </section>
+
+      <section>
+        <h2>Founder Bio (Vincent Kinney)</h2>
+        <div class="block">
+          <p>Vincent Kinney is a software engineer and e-commerce merchant who has been reselling on eBay and Shopify for over six years. Experiencing first-hand the recurring cost overhead and database security risks of popular cloud-based cross-listing tools, Vincent decided to develop a zero-dependency, local-first alternative.</p>
+          <p>Using raw Node.js modules and Windows-native GDI+ scripts, he built eBay Multi-Channel Lister Pro. Vincent's goal is to empower resellers to maintain complete ownership of their listing data and credentials while cutting overhead expenses to zero.</p>
+        </div>
+      </section>
+
+      <section>
+        <h2>Brand Color Guidelines</h2>
+        <div>
+          <div class="color-swatch"><span class="color-box" style="background:#050810"></span><span class="mono">#050810 (Navy)</span></div>
+          <div class="color-swatch"><span class="color-box" style="background:#6366f1"></span><span class="mono">#6366f1 (Indigo)</span></div>
+          <div class="color-swatch"><span class="color-box" style="background:#22d3ee"></span><span class="mono">#22d3ee (Cyan)</span></div>
+          <div class="color-swatch"><span class="color-box" style="background:#10b981"></span><span class="mono">#10b981 (Shopify Green)</span></div>
+          <div class="color-swatch"><span class="color-box" style="background:#f59e0b"></span><span class="mono">#f59e0b (Etsy Orange)</span></div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Media Contact</h2>
+        <div class="block">
+          <p>For all interview inquiries, review copy provisions, or visual assets:</p>
+          <p class="mono">📧 <strong>Email</strong>: <a href="mailto:press@ebaylisterpro.com">press@ebaylisterpro.com</a></p>
+          <p><strong>Response SLA</strong>: Guaranteed response in under 12 hours.</p>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>&copy; 2026 eBay Multi-Channel Lister Pro. All rights reserved. <a href="/">Dashboard</a> | <a href="/terms">Terms</a> | <a href="/privacy">Privacy</a></p>
+    </footer>
+  </div>
+</body>
+</html>

@@ -1,0 +1,1 @@
+eBay Multi-Channel Lister Pro is a 100% zero-dependency, local-first cross-listing application. It lets professional resellers upload images, extract aspects with Gemini Vision, analyze active comp pricing, and post concurrently to eBay, Shopify, WooCommerce, and Etsy in 90 seconds, keeping all credentials securely local.
