@@ -98,10 +98,47 @@ async function runWizard() {
   // Shopify Config
   console.log("\n--- Shopify Integration Settings (Optional) ---");
   const shopName = await askQuestion("6. Enter Shopify Shop Name (subdomain): ");
-  configValues['SHOPIFY_SHOP_NAME'] = shopName.trim();
+  let cleanShopName = shopName.trim();
+  if (cleanShopName) {
+    cleanShopName = cleanShopName.replace(/^https?:\/\//i, '');
+    cleanShopName = cleanShopName.replace(/\.myshopify\.com\/?$/i, '');
+    cleanShopName = cleanShopName.split('/')[0];
+    if (cleanShopName !== shopName.trim()) {
+      console.log(`ℹ Auto-parsed Shopify Shop Name: ${cleanShopName}`);
+    }
+  }
+  configValues['SHOPIFY_SHOP_NAME'] = cleanShopName;
 
   const shopToken = await askQuestion("7. Enter Shopify Admin Access Token: ");
   configValues['SHOPIFY_ACCESS_TOKEN'] = shopToken.trim();
+
+  // WooCommerce Config
+  console.log("\n--- WooCommerce Integration Settings (Optional) ---");
+  const wcUrl = await askQuestion("8. Enter WooCommerce URL: ");
+  let cleanWcUrl = wcUrl.trim();
+  if (cleanWcUrl) {
+    cleanWcUrl = cleanWcUrl.replace(/\/$/, '');
+  }
+  configValues['WOOCOMMERCE_URL'] = cleanWcUrl;
+
+  const wcKey = await askQuestion("9. Enter WooCommerce Consumer Key: ");
+  configValues['WOOCOMMERCE_KEY'] = wcKey.trim();
+
+  const wcSecret = await askQuestion("10. Enter WooCommerce Consumer Secret: ");
+  configValues['WOOCOMMERCE_SECRET'] = wcSecret.trim();
+
+  // Etsy Config
+  console.log("\n--- Etsy Integration Settings (Optional) ---");
+  const etsyShopId = await askQuestion("11. Enter Etsy Shop ID: ");
+  configValues['ETSY_SHOP_ID'] = etsyShopId.trim();
+
+  const etsyToken = await askQuestion("12. Enter Etsy Access Token: ");
+  configValues['ETSY_ACCESS_TOKEN'] = etsyToken.trim();
+
+  // Watermark text
+  console.log("\n--- Styling/Watermark Settings (Optional) ---");
+  const watermark = await askQuestion("13. Enter Image Watermark Text: ");
+  configValues['WATERMARK_TEXT'] = watermark.trim();
 
   rl.close();
 

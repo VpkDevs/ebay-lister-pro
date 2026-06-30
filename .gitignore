@@ -5,3 +5,18 @@ data/uploads/
 scratch/*.json
 uploads/
 *.log
+
+# Berserker workspace hygiene
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+.cache/
+dist/
+build/
+coverage/
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+

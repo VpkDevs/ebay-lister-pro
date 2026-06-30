@@ -212,6 +212,30 @@ async function runAutoListingPipeline(validPhotos, barcode = null, customNotes =
     const skuPrefix = config.getSKU_PREFIX();
     const sku = `${skuPrefix}SKU-${Date.now()}`;
 
+    // VeRO Compliance Safety Bypass Check
+    let isVero = false;
+    if (finalListing.brand) {
+      const normalizedBrand = finalListing.brand.trim().toLowerCase();
+      const veroBrands = config.getVERO_BRANDS();
+      if (veroBrands.includes(normalizedBrand)) {
+        isVero = true;
+      }
+    }
+
+    if (isVero) {
+      const warningMsg = `Compliance Warning: Brand "${finalListing.brand}" is registered under eBay's VeRO protection list. Auto-publish bypassed. Saving as DRAFT.`;
+      console.warn(`\n⚠️  ${warningMsg}\n`);
+      utils.logAudit("WARN", warningMsg);
+      const listingDetails = {
+        ...finalListing,
+        imageUrls,
+        veroWarning: true
+      };
+      utils.saveListingToHistory(sku, null, finalListing.title, finalListing.suggestedPrice, finalListing.categoryId, null, null, "DRAFT", listingDetails);
+      console.log(`\n📝 Draft saved successfully with SKU: ${sku}`);
+      return;
+    }
+
     if (process.argv.includes('--draft')) {
       const listingDetails = {
         ...finalListing,
@@ -448,7 +472,7 @@ async function startWatchDaemon() {
               .map(f => path.join(dirPath, f))
               .filter(f => {
                 try {
-                  return fs.existsSync(f) && fs.statSync(f).isFile() && /\.(jpe?g|png)$/i.test(f);
+                  return fs.existsSync(f) && fs.statSync(f).isFile() && /\.(jpe?g|png|webp|heic)$/i.test(f);
                 } catch (e) {
                   return false;
                 }
@@ -503,7 +527,7 @@ async function startWatchDaemon() {
         .map(f => path.join(watchDir, f))
         .filter(f => {
           try {
-            return fs.existsSync(f) && fs.statSync(f).isFile() && /\.(jpe?g|png)$/i.test(f);
+            return fs.existsSync(f) && fs.statSync(f).isFile() && /\.(jpe?g|png|webp|heic)$/i.test(f);
           } catch (e) {
             return false;
           }
@@ -643,6 +667,27 @@ async function main() {
     let shopifyToken = await askQuestion("7. Shopify Admin Access Token: ");
     shopifyToken = shopifyToken.trim();
 
+    console.log(`\n${boldBlue}WooCommerce Cross-Posting (Optional):${reset}`);
+    let wcUrl = await askQuestion("8. WooCommerce Shop URL (ex: 'https://my-woo-store.com'): ");
+    let cleanWcUrl = wcUrl.trim();
+    if (cleanWcUrl) {
+      cleanWcUrl = cleanWcUrl.replace(/\/$/, '');
+    }
+    let wcKey = await askQuestion("9. WooCommerce Consumer Key (ck_...): ");
+    wcKey = wcKey.trim();
+    let wcSecret = await askQuestion("10. WooCommerce Consumer Secret (cs_...): ");
+    wcSecret = wcSecret.trim();
+
+    console.log(`\n${boldBlue}Etsy Cross-Posting (Optional):${reset}`);
+    let etsyShopId = await askQuestion("11. Etsy Shop ID: ");
+    etsyShopId = etsyShopId.trim();
+    let etsyToken = await askQuestion("12. Etsy Access Token: ");
+    etsyToken = etsyToken.trim();
+
+    console.log(`\n${boldBlue}Styling & Watermark Settings (Optional):${reset}`);
+    let watermark = await askQuestion("13. Image Watermark Text: ");
+    watermark = watermark.trim();
+
     const envContent = `
 # Gemini Credentials
 GEMINI_API_KEY=${geminiKey}
@@ -662,6 +707,18 @@ SELLER_RETURN_TERMS=No returns accepted unless item is not as described.
 # Shopify Multi-channel Integration
 SHOPIFY_SHOP_NAME=${cleanShopName}
 SHOPIFY_ACCESS_TOKEN=${shopifyToken}
+
+# WooCommerce Shop Integration
+WOOCOMMERCE_URL=${cleanWcUrl}
+WOOCOMMERCE_KEY=${wcKey}
+WOOCOMMERCE_SECRET=${wcSecret}
+
+# Etsy Shop Integration
+ETSY_SHOP_ID=${etsyShopId}
+ETSY_ACCESS_TOKEN=${etsyToken}
+
+# Styling/Watermark Settings
+WATERMARK_TEXT=${watermark}
 `.trim();
 
     fs.writeFileSync(envPath, envContent, 'utf8');
@@ -715,6 +772,16 @@ SHOPIFY_ACCESS_TOKEN=${shopifyToken}
   }
   if (args.includes('--sync')) {
     await ebayClient.syncListingsFromEbay();
+    process.exit(0);
+  }
+  if (args.includes('--clear-history')) {
+    utils.writeJsonFileSecure(historyPath, []);
+    console.log("✔ Listing history successfully cleared.");
+    process.exit(0);
+  }
+  if (args.includes('--clear-dlq')) {
+    utils.writeJsonFileSecure(config.dlqPath, []);
+    console.log("✔ Dead-letter queue successfully cleared.");
     process.exit(0);
   }
   if (args.includes('--gui')) {
@@ -1252,6 +1319,30 @@ if (require.main === module) {
   main();
 }
 
+/**
+ * Saves a VeRO-flagged listing directly to history as a DRAFT without
+ * publishing to eBay. This is the compliance fallback used by the watcher
+ * daemon and is exported so it can be tested and called externally.
+ *
+ * @param {object} listing    - The final listing object (must include brand, title, etc.)
+ * @param {string} [sku]      - Optional explicit SKU; auto-generated if omitted.
+ * @returns {Promise<string>} The SKU that was saved.
+ */
+async function handleVeroAutoListingFallback(listing, sku) {
+  const finalSku = sku || `${config.getSKU_PREFIX()}VERO-${Date.now()}`;
+  const warningMsg = `Compliance Warning: Brand "${listing.brand}" is registered under eBay's VeRO protection list. Auto-publish bypassed. Saved as DRAFT.`;
+  console.warn(`\n⚠️  ${warningMsg}\n`);
+  utils.logAudit('WARN', warningMsg);
+  const listingDetails = { ...listing, veroWarning: true };
+  utils.saveListingToHistory(
+    finalSku, null,
+    listing.title, listing.suggestedPrice,
+    listing.categoryId, null, null,
+    'DRAFT', listingDetails
+  );
+  return finalSku;
+}
+
 module.exports = {
   clusterFilesByTime,
   runAutoListingPipeline,
@@ -1259,5 +1350,7 @@ module.exports = {
   crossPostToShopify,
   crossPostToWooCommerce,
   crossPostToEtsy,
-  filterStableFiles
+  filterStableFiles,
+  handleVeroAutoListingFallback
 };
+

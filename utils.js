@@ -85,6 +85,88 @@ function safeResolvePath(targetPath) {
   return resolved;
 }
 
+const MAX_LISTING_IMAGES = 24;
+const BLOCKED_URL_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '[::1]', '::1']);
+
+/**
+ * Returns true when a hostname resolves to a private or loopback address.
+ * @param {string} hostname
+ * @returns {boolean}
+ */
+function isBlockedHostname(hostname) {
+  const h = String(hostname || '').toLowerCase().replace(/\.$/, '');
+  if (!h) return true;
+  if (BLOCKED_URL_HOSTS.has(h)) return true;
+  if (h.endsWith('.local') || h.endsWith('.internal')) return true;
+
+  const ipv4Match = h.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+  if (ipv4Match) {
+    const parts = ipv4Match.slice(1).map(Number);
+    if (parts.some(p => p > 255)) return true;
+    if (parts[0] === 10) return true;
+    if (parts[0] === 127) return true;
+    if (parts[0] === 169 && parts[1] === 254) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+  }
+  return false;
+}
+
+/**
+ * Validates a remote HTTP(S) URL for image ingestion (blocks SSRF targets).
+ * @param {string} urlString
+ * @returns {string} Normalized URL
+ */
+function validateRemoteImageUrl(urlString) {
+  if (typeof urlString !== 'string' || !urlString.trim()) {
+    throw new Error('URL must be a non-empty string');
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(urlString.trim());
+  } catch {
+    throw new Error(`Invalid URL format: ${urlString.slice(0, 120)}`);
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('URL must use http or https');
+  }
+  if (isBlockedHostname(parsed.hostname)) {
+    throw new Error(`Blocked URL target: ${parsed.hostname}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new Error('URLs with embedded credentials are not allowed');
+  }
+
+  return parsed.href;
+}
+
+/**
+ * Maps a served /uploads/ URL to a safe local filesystem path.
+ * @param {string} uploadUrlPath
+ * @returns {string}
+ */
+function resolveUploadsPath(uploadUrlPath) {
+  if (typeof uploadUrlPath !== 'string' || !uploadUrlPath.startsWith('/uploads/')) {
+    throw new Error('Invalid uploads path');
+  }
+
+  const relative = uploadUrlPath.replace(/^\/uploads\//, '').replace(/\\/g, '/');
+  if (!relative || relative.includes('..')) {
+    throw new Error('Path traversal detected in uploads path');
+  }
+
+  const fullPath = path.join(config.uploadTempDir, relative);
+  const resolved = safeResolvePath(fullPath);
+  const uploadRoot = safeResolvePath(config.uploadTempDir);
+  const relToUpload = path.relative(uploadRoot, resolved);
+  if (relToUpload.startsWith('..') || path.isAbsolute(relToUpload)) {
+    throw new Error('Upload path escapes upload directory');
+  }
+  return resolved;
+}
+
 /**
  * Writes data atomically to a JSON file with lockfile concurrency control to prevent corruption.
  * @param {string} filePath - Absolute path to file.
@@ -201,6 +283,129 @@ function readJsonFileSecure(filePath, defaultData = []) {
 }
 
 /**
+ * Asynchronously writes data atomically to a JSON file with non-blocking lockfile concurrency control.
+ * @param {string} filePath - Absolute path to file.
+ * @param {any} data - JS payload.
+ * @returns {Promise<void>}
+ */
+async function writeJsonFileSecureAsync(filePath, data) {
+  const resolved = safeResolvePath(filePath);
+  const tempWritePath = `${resolved}.tmp`;
+  const backupPath = `${resolved}.bak`;
+  const lockPath = `${resolved}.lock`;
+  
+  let attempts = 0;
+  const maxAttempts = 10;
+  
+  while (attempts < maxAttempts) {
+    try {
+      const lockFh = await fs.promises.open(lockPath, 'wx');
+      await lockFh.close();
+      break;
+    } catch (lockErr) {
+      attempts++;
+      if (attempts >= maxAttempts) {
+        logAudit("ERROR", `Async Database Lock timeout for ${resolved}. Overwriting lock to avoid data loss...`);
+        try { await fs.promises.unlink(lockPath); } catch (e) {}
+        break;
+      }
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+
+  try {
+    await fs.promises.writeFile(tempWritePath, JSON.stringify(data, null, 2), 'utf8');
+    
+    try {
+      await fs.promises.access(resolved);
+      try { await fs.promises.unlink(backupPath); } catch (e) {}
+      await fs.promises.rename(resolved, backupPath);
+    } catch (e) {}
+    
+    await fs.promises.rename(tempWritePath, resolved);
+    try { await fs.promises.unlink(backupPath); } catch (e) {}
+  } catch (err) {
+    logAudit("ERROR", `Secure Async JSON Write failed for ${resolved}: ${err.message}`);
+    try { await fs.promises.unlink(tempWritePath); } catch (e) {}
+    throw err;
+  } finally {
+    try { await fs.promises.unlink(lockPath); } catch (e) {}
+  }
+}
+
+/**
+ * Asynchronously reads a JSON file, checking lock state non-blockingly and falling back to backup.
+ * @param {string} filePath - Path to file.
+ * @param {any} [defaultData] - Default value.
+ * @returns {Promise<any>} JS parsed data.
+ */
+async function readJsonFileSecureAsync(filePath, defaultData = []) {
+  const resolved = safeResolvePath(filePath);
+  const backupPath = `${resolved}.bak`;
+  const lockPath = `${resolved}.lock`;
+  
+  let attempts = 0;
+  const maxAttempts = 10;
+  
+  while (attempts < maxAttempts) {
+    try {
+      await fs.promises.access(lockPath);
+      attempts++;
+      await new Promise(resolve => setTimeout(resolve, 50));
+    } catch (e) {
+      break;
+    }
+  }
+
+  try {
+    let hasPrimary = true;
+    try { await fs.promises.access(resolved); } catch (e) { hasPrimary = false; }
+
+    if (hasPrimary) {
+      try {
+        const content = await fs.promises.readFile(resolved, 'utf8');
+        return JSON.parse(content);
+      } catch (parseErr) {
+        logAudit("WARN", `Primary database file corrupt: ${parseErr.message}. Recovering from backup: ${backupPath}`);
+        try {
+          await fs.promises.access(backupPath);
+          const data = JSON.parse(await fs.promises.readFile(backupPath, 'utf8'));
+          await fs.promises.copyFile(backupPath, resolved);
+          return data;
+        } catch (e) {
+          throw parseErr;
+        }
+      }
+    }
+    
+    try {
+      await fs.promises.access(backupPath);
+      logAudit("WARN", `Primary database file missing. Recovering from backup: ${backupPath}`);
+      const data = JSON.parse(await fs.promises.readFile(backupPath, 'utf8'));
+      await fs.promises.copyFile(backupPath, resolved);
+      return data;
+    } catch (e) {}
+  } catch (err) {
+    logAudit("ERROR", `Secure Async JSON Read failed for ${resolved}: ${err.message}. Triggering self-healing...`);
+    try {
+      await fs.promises.access(backupPath);
+      const data = JSON.parse(await fs.promises.readFile(backupPath, 'utf8'));
+      try { await fs.promises.copyFile(backupPath, resolved); } catch (e) {}
+      return data;
+    } catch (e) {}
+    
+    try {
+      logAudit("WARN", `Both primary and backup database corrupted for ${resolved}. Re-initializing with default structure.`);
+      await fs.promises.writeFile(resolved, JSON.stringify(defaultData, null, 2), 'utf8');
+      await fs.promises.writeFile(backupPath, JSON.stringify(defaultData, null, 2), 'utf8');
+    } catch (e) {
+      logAudit("ERROR", `Failed to self-heal database file ${resolved}: ${e.message}`);
+    }
+  }
+  return defaultData;
+}
+
+/**
  * Inspects file binary signatures (magic bytes) to extract dimensions.
  * Support PNG and JPEG formats.
  * @param {string} filePath - Absolute path to target image.
@@ -217,7 +422,8 @@ function getImageDimensions(filePath) {
   fs.readSync(fd, buffer, 0, buffer.length, 0);
   fs.closeSync(fd);
 
-  if (buffer.readUInt32BE(0) === 0x89504E47) { // PNG
+  const magic = buffer.readUInt32BE(0);
+  if (magic === 0x89504E47) { // PNG
     const width = buffer.readUInt32BE(16);
     const height = buffer.readUInt32BE(20);
     return { width, height, type: 'PNG' };
@@ -233,6 +439,15 @@ function getImageDimensions(filePath) {
       }
       const segmentLength = buffer.readUInt16BE(offset);
       offset += segmentLength;
+    }
+  } else if (magic === 0x52494646 && buffer.toString('ascii', 8, 12) === 'WEBP') { // WEBP
+    return { width: 1600, height: 1600, type: 'WEBP' };
+  } else {
+    // Check HEIC
+    const ftyp = buffer.toString('ascii', 4, 8);
+    const brand = buffer.toString('ascii', 8, 12);
+    if (ftyp === 'ftyp' && (brand.startsWith('hei') || brand.startsWith('mif') || brand.startsWith('msf'))) {
+      return { width: 1600, height: 1600, type: 'HEIC' };
     }
   }
   return null;
@@ -252,10 +467,10 @@ function verifyImageFile(filePath) {
 
   const dimensions = getImageDimensions(resolved);
   if (!dimensions) {
-    throw new Error(`Invalid image structure: ${resolved}. File must be a valid JPEG or PNG.`);
+    throw new Error(`Invalid image structure: ${resolved}. File must be a valid JPEG, PNG, WEBP or HEIC.`);
   }
 
-  logAudit("INFO", `Verified image dimensions for ${path.basename(resolved)}: ${dimensions.width}x${dimensions.height}`);
+  logAudit("INFO", `Verified image dimensions for ${path.basename(resolved)}: ${dimensions.width}x${dimensions.height} (${dimensions.type})`);
 
   if (dimensions.width < 500 || dimensions.height < 500) {
     console.warn(`⚠️  Warning: ${path.basename(resolved)} is below eBay's recommended minimum dimension of 500px.`);
@@ -377,6 +592,9 @@ function saveListingToHistory(sku, listingId, title, price, categoryId, offerId,
       status,
       brand: listingDetails ? (listingDetails.brand || "Generic") : (existingEntry.brand || "Generic"),
       veroWarning: listingDetails ? (!!listingDetails.veroWarning) : (!!existingEntry.veroWarning),
+      priceFloor: existingEntry.priceFloor !== undefined ? existingEntry.priceFloor : null,
+      priceCap: existingEntry.priceCap !== undefined ? existingEntry.priceCap : null,
+      priceLocked: existingEntry.priceLocked !== undefined ? existingEntry.priceLocked : false,
       listingDetails: listingDetails || existingEntry.listingDetails || null
     };
     if (existingIndex !== -1) {
@@ -408,7 +626,7 @@ function showHistory() {
 
 /**
  * Resizes and optimizes an image by centering it on a white square canvas.
- * Uses PowerShell System.Drawing natively on Windows for zero npm dependencies.
+ * Uses high-performance sharp pipeline.
  * @param {string} inputPath - Absolute path to original image.
  * @param {string} outputPath - Absolute path to save optimized JPEG.
  * @param {number} [canvasSize=1600] - Output square width/height in pixels.
@@ -417,93 +635,28 @@ function showHistory() {
 async function optimizeImageNative(inputPath, outputPath, canvasSize = 1600, watermarkText = null) {
   const resolvedIn = safeResolvePath(inputPath);
   const resolvedOut = safeResolvePath(outputPath);
-  
-  if (process.platform !== 'win32') {
-    fs.copyFileSync(resolvedIn, resolvedOut);
-    return;
-  }
-  
-  const escapedIn = resolvedIn.replace(/'/g, "''");
-  const escapedOut = resolvedOut.replace(/'/g, "''");
-  const activeWatermark = watermarkText || config.getWATERMARK_TEXT() || "";
-  const escapedWatermark = activeWatermark.replace(/'/g, "''");
-  
-  const psScript = `
-    Add-Type -AssemblyName System.Drawing;
-    $src = [System.Drawing.Image]::FromFile('${escapedIn}');
-    $bmp = New-Object System.Drawing.Bitmap(${canvasSize}, ${canvasSize});
-    $g = [System.Drawing.Graphics]::FromImage($bmp);
-    $g.Clear([System.Drawing.Color]::White);
-    $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic;
-    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality;
-    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality;
-    $srcRatio = $src.Width / $src.Height;
-    if ($srcRatio -gt 1) {
-      $w = ${canvasSize};
-      $h = [math]::Round(${canvasSize} / $srcRatio);
-    } else {
-      $h = ${canvasSize};
-      $w = [math]::Round(${canvasSize} * $srcRatio);
-    }
-    $x = [int][math]::Round((${canvasSize} - $w) / 2);
-    $y = [int][math]::Round((${canvasSize} - $h) / 2);
-    $w = [int]$w;
-    $h = [int]$h;
-    $ia = New-Object System.Drawing.Imaging.ImageAttributes;
-    $cm = New-Object System.Drawing.Imaging.ColorMatrix;
-    $cm.Matrix00 = 1.15;
-    $cm.Matrix11 = 1.15;
-    $cm.Matrix22 = 1.15;
-    $cm.Matrix33 = 1.0;
-    $cm.Matrix40 = -0.075;
-    $cm.Matrix41 = -0.075;
-    $cm.Matrix42 = -0.075;
-    $cm.Matrix44 = 1.0;
-    $ia.SetColorMatrix($cm);
-    $destRect = New-Object System.Drawing.Rectangle($x, $y, $w, $h);
-    $g.DrawImage($src, $destRect, 0, 0, $src.Width, $src.Height, [System.Drawing.GraphicsUnit]::Pixel, $ia);
-    
-    # Draw Watermark text if defined
-    $wmText = '${escapedWatermark}';
-    if ($wmText) {
-      $font = New-Object System.Drawing.Font("Arial", 28, [System.Drawing.FontStyle]::Bold);
-      $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(80, 180, 180, 180));
-      $sf = New-Object System.Drawing.StringFormat;
-      $sf.Alignment = [System.Drawing.StringAlignment]::Far;
-      $sf.LineAlignment = [System.Drawing.StringAlignment]::Far;
-      $rect = New-Object System.Drawing.RectangleF(0, 0, ${canvasSize} - 40, ${canvasSize} - 40);
-      $g.DrawString($wmText, $font, $brush, $rect, $sf);
-      $brush.Dispose();
-      $font.Dispose();
-    }
-    
-    $bmp.Save('${escapedOut}', [System.Drawing.Imaging.ImageFormat]::Jpeg);
-    $ia.Dispose();
-    $g.Dispose();
-    $bmp.Dispose();
-    $src.Dispose();
-  `;
 
-  const tempPs1Path = path.join(config.uploadTempDir, `opt-${Date.now()}-${Math.round(Math.random() * 1000)}.ps1`);
-  fs.writeFileSync(tempPs1Path, psScript, 'utf8');
-
-  return new Promise((resolve, reject) => {
-    exec(`powershell -NoProfile -ExecutionPolicy Bypass -File "${tempPs1Path}"`, (err, stdout, stderr) => {
-      try { fs.unlinkSync(tempPs1Path); } catch (e) {}
-      if (err) {
-        logAudit("WARN", `Native image optimization failed: ${err.message}. Copying fallback...`);
-        try {
-          fs.copyFileSync(resolvedIn, resolvedOut);
-          resolve();
-        } catch (e) {
-          reject(new Error(`Image optimization and fallback failed: ${e.message}`));
-        }
-      } else {
-        logAudit("INFO", `Successfully optimized image natively: ${path.basename(resolvedOut)}`);
-        resolve();
-      }
+  try {
+    const imagePipeline = require('./lib/imagePipeline');
+    const result = await imagePipeline.processImageSource(resolvedIn, {
+      canvasSize,
+      watermarkText,
+      watermark: !!watermarkText
     });
-  });
+    
+    // Copy output to target outputPath if they differ
+    if (path.resolve(result.outputPath) !== resolvedOut) {
+      fs.copyFileSync(result.outputPath, resolvedOut);
+      try { fs.unlinkSync(result.outputPath); } catch (e) {}
+    }
+  } catch (err) {
+    logAudit("WARN", `Sharp image optimization failed: ${err.message}. Falling back to copy...`);
+    try {
+      fs.copyFileSync(resolvedIn, resolvedOut);
+    } catch (e) {
+      throw new Error(`Image optimization and fallback failed: ${e.message}`);
+    }
+  }
 }
 
 /**
@@ -540,8 +693,14 @@ module.exports = {
   sanitizeLog,
   logAudit,
   safeResolvePath,
+  MAX_LISTING_IMAGES,
+  isBlockedHostname,
+  validateRemoteImageUrl,
+  resolveUploadsPath,
   writeJsonFileSecure,
+  writeJsonFileSecureAsync,
   readJsonFileSecure,
+  readJsonFileSecureAsync,
   getImageDimensions,
   verifyImageFile,
   openListingInBrowser,

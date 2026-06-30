@@ -9,17 +9,23 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-// Configure test environment variables
+const config = require('./config');
+
+// Configure test environment variables (assigned after config.js loads .env to prevent overrides)
 process.env.GEMINI_API_KEY = "test-gemini-key";
 process.env.EBAY_CLIENT_ID = "test-client-id";
 process.env.EBAY_CLIENT_SECRET = "test-client-secret";
 process.env.EBAY_REFRESH_TOKEN = "test-refresh-token";
 
-const config = require('./config');
 const utils = require('./utils');
 const ebayClient = require('./ebayClient');
 const geminiClient = require('./geminiClient');
 const webServer = require('./webServer');
+
+// Capture the real built-in fetch ONCE before any test can mock global.fetch.
+// Tests that need to make real HTTP calls to local test servers should use
+// REAL_FETCH instead of global.fetch to be immune to concurrent mock pollution.
+const REAL_FETCH = global.fetch;
 
 // Use separate paths for test output to avoid polluting real database/logs
 const testDir = path.join(process.cwd(), 'test-sandbox');
@@ -84,6 +90,27 @@ test('Utility module operations', async (t) => {
     assert.ok(!sanitized.includes('test-client-secret'));
     assert.ok(sanitized.includes('[REDACTED_GEMINI_KEY]'));
     assert.ok(sanitized.includes('[REDACTED_CLIENT_SECRET]'));
+  });
+
+  await t.test('validateRemoteImageUrl blocks private targets and accepts public URLs', () => {
+    assert.throws(() => utils.validateRemoteImageUrl('http://127.0.0.1/image.jpg'));
+    assert.throws(() => utils.validateRemoteImageUrl('http://localhost/image.jpg'));
+    assert.throws(() => utils.validateRemoteImageUrl('ftp://example.com/image.jpg'));
+    assert.strictEqual(
+      utils.validateRemoteImageUrl('https://i.ebayimg.com/images/g/test/s-l1600.jpg'),
+      'https://i.ebayimg.com/images/g/test/s-l1600.jpg'
+    );
+  });
+
+  await t.test('resolveUploadsPath maps served upload URLs safely', () => {
+    const processedDir = path.join(testDir, 'processed');
+    if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir, { recursive: true });
+    const samplePath = path.join(processedDir, 'sample.jpg');
+    fs.writeFileSync(samplePath, Buffer.from('sample'));
+
+    const resolved = utils.resolveUploadsPath('/uploads/processed/sample.jpg');
+    assert.strictEqual(resolved, samplePath);
+    assert.throws(() => utils.resolveUploadsPath('/uploads/../outside.jpg'));
   });
 
   await t.test('Secure JSON read/write with backup recovery', () => {
@@ -154,7 +181,7 @@ test('Utility module operations', async (t) => {
 // 3. eBay Client Tests
 // ==========================================
 test('eBay Client and fetchWithRetry network layer', async (t) => {
-  const originalFetch = global.fetch;
+  const originalFetch = REAL_FETCH;
 
   await t.test('fetchWithRetry parses Retry-After and handles retries', async () => {
     let callCount = 0;
@@ -322,7 +349,7 @@ test('Gemini Client processing', async (t) => {
 // 5. Web Server Integration Tests
 // ==========================================
 test('Web Server local GUI routing', async (t) => {
-  const originalFetch = global.fetch;
+  const originalFetch = REAL_FETCH;
   // Restore fetch for actual loopback calls
   global.fetch = originalFetch;
 
@@ -349,6 +376,23 @@ test('Web Server local GUI routing', async (t) => {
     assert.ok(Array.isArray(data.listings));
   });
 
+  await t.test('DELETE /api/history removes listing from database', async () => {
+    const originalHistory = utils.readJsonFileSecure(config.historyPath, []);
+    const dummyItem = { sku: "TEST-DELETE-SKU", price: 10, title: "Test Delete Item", timestamp: new Date().toISOString() };
+    utils.writeJsonFileSecure(config.historyPath, [...originalHistory, dummyItem]);
+
+    const res = await fetch(`http://127.0.0.1:${testPort}/api/history?sku=TEST-DELETE-SKU`, {
+      method: 'DELETE'
+    });
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.success, true);
+
+    const updatedHistory = utils.readJsonFileSecure(config.historyPath, []);
+    const found = updatedHistory.some(item => item.sku === "TEST-DELETE-SKU");
+    assert.strictEqual(found, false);
+  });
+
   await t.test('POST /api/analyze with invalid payload returns 400', async () => {
     const res = await fetch(`http://127.0.0.1:${testPort}/api/analyze`, {
       method: 'POST',
@@ -358,6 +402,83 @@ test('Web Server local GUI routing', async (t) => {
     assert.strictEqual(res.status, 400);
     const data = await res.json();
     assert.ok(data.error);
+  });
+
+  await t.test('POST /api/images/import-urls validates payload and blocks unsafe URLs', async () => {
+    const emptyRes = await fetch(`http://127.0.0.1:${testPort}/api/images/import-urls`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: [] })
+    });
+    assert.strictEqual(emptyRes.status, 400);
+
+    const blockedRes = await fetch(`http://127.0.0.1:${testPort}/api/images/import-urls`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ urls: ['http://127.0.0.1/private.jpg'] })
+    });
+    assert.strictEqual(blockedRes.status, 400);
+    const blockedData = await blockedRes.json();
+    assert.ok(blockedData.error || (blockedData.rejected && blockedData.rejected.length > 0));
+  });
+
+  await t.test('POST /api/analyze accepts local /uploads/ image references', async () => {
+    const processedDir = path.join(testDir, 'processed');
+    if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir, { recursive: true });
+
+    const pngPath = path.join(processedDir, 'analyze-local.png');
+    const pngBuf = Buffer.alloc(32);
+    pngBuf.writeUInt32BE(0x89504E47, 0);
+    pngBuf.writeUInt32BE(0x0D0A1A0A, 4);
+    pngBuf.writeUInt32BE(13, 8);
+    pngBuf.writeUInt32BE(0x49484452, 12);
+    pngBuf.writeUInt32BE(600, 16);
+    pngBuf.writeUInt32BE(600, 20);
+    fs.writeFileSync(pngPath, pngBuf);
+
+    const originalOrchestration = geminiClient.runAIOrchestration;
+    const originalRefresh = ebayClient.refreshEbayAccessToken;
+    const originalFetchWithRetry = ebayClient.fetchWithRetry;
+    geminiClient.runAIOrchestration = async () => ({
+      title: 'Imported URL Test Listing',
+      description: 'Test',
+      suggestedPrice: 12.99,
+      condition: 'USED_EXCELLENT',
+      aspects: {},
+      categoryId: '111422'
+    });
+    ebayClient.refreshEbayAccessToken = async () => {};
+    ebayClient.fetchWithRetry = async (url) => {
+      if (String(url).includes('tmpfiles.org') || String(url).includes('file.io')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ status: 'success', data: { url: 'https://tmpfiles.org/dl/mock.jpg' } })
+        };
+      }
+      return originalFetchWithRetry(url);
+    };
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${testPort}/api/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          images: ['/uploads/processed/analyze-local.png'],
+          notes: 'local upload path test'
+        })
+      });
+
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.ok(data.listing);
+      assert.ok(Array.isArray(data.imageUrls));
+    } finally {
+      geminiClient.runAIOrchestration = originalOrchestration;
+      ebayClient.refreshEbayAccessToken = originalRefresh;
+      ebayClient.fetchWithRetry = originalFetchWithRetry;
+      try { fs.unlinkSync(pngPath); } catch (e) {}
+    }
   });
 
   await t.test('POST /api/publish with invalid payload returns 400', async () => {
@@ -370,7 +491,7 @@ test('Web Server local GUI routing', async (t) => {
   });
 
   await t.test('Save draft and publish draft workflow', async () => {
-    const originalFetch = global.fetch;
+    const originalFetch = REAL_FETCH;
     const createMockResponse = (status, bodyObj) => {
       const bodyText = JSON.stringify(bodyObj);
       return {
@@ -468,7 +589,7 @@ test('Web Server local GUI routing', async (t) => {
   });
 
   await t.test('Double-Selling Protection Inventory sync workflow', async () => {
-    const originalFetch = global.fetch;
+    const originalFetch = REAL_FETCH;
     const originalEbayRequest = ebayClient.ebayRequest;
     const createMockResponse = (status, bodyObj) => {
       const bodyText = JSON.stringify(bodyObj);
@@ -613,7 +734,7 @@ test('Autonomous listing features', async (t) => {
 // 7. Advanced Smart Pricing, Stock Photo Sourcing & Image Editing Tests
 // ==========================================
 test('Advanced Pricing, Stock Photos, and Image Editing', async (t) => {
-  const originalFetch = global.fetch;
+  const originalFetch = REAL_FETCH;
 
   await t.test('optimizeImageNative resizes and crops image natively', async () => {
     const inputPng = path.join(testDir, 'test-input.png');
@@ -722,7 +843,7 @@ test('Advanced Pricing, Stock Photos, and Image Editing', async (t) => {
 // 8. Advanced Resiliency, Draft Overwrites, and Daemon Watcher Tests
 // ==========================================
 test('Advanced Resiliency and Draft Overwrite integration', async (t) => {
-  const originalFetch = global.fetch;
+  const originalFetch = REAL_FETCH;
 
   await t.test('circuit breaker trips after 5 consecutive failures and blocks network calls', async () => {
     let callCount = 0;
@@ -838,7 +959,7 @@ test('Advanced Resiliency and Draft Overwrite integration', async (t) => {
 // 9. Advanced Improvements & Hardening Tests
 // ==========================================
 test('Advanced pricing outlier filter in searchEbayComps', async (t) => {
-  const originalFetch = global.fetch;
+  const originalFetch = REAL_FETCH;
   const originalToken = ebayClient.getAccessToken();
   ebayClient.setAccessToken("test-token-active");
   ebayClient.resetCircuitBreaker();
@@ -918,6 +1039,84 @@ test('Web Server /api/status and /api/logs endpoints', async (t) => {
   }
 });
 
+test('Web Server VeRO brands and Repricer endpoints', async (t) => {
+  const testPort = 45935;
+  const server = webServer.startWebGuiServer(testPort);
+  const originalFetch = REAL_FETCH;
+  // Snapshot history so we can restore it after this test
+  const historySnapshot = utils.readJsonFileSecure(config.historyPath, []);
+  try {
+    // 1. Test GET /api/vero-brands
+    const brandsRes = await originalFetch(`http://127.0.0.1:${testPort}/api/vero-brands`);
+    assert.strictEqual(brandsRes.status, 200);
+    const brandsData = await brandsRes.json();
+    assert.ok(Array.isArray(brandsData.brands));
+    assert.ok(brandsData.brands.includes("rolex"));
+
+    // Prepare a mock item in history
+    const testSku = "TEST-REPRICE-SKU-123";
+    utils.writeJsonFileSecure(config.historyPath, [{
+      sku: testSku,
+      title: "Test Watch",
+      price: 100.0,
+      status: "ACTIVE",
+      offerId: "off-123",
+      timestamp: new Date().toISOString()
+    }]);
+
+    // 2. Test POST /api/repricer with invalid sku
+    const invalidSkuRes = await originalFetch(`http://127.0.0.1:${testPort}/api/repricer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sku: "NONEXISTENT", priceFloor: 50, priceCap: 150 })
+    });
+    assert.strictEqual(invalidSkuRes.status, 404);
+
+    // 3. Test POST /api/repricer with floor > cap (invalid)
+    const invalidFloorRes = await originalFetch(`http://127.0.0.1:${testPort}/api/repricer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sku: testSku, priceFloor: 200, priceCap: 150 })
+    });
+    assert.strictEqual(invalidFloorRes.status, 400);
+
+    // 4. Test POST /api/repricer with valid payload
+    const repricerRes = await originalFetch(`http://127.0.0.1:${testPort}/api/repricer`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sku: testSku, priceFloor: 50.0, priceCap: 150.0, priceLocked: true })
+    });
+    assert.strictEqual(repricerRes.status, 200);
+    const repricerData = await repricerRes.json();
+    assert.strictEqual(repricerData.success, true);
+    assert.strictEqual(repricerData.priceFloor, 50.0);
+    assert.strictEqual(repricerData.priceCap, 150.0);
+    assert.strictEqual(repricerData.priceLocked, true);
+
+    // Verify history file was updated
+    const history = utils.readJsonFileSecure(config.historyPath, []);
+    const updatedItem = history.find(i => i.sku === testSku);
+    assert.ok(updatedItem);
+    assert.strictEqual(updatedItem.priceFloor, 50.0);
+    assert.strictEqual(updatedItem.priceCap, 150.0);
+    assert.strictEqual(updatedItem.priceLocked, true);
+
+    // 5. Test POST /api/repricer/run (runs against empty eBay – expect 200)
+    const runRes = await originalFetch(`http://127.0.0.1:${testPort}/api/repricer/run`, {
+      method: 'POST'
+    });
+    assert.strictEqual(runRes.status, 200);
+    const runData = await runRes.json();
+    assert.strictEqual(runData.success, true);
+  } finally {
+    // Restore original history so downstream tests are not affected
+    utils.writeJsonFileSecure(config.historyPath, historySnapshot);
+    // Reset circuit breakers so repricer/run call doesn't leave dirty breaker state
+    ebayClient.resetCircuitBreaker('all');
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('Watch Daemon directory scanner resilience on missing/locked files', (t) => {
   const originalStatSync = fs.statSync;
   const originalReaddirSync = fs.readdirSync;
@@ -941,7 +1140,7 @@ test('Watch Daemon directory scanner resilience on missing/locked files', (t) =>
 // 10. Hardening and Upgrade Verification Tests
 // ==========================================
 test('Hardening and Upgrade Verification tests', async (t) => {
-  const originalFetch = global.fetch;
+  const originalFetch = REAL_FETCH;
 
   await t.test('UPC Barcode input sanitization and length validation', async () => {
     // 1. Valid UPC with spaces/dashes should sanitize and succeed
@@ -974,8 +1173,9 @@ test('Hardening and Upgrade Verification tests', async (t) => {
     let callCount = 0;
     let tokenRefreshCalled = false;
     
-    // Backup access token
+    // Backup access token and current fetch (could be mocked by a prior sub-test)
     const oldAccessToken = ebayClient.getAccessToken();
+    const priorFetch = global.fetch;   // save whatever is current
     ebayClient.setAccessToken("expired-token");
 
     global.fetch = async (url, options) => {
@@ -1022,7 +1222,8 @@ test('Hardening and Upgrade Verification tests', async (t) => {
       assert.strictEqual(callCount, 2);
       assert.strictEqual(tokenRefreshCalled, true);
     } finally {
-      // restore
+      // Restore fetch AND access token
+      global.fetch = priorFetch;
       ebayClient.setAccessToken(oldAccessToken);
     }
   });
@@ -1132,6 +1333,7 @@ test('Hardening and Upgrade Verification tests', async (t) => {
       assert.strictEqual(inventoryLevelSet, true);
       assert.strictEqual(inventoryLevelVal, 1);
     } finally {
+      global.fetch = originalFetch; // Restore so next sub-test (ebayFetch 401) has clean global.fetch
       if (oldShopName) process.env.SHOPIFY_SHOP_NAME = oldShopName;
       else delete process.env.SHOPIFY_SHOP_NAME;
       if (oldShopifyToken) process.env.SHOPIFY_ACCESS_TOKEN = oldShopifyToken;
@@ -1143,7 +1345,9 @@ test('Hardening and Upgrade Verification tests', async (t) => {
 });
 
 test('Google OAuth login callback, Stripe Webhook, and WooCommerce/Etsy crosslisting integration', async (t) => {
-  const originalFetch = global.fetch;
+  // Use REAL_FETCH (captured before any test runs) so concurrent tests that
+  // mock global.fetch don't corrupt our reference to the real HTTP client.
+  const originalFetch = REAL_FETCH;
 
   await t.test('Google OAuth login callback redirects with session cookie', async () => {
     const testPort = 45914;
@@ -1329,6 +1533,7 @@ test('Google OAuth login callback, Stripe Webhook, and WooCommerce/Etsy crosslis
       assert.strictEqual(etsyRequestReceived, true);
 
     } finally {
+      global.fetch = originalFetch; // Restore before closing so downstream sub-tests are not polluted
       process.env.WOOCOMMERCE_URL = originalWcUrl;
       process.env.WOOCOMMERCE_KEY = originalWcKey;
       process.env.WOOCOMMERCE_SECRET = originalWcSecret;
@@ -1440,7 +1645,7 @@ test('Google OAuth login callback, Stripe Webhook, and WooCommerce/Etsy crosslis
 // 11. Hardening and NFR Verification tests
 // ==========================================
 test('Hardening and NFR Verification tests', async (t) => {
-  const originalFetch = global.fetch;
+  const originalFetch = REAL_FETCH;
 
   await t.test('Domain-specific circuit breakers do not interfere', async () => {
     ebayClient.resetCircuitBreaker('all');
@@ -1571,7 +1776,7 @@ test('Hardening and NFR Verification tests', async (t) => {
 // 12. Advanced Self-Healing & Robust Error Handling Tests
 // ==========================================
 test('Advanced Self-Healing and Robust Error Handling', async (t) => {
-  const originalFetch = global.fetch;
+  const originalFetch = REAL_FETCH;
 
   await t.test('Database self-healing on double corruption', () => {
     const corruptFile = path.join(testDir, 'corrupt-db-test.json');
@@ -1669,7 +1874,14 @@ test('Advanced Self-Healing and Robust Error Handling', async (t) => {
     }];
     utils.writeJsonFileSecure(config.historyPath, mockHistory);
     
-    crossPost.addToDlq("shopify", "RETRY-SKU-1", mockListing, ["https://example.com/retry.jpg"], "Initial Network Timeout");
+    await crossPost.addToDlq("shopify", "RETRY-SKU-1", mockListing, ["https://example.com/retry.jpg"], "Initial Network Timeout");
+    
+    // Backdate the job timestamp to bypass exponential backoff checks in the test
+    const dlqSetup = utils.readJsonFileSecure(config.dlqPath, []);
+    if (dlqSetup.length > 0) {
+      dlqSetup[0].timestamp = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      utils.writeJsonFileSecure(config.dlqPath, dlqSetup);
+    }
     
     const dlqBefore = utils.readJsonFileSecure(config.dlqPath, []);
     assert.strictEqual(dlqBefore.length, 1);
@@ -1732,7 +1944,7 @@ test('Advanced Self-Healing and Robust Error Handling', async (t) => {
 // 13. Additional Maximal Coverage & Edge Case Tests
 // ==========================================
 test('Additional maximal coverage and edge cases', async (t) => {
-  const originalFetch = global.fetch;
+  const originalFetch = REAL_FETCH;
 
   await t.test('utils.getImageDimensions returns null on empty or invalid signature file', () => {
     const invalidFilePath = path.join(testDir, 'empty-invalid-img.jpg');
@@ -2166,7 +2378,7 @@ test('Additional maximal coverage and edge cases', async (t) => {
     process.env.ETSY_ACCESS_TOKEN = "test-token-123";
     process.env.EBAY_CLIENT_ID = "test-client-123";
 
-    const originalFetch = global.fetch;
+    const originalFetch = REAL_FETCH;
     let sentPayload = null;
 
     global.fetch = async (url, options) => {
@@ -2226,7 +2438,7 @@ test('Additional maximal coverage and edge cases', async (t) => {
     process.env.WOOCOMMERCE_KEY = "ck_123";
     process.env.WOOCOMMERCE_SECRET = "cs_123";
 
-    const originalFetch = global.fetch;
+    const originalFetch = REAL_FETCH;
     const requestedUrls = [];
 
     // Mock policy and ebayRequest functions directly
@@ -2355,7 +2567,441 @@ test('Additional maximal coverage and edge cases', async (t) => {
   });
 });
 
+// ==========================================
+// 8. Image Pipeline Transcoding and Sprucing Tests
+// ==========================================
+test('Image Pipeline Transcoding and Sprucing', async (t) => {
+  const imagePipeline = require('./lib/imagePipeline');
 
+  await t.test('spruceImageBuffer returns optimized square JPEG buffer', async () => {
+    const base64Png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    const inputBuffer = Buffer.from(base64Png, 'base64');
+    
+    const outputBuffer = await imagePipeline.spruceImageBuffer(inputBuffer, {
+      canvasSize: 200,
+      watermarkText: "Test Watermark",
+      colorCorrection: true,
+      watermark: true
+    });
+    
+    assert.ok(outputBuffer);
+    assert.ok(outputBuffer.length > 0);
+    
+    const testOut = path.join(testDir, 'test-spruced.jpg');
+    fs.writeFileSync(testOut, outputBuffer);
+    
+    try {
+      const dimensions = utils.getImageDimensions(testOut);
+      assert.ok(dimensions);
+      assert.strictEqual(dimensions.width, 200);
+      assert.strictEqual(dimensions.height, 200);
+      assert.strictEqual(dimensions.type, 'JPEG');
+    } finally {
+      try { fs.unlinkSync(testOut); } catch (e) {}
+    }
+  });
 
+  await t.test('processImageSource processes local files successfully', async () => {
+    const inputPng = path.join(testDir, 'test-pipeline-input.png');
+    const base64Png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    fs.writeFileSync(inputPng, Buffer.from(base64Png, 'base64'));
 
+    try {
+      const result = await imagePipeline.processImageSource(inputPng, {
+        canvasSize: 150,
+        watermark: false
+      });
+      
+      assert.ok(result.outputPath);
+      assert.ok(fs.existsSync(result.outputPath));
+      assert.strictEqual(result.metadata.width, 150);
+      assert.strictEqual(result.metadata.height, 150);
+      assert.strictEqual(result.metadata.format, 'jpeg');
+      
+      try { fs.unlinkSync(result.outputPath); } catch (e) {}
+    } finally {
+      try { fs.unlinkSync(inputPng); } catch (e) {}
+    }
+  });
+
+  await t.test('imageDownloader correctly upgrades retail store image URLs', async () => {
+    const downloader = require('./lib/imageDownloader');
+    
+    // Amazon
+    const amazonUrl = "https://m.media-amazon.com/images/I/71xyz._AC_SL150_.jpg";
+    assert.strictEqual(downloader.upgradeImageUrl(amazonUrl), "https://m.media-amazon.com/images/I/71xyz.jpg");
+    
+    // eBay
+    const ebayUrl = "https://i.ebayimg.com/images/g/xyz/s-l500.jpg";
+    assert.strictEqual(downloader.upgradeImageUrl(ebayUrl), "https://i.ebayimg.com/images/g/xyz/s-l1600.jpg");
+    
+    // Shopify
+    const shopifyUrl = "https://cdn.shopify.com/s/files/1/123/img_medium.jpg";
+    assert.strictEqual(downloader.upgradeImageUrl(shopifyUrl), "https://cdn.shopify.com/s/files/1/123/img.jpg");
+  });
+
+  await t.test('localChromaKeyBgRemove transparency mask and smart cropping', async () => {
+    const sharp = require('sharp');
+    // Generate a simple 10x10 green box with white borders
+    // To keep it simple, we construct a 10x10 raw pixel buffer: outer white, inner green
+    const width = 10;
+    const height = 10;
+    const data = Buffer.alloc(width * height * 4);
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const idx = (y * width + x) * 4;
+        if (x === 0 || y === 0 || x === width - 1 || y === height - 1) {
+          // White background border
+          data[idx] = 255;
+          data[idx + 1] = 255;
+          data[idx + 2] = 255;
+          data[idx + 3] = 255;
+        } else {
+          // Inner green product subject
+          data[idx] = 0;
+          data[idx + 1] = 200;
+          data[idx + 2] = 0;
+          data[idx + 3] = 255;
+        }
+      }
+    }
+
+    const inputBuffer = await sharp(data, { raw: { width, height, channels: 4 } }).png().toBuffer();
+    const transparentBuffer = await imagePipeline.localChromaKeyBgRemove(inputBuffer, 35, 10);
+    
+    assert.ok(transparentBuffer);
+    const meta = await sharp(transparentBuffer).metadata();
+    assert.strictEqual(meta.format, 'png');
+    assert.strictEqual(meta.hasAlpha, true);
+  });
+
+  await t.test('spruceImageBuffer supports crop, rotate, gradient background, and tiled watermarks', async () => {
+    const base64Png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
+    const inputBuffer = Buffer.from(base64Png, 'base64');
+
+    const outputBuffer = await imagePipeline.spruceImageBuffer(inputBuffer, {
+      canvasSize: 300,
+      crop: { x: 0.1, y: 0.1, w: 0.8, h: 0.8 },
+      rotate: 90,
+      bgStyle: 'gradient',
+      watermarkText: "Confidential",
+      watermarkPosition: "diagonal-tile"
+    });
+
+    assert.ok(outputBuffer);
+    assert.ok(outputBuffer.length > 0);
+
+    const testOut = path.join(testDir, 'test-advanced-spruced.jpg');
+    fs.writeFileSync(testOut, outputBuffer);
+
+    try {
+      const dimensions = utils.getImageDimensions(testOut);
+      assert.ok(dimensions);
+      assert.strictEqual(dimensions.width, 300);
+      assert.strictEqual(dimensions.height, 300);
+    } finally {
+      try { fs.unlinkSync(testOut); } catch (e) {}
+    }
+  });
+});
+
+// ==========================================
+// 9. SSE Logs, eBay Policies, Deduplication, and VeRO Daemon Tests
+// ==========================================
+test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallback', async (t) => {
+  const originalFetch = global.fetch;
+
+  // ── 9.1  GET /api/logs/stream returns text/event-stream ─────────────────
+  await t.test('GET /api/logs/stream returns SSE text/event-stream connection', async () => {
+    webServer.resetRateLimits();
+    const testPort = 46010;
+    const server = webServer.startWebGuiServer(testPort);
+
+    try {
+      try { fs.writeFileSync(config.logPath, '', 'utf8'); } catch (e) {}
+
+      const res = await fetch(`http://127.0.0.1:${testPort}/api/logs/stream`, {
+        headers: { 'X-Lister-API-Key': 'lister-secret-key-12345' }
+      });
+
+      assert.strictEqual(res.status, 200);
+      const ct = res.headers.get('content-type') || '';
+      assert.ok(ct.includes('text/event-stream'), `Expected text/event-stream, got: ${ct}`);
+
+      res.body.cancel().catch(() => {});
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  // ── 9.2  GET /api/ebay/policies returns structured policy data ───────────
+  await t.test('GET /api/ebay/policies returns fulfillment, return, and payment arrays', async () => {
+    webServer.resetRateLimits();
+    const testPort = 46011;
+    const server = webServer.startWebGuiServer(testPort);
+
+    const originalGetEbayPolicies = ebayClient.getEbayPolicies;
+    ebayClient.getEbayPolicies = async () => ({
+      fulfillment: [{ fulfillmentPolicyId: 'fp-001', name: 'Mock Fulfillment Policy' }],
+      return:      [{ returnPolicyId: 'rp-001',      name: 'Mock Return Policy' }],
+      payment:     [{ paymentPolicyId: 'pp-001',     name: 'Mock Payment Policy' }]
+    });
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${testPort}/api/ebay/policies`, {
+        headers: { 'X-Lister-API-Key': 'lister-secret-key-12345' }
+      });
+
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.ok(Array.isArray(data.fulfillment), 'fulfillment must be an array');
+      assert.ok(Array.isArray(data.return),      'return must be an array');
+      assert.ok(Array.isArray(data.payment),     'payment must be an array');
+      assert.strictEqual(data.fulfillment[0].fulfillmentPolicyId, 'fp-001');
+      assert.strictEqual(data.return[0].returnPolicyId,           'rp-001');
+      assert.strictEqual(data.payment[0].paymentPolicyId,         'pp-001');
+    } finally {
+      ebayClient.getEbayPolicies = originalGetEbayPolicies;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  // ── 9.3  POST /api/publish rejects duplicates with 409 then allows force ─
+  await t.test('POST /api/publish rejects duplicate title with 409 and allows force override', async () => {
+    webServer.resetRateLimits();
+    const testPort = 46012;
+    const server = webServer.startWebGuiServer(testPort);
+
+    const existingHistory = [{
+      sku:       'DUP-EXISTING-SKU',
+      title:     'Duplicate Test Item',
+      status:    'ACTIVE',
+      timestamp: new Date().toISOString(),
+      listingDetails: { title: 'Duplicate Test Item', upc: '' }
+    }];
+    utils.writeJsonFileSecure(config.historyPath, existingHistory);
+
+    const originalGetPolicies = ebayClient.getOrCreateListingPolicies;
+    const originalEbayRequest = ebayClient.ebayRequest;
+    ebayClient.getOrCreateListingPolicies = async () => ({
+      fulfillmentId: 'ful-test', paymentId: 'pay-test', returnId: 'ret-test'
+    });
+    ebayClient.ebayRequest = async (path) => {
+      if (path.includes('/publish')) return { listingId: 'ebay-force-123' };
+      if (path === '/offer')        return { offerId: 'off-force-456' };
+      return {};
+    };
+
+    const originalToken = ebayClient.getAccessToken();
+    ebayClient.setAccessToken('active-token');
+
+    const listingPayload = {
+      title: 'Duplicate Test Item', suggestedPrice: 29.99,
+      condition: 'USED_GOOD', brand: 'Generic',
+      aspects: {}, categoryId: '111422', description: 'A test item'
+    };
+
+    try {
+      // First attempt — expect 409
+      const firstRes = await fetch(`http://127.0.0.1:${testPort}/api/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Lister-API-Key': 'lister-secret-key-12345' },
+        body: JSON.stringify({
+          sku: 'DUP-NEW-SKU', listing: listingPayload, imageUrls: [],
+          shippingOption: 'USPS_GROUND', returnOption: 'NO_RETURNS', immediatePayment: false
+        })
+      });
+      assert.strictEqual(firstRes.status, 409, 'First publish should be rejected as duplicate (409)');
+      const firstData = await firstRes.json();
+      assert.ok(firstData.message && firstData.message.length > 0, 'Rejection message must be present');
+
+      // Force override — expect 200
+      const forceRes = await fetch(`http://127.0.0.1:${testPort}/api/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Lister-API-Key': 'lister-secret-key-12345' },
+        body: JSON.stringify({
+          sku: 'DUP-NEW-SKU', listing: listingPayload, imageUrls: [],
+          shippingOption: 'USPS_GROUND', returnOption: 'NO_RETURNS', immediatePayment: false,
+          force: true
+        })
+      });
+      assert.strictEqual(forceRes.status, 200, 'Force publish should succeed (200)');
+      const forceData = await forceRes.json();
+      assert.strictEqual(forceData.success, true);
+      assert.strictEqual(forceData.listingId, 'ebay-force-123');
+    } finally {
+      ebayClient.setAccessToken(originalToken);
+      ebayClient.getOrCreateListingPolicies = originalGetPolicies;
+      ebayClient.ebayRequest = originalEbayRequest;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  // ── 9.4  POST /api/publish blocks VeRO brands with 409 ──────────────────
+  await t.test('POST /api/publish blocks VeRO brand with 409 and allows force override', async () => {
+    webServer.resetRateLimits();
+    const testPort = 46013;
+    const server = webServer.startWebGuiServer(testPort);
+
+    utils.writeJsonFileSecure(config.historyPath, []);
+
+    const originalGetPolicies = ebayClient.getOrCreateListingPolicies;
+    const originalEbayRequest = ebayClient.ebayRequest;
+    ebayClient.getOrCreateListingPolicies = async () => ({
+      fulfillmentId: 'ful-v', paymentId: 'pay-v', returnId: 'ret-v'
+    });
+    ebayClient.ebayRequest = async (path) => {
+      if (path.includes('/publish')) return { listingId: 'ebay-vero-ok' };
+      if (path === '/offer')        return { offerId: 'off-vero-ok' };
+      return {};
+    };
+
+    const originalToken = ebayClient.getAccessToken();
+    ebayClient.setAccessToken('active-token');
+
+    const veroListing = {
+      title: 'Rolex Submariner Watch', suggestedPrice: 299.99,
+      condition: 'USED_GOOD', brand: 'Rolex',
+      aspects: {}, categoryId: '31387', description: 'Premium timepiece'
+    };
+
+    try {
+      // VeRO block — expect 409
+      const veroRes = await fetch(`http://127.0.0.1:${testPort}/api/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Lister-API-Key': 'lister-secret-key-12345' },
+        body: JSON.stringify({
+          sku: 'VERO-SKU-1', listing: veroListing, imageUrls: [],
+          shippingOption: 'USPS_GROUND', returnOption: 'NO_RETURNS', immediatePayment: false
+        })
+      });
+      assert.strictEqual(veroRes.status, 409, 'VeRO brand publish should be blocked (409)');
+      const veroData = await veroRes.json();
+      assert.strictEqual(veroData.error, 'VERO_BRAND_BLOCKED');
+
+      // Force override — expect 200
+      const forceRes = await fetch(`http://127.0.0.1:${testPort}/api/publish`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Lister-API-Key': 'lister-secret-key-12345' },
+        body: JSON.stringify({
+          sku: 'VERO-SKU-1', listing: veroListing, imageUrls: [],
+          shippingOption: 'USPS_GROUND', returnOption: 'NO_RETURNS', immediatePayment: false,
+          force: true
+        })
+      });
+      assert.strictEqual(forceRes.status, 200, 'Force VeRO publish should succeed (200)');
+      const forceVeroData = await forceRes.json();
+      assert.strictEqual(forceVeroData.success, true);
+    } finally {
+      ebayClient.setAccessToken(originalToken);
+      ebayClient.getOrCreateListingPolicies = originalGetPolicies;
+      ebayClient.ebayRequest = originalEbayRequest;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  // ── 9.5  Watcher daemon saves VeRO-flagged items as DRAFT ───────────────
+  await t.test('Watcher daemon VeRO gate saves flagged items as DRAFT not ACTIVE', async () => {
+    const listerPro = require('./simple-lister-pro');
+
+    utils.writeJsonFileSecure(config.historyPath, []);
+
+    const veroListing = {
+      title:          'Nike Air Force 1 Shoes',
+      suggestedPrice: 89.99,
+      condition:      'NEW',
+      brand:          'Nike',
+      model:          'Air Force 1',
+      categoryId:     '15709',
+      aspects:        { Size: '10' },
+      description:    'Brand new Nike sneakers.',
+      upc:            '885179528829',
+      imageUrls:      []
+    };
+
+    // Invoke the exported VeRO fallback handler directly
+    assert.ok(
+      typeof listerPro.handleVeroAutoListingFallback === 'function',
+      'simple-lister-pro must export handleVeroAutoListingFallback'
+    );
+
+    await listerPro.handleVeroAutoListingFallback(veroListing, 'VERO-DAEMON-SKU');
+
+    const history = utils.readJsonFileSecure(config.historyPath, []);
+    const saved = history.find(i => i.sku === 'VERO-DAEMON-SKU');
+    assert.ok(saved,                           'Item should be saved to history');
+    assert.strictEqual(saved.status, 'DRAFT',  'VeRO-flagged item must be saved as DRAFT');
+    assert.strictEqual(saved.veroWarning, true, 'veroWarning flag must be set true');
+  });
+
+  global.fetch = originalFetch;
+});
+
+// ==========================================
+// 14. DLQ API & hardening tests
+// ==========================================
+test('DLQ API endpoints and validation', async (t) => {
+  webServer.resetRateLimits();
+  const testPort = 45923;
+  const server = webServer.startWebGuiServer(testPort);
+  const crossPost = require('./crossPost');
+
+  try { fs.writeFileSync(config.dlqPath, '[]', 'utf8'); } catch (e) {}
+
+  const mockListing = {
+    title: 'DLQ API Test Item',
+    suggestedPrice: 29.99,
+    description: 'Test',
+    brand: 'Generic',
+    condition: 'NEW'
+  };
+
+  await crossPost.addToDlq('shopify', 'DLQ-API-SKU', mockListing, ['https://example.com/img.jpg'], 'Simulated failure');
+
+  try {
+    const listRes = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/dlq`);
+    assert.strictEqual(listRes.status, 200);
+    const listData = await listRes.json();
+    assert.strictEqual(listData.summary.total, 1);
+    assert.strictEqual(listData.entries[0].sku, 'DLQ-API-SKU');
+
+    const badRes = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/dlq/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'retry', sku: 'INVALID SKU!', platform: 'shopify' })
+    });
+    assert.strictEqual(badRes.status, 500);
+
+    const dismissRes = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/dlq/action`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'dismiss', sku: 'DLQ-API-SKU', platform: 'shopify' })
+    });
+    assert.strictEqual(dismissRes.status, 200);
+    const dismissData = await dismissRes.json();
+    assert.strictEqual(dismissData.summary.total, 0);
+
+    const statusRes = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/status`);
+    const statusData = await statusRes.json();
+    assert.ok(statusData.dlq);
+    assert.strictEqual(statusData.dlq.total, 0);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('DLQ rejects invalid listing payloads', async () => {
+  const crossPost = require('./crossPost');
+  try { fs.writeFileSync(config.dlqPath, '[]', 'utf8'); } catch (e) {}
+
+  await assert.rejects(
+    () => crossPost.addToDlq('shopify', 'BAD-SKU', { title: 'No price' }, [], 'bad data'),
+    /Invalid suggestedPrice/
+  );
+
+  await assert.rejects(
+    () => crossPost.addToDlq('unknown', 'GOOD-SKU', { title: 'Test', suggestedPrice: 10 }, [], 'bad platform'),
+    /Invalid platform/
+  );
+});
 

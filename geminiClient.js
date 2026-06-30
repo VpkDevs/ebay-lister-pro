@@ -44,6 +44,9 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
   if (!geminiKey) {
     throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");
   }
+  if (geminiKey === "your_gemini_api_key_here") {
+    throw new Error("GEMINI_API_KEY is not configured. Please run 'node bootstrap.js' or set the GEMINI_API_KEY in your .env file to your actual Google AI Studio API key.");
+  }
 
   const imageParts = photoBuffers.map((buffer, index) => {
     const filename = filenames[index] || 'image.jpg';

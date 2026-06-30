@@ -24,99 +24,113 @@ async function runInventoryCrossSync() {
     return;
   }
 
-  const history = utils.readJsonFileSecure(config.historyPath, []);
+  const history = await utils.readJsonFileSecureAsync(config.historyPath, []);
   let historyChanged = false;
 
-  for (const item of history) {
-    if (item.status !== "ACTIVE") continue;
+  const activeItems = history.filter(item => item.status === "ACTIVE");
+  if (activeItems.length === 0) return;
 
-    // 1. Shopify to eBay Sync
-    if (item.shopifyId && shopName && accessToken) {
-      try {
-        const url = `https://${shopName}.myshopify.com/admin/api/2024-01/products/${item.shopifyId}.json`;
-        const response = await ebayClient.fetchWithRetry(url, {
-          headers: {
-            "X-Shopify-Access-Token": accessToken,
-            "Accept": "application/json"
-          }
-        });
+  utils.logAudit("INFO", `Starting background inventory cross-sync for ${activeItems.length} active listings...`);
 
-        if (response.status === 404) {
-          utils.logAudit("INFO", `Shopify product ${item.shopifyId} not found (deleted). Ending eBay SKU ${item.sku}...`);
-          try {
-            await ebayClient.endListingOnEbay(item.sku, item.offerId);
-            item.status = "ENDED";
-            historyChanged = true;
-          } catch (e) {
-            utils.logAudit("ERROR", `Failed to end eBay listing for SKU ${item.sku}: ${e.message}`);
-          }
-        } else if (response.ok) {
-          const shopifyProd = await response.json();
-          const product = shopifyProd.product;
-          
-          if (product) {
-            const isInactive = product.status !== "active";
-            const totalInventory = (product.variants || []).reduce((sum, v) => sum + (v.inventory_quantity || 0), 0);
+  const CHUNK_SIZE = 5;
+  for (let i = 0; i < activeItems.length; i += CHUNK_SIZE) {
+    const chunk = activeItems.slice(i, i + CHUNK_SIZE);
+    
+    await Promise.all(chunk.map(async (item) => {
+      let itemChanged = false;
+      
+      // 1. Shopify to eBay Sync
+      if (item.shopifyId && shopName && accessToken) {
+        try {
+          const url = `https://${shopName}.myshopify.com/admin/api/2024-01/products/${item.shopifyId}.json`;
+          const response = await ebayClient.fetchWithRetry(url, {
+            headers: {
+              "X-Shopify-Access-Token": accessToken,
+              "Accept": "application/json"
+            }
+          });
+
+          if (response.status === 404) {
+            utils.logAudit("INFO", `Shopify product ${item.shopifyId} not found (deleted). Ending eBay SKU ${item.sku}...`);
+            try {
+              await ebayClient.endListingOnEbay(item.sku, item.offerId);
+              item.status = "ENDED";
+              itemChanged = true;
+            } catch (e) {
+              utils.logAudit("ERROR", `Failed to end eBay listing for SKU ${item.sku}: ${e.message}`);
+            }
+          } else if (response.ok) {
+            const shopifyProd = await response.json();
+            const product = shopifyProd.product;
             
-            if (isInactive || totalInventory === 0) {
-              utils.logAudit("INFO", `Shopify product ${item.shopifyId} is inactive or out of stock. Ending eBay SKU ${item.sku}...`);
-              try {
-                await ebayClient.endListingOnEbay(item.sku, item.offerId);
-                item.status = "ENDED";
-                historyChanged = true;
-              } catch (e) {
-                utils.logAudit("ERROR", `Failed to end eBay listing for SKU ${item.sku}: ${e.message}`);
+            if (product) {
+              const isInactive = product.status !== "active";
+              const totalInventory = (product.variants || []).reduce((sum, v) => sum + (v.inventory_quantity || 0), 0);
+              
+              if (isInactive || totalInventory === 0) {
+                utils.logAudit("INFO", `Shopify product ${item.shopifyId} is inactive or out of stock. Ending eBay SKU ${item.sku}...`);
+                try {
+                  await ebayClient.endListingOnEbay(item.sku, item.offerId);
+                  item.status = "ENDED";
+                  itemChanged = true;
+                } catch (e) {
+                  utils.logAudit("ERROR", `Failed to end eBay listing for SKU ${item.sku}: ${e.message}`);
+                }
               }
             }
           }
+        } catch (err) {
+          utils.logAudit("WARN", `Error querying Shopify status for SKU ${item.sku}: ${err.message}`);
         }
-      } catch (err) {
-        utils.logAudit("WARN", `Error querying Shopify status for SKU ${item.sku}: ${err.message}`);
       }
-    }
 
-    // 2. eBay to Shopify Sync
-    if (item.listingId) {
-      try {
-        const offerRes = await ebayClient.ebayRequest(`/offer?sku=${encodeURIComponent(item.sku)}`, "GET");
-        const offers = offerRes.offers || [];
-        const activeOffer = offers.find(o => o.sku === item.sku && o.status === "LISTED");
+      // 2. eBay to Shopify Sync
+      if (item.listingId && item.status !== "ENDED") {
+        try {
+          const offerRes = await ebayClient.ebayRequest(`/offer?sku=${encodeURIComponent(item.sku)}`, "GET");
+          const offers = offerRes.offers || [];
+          const activeOffer = offers.find(o => o.sku === item.sku && o.status === "LISTED");
 
-        if (!activeOffer) {
-          utils.logAudit("INFO", `eBay SKU ${item.sku} is no longer active/listed on eBay. Reflecting to Shopify product ${item.shopifyId}...`);
-          item.status = "ENDED";
-          historyChanged = true;
+          if (!activeOffer) {
+            utils.logAudit("INFO", `eBay SKU ${item.sku} is no longer active/listed on eBay. Reflecting to Shopify product ${item.shopifyId}...`);
+            item.status = "ENDED";
+            itemChanged = true;
 
-          if (item.shopifyId && shopName && accessToken) {
-            try {
-              const url = `https://${shopName}.myshopify.com/admin/api/2024-01/products/${item.shopifyId}.json`;
-              await ebayClient.fetchWithRetry(url, {
-                method: "PUT",
-                headers: {
-                  "X-Shopify-Access-Token": accessToken,
-                  "Content-Type": "application/json"
-                },
-                body: JSON.stringify({
-                  product: {
-                    id: item.shopifyId,
-                    status: "archived"
-                  }
-                })
-              });
-              utils.logAudit("INFO", `Shopify product ${item.shopifyId} set to archived.`);
-            } catch (err) {
-              utils.logAudit("WARN", `Failed to archive Shopify product ${item.shopifyId}: ${err.message}`);
+            if (item.shopifyId && shopName && accessToken) {
+              try {
+                const url = `https://${shopName}.myshopify.com/admin/api/2024-01/products/${item.shopifyId}.json`;
+                await ebayClient.fetchWithRetry(url, {
+                  method: "PUT",
+                  headers: {
+                    "X-Shopify-Access-Token": accessToken,
+                    "Content-Type": "application/json"
+                  },
+                  body: JSON.stringify({
+                    product: {
+                      id: item.shopifyId,
+                      status: "archived"
+                    }
+                  })
+                });
+                utils.logAudit("INFO", `Shopify product ${item.shopifyId} set to archived.`);
+              } catch (err) {
+                utils.logAudit("WARN", `Failed to archive Shopify product ${item.shopifyId}: ${err.message}`);
+              }
             }
           }
+        } catch (err) {
+          utils.logAudit("WARN", `Error querying eBay status for SKU ${item.sku}: ${err.message}`);
         }
-      } catch (err) {
-        utils.logAudit("WARN", `Error querying eBay status for SKU ${item.sku}: ${err.message}`);
       }
-    }
+
+      if (itemChanged) {
+        historyChanged = true;
+      }
+    }));
   }
 
   if (historyChanged) {
-    utils.writeJsonFileSecure(config.historyPath, history);
+    await utils.writeJsonFileSecureAsync(config.historyPath, history);
   }
 }
 
@@ -271,7 +285,7 @@ function startWebGuiServer(port = 45900) {
         }
       }
 
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
       res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-lister-api-key');
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('X-Frame-Options', 'DENY');
@@ -308,7 +322,7 @@ function startWebGuiServer(port = 45900) {
     ];
     
     const isApiRoute = parsedUrl.pathname.startsWith('/api/');
-    const isAssetRoute = parsedUrl.pathname.endsWith('.js') || parsedUrl.pathname.endsWith('.css') || parsedUrl.pathname.endsWith('.png');
+    const isAssetRoute = parsedUrl.pathname.endsWith('.js') || parsedUrl.pathname.endsWith('.css') || parsedUrl.pathname.endsWith('.png') || parsedUrl.pathname.endsWith('.jpg') || parsedUrl.pathname.endsWith('.jpeg') || parsedUrl.pathname.endsWith('.webp');
     
     const user = getAuthenticatedUser(req);
     const isAuthRequired = config.getGOOGLE_CLIENT_ID() && !openPaths.includes(parsedUrl.pathname) && !isAssetRoute;
@@ -672,9 +686,10 @@ function startWebGuiServer(port = 45900) {
       let bodyData = '';
       req.on('data', chunk => bodyData += chunk);
       req.on('end', async () => {
+        let sku, listing, imageUrls;
         try {
           const payload = JSON.parse(bodyData);
-          const { sku, listing, imageUrls } = payload;
+          ({ sku, listing, imageUrls } = payload);
           
           const wcUrlStr = config.getWOOCOMMERCE_URL();
           const wcKey = config.getWOOCOMMERCE_KEY();
@@ -736,9 +751,10 @@ function startWebGuiServer(port = 45900) {
       let bodyData = '';
       req.on('data', chunk => bodyData += chunk);
       req.on('end', async () => {
+        let sku, listing;
         try {
           const payload = JSON.parse(bodyData);
-          const { sku, listing } = payload;
+          ({ sku, listing } = payload);
           
           const etsyShopId = config.getETSY_SHOP_ID();
           const etsyToken = config.getETSY_ACCESS_TOKEN();
@@ -883,7 +899,291 @@ function startWebGuiServer(port = 45900) {
     if (req.method === 'GET' && parsedUrl.pathname === '/api/history') {
       const data = utils.readJsonFileSecure(config.historyPath, []);
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ listings: data, shopifyShopName: config.getSHOPIFY_SHOP_NAME() || null }));
+      res.end(JSON.stringify({
+        listings: data,
+        shopifyShopName: config.getSHOPIFY_SHOP_NAME() || null,
+        woocommerceUrl: config.getWOOCOMMERCE_URL() || null,
+        etsyShopId: config.getETSY_SHOP_ID() || null
+      }));
+      return;
+    }
+
+    // API: Fetch eBay custom business policies
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/ebay/policies') {
+      try {
+        const policies = await ebayClient.getEbayPolicies();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(policies));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // API: Real-time logs SSE stream
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/logs/stream') {
+      const logPath = config.logPath;
+      if (!fs.existsSync(logPath)) {
+        try { fs.writeFileSync(logPath, '', 'utf8'); } catch (e) {}
+      }
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*'
+      });
+      res.write('\n'); // keep connection alive
+
+      let filePosition = 0;
+      if (fs.existsSync(logPath)) {
+        filePosition = fs.statSync(logPath).size;
+      }
+
+      const watcher = fs.watch(logPath, (eventType) => {
+        if (eventType === 'change') {
+          try {
+            const stats = fs.statSync(logPath);
+            if (stats.size > filePosition) {
+              const fd = fs.openSync(logPath, 'r');
+              const bufferSize = stats.size - filePosition;
+              const buffer = Buffer.alloc(bufferSize);
+              fs.readSync(fd, buffer, 0, bufferSize, filePosition);
+              fs.closeSync(fd);
+              filePosition = stats.size;
+
+              const lines = buffer.toString('utf8').split('\n').filter(l => l.trim().length > 0);
+              for (const line of lines) {
+                res.write(`data: ${line}\n\n`);
+              }
+            } else if (stats.size < filePosition) {
+              filePosition = stats.size;
+            }
+          } catch (e) {
+            // handle error silently
+          }
+        }
+      });
+
+      req.on('close', () => {
+        watcher.close();
+      });
+      return;
+    }
+
+
+    // API: Delete Listing Entry (for purging drafts or local entries)
+    if (req.method === 'DELETE' && parsedUrl.pathname === '/api/history') {
+      const targetSku = parsedUrl.searchParams.get('sku');
+      if (!targetSku) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Missing required query parameter: sku" }));
+        return;
+      }
+
+      try {
+        const history = utils.readJsonFileSecure(config.historyPath, []);
+        const initialLength = history.length;
+        const filtered = history.filter(item => item.sku !== targetSku);
+
+        if (filtered.length === initialLength) {
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: "SKU not found in history" }));
+          return;
+        }
+
+        utils.writeJsonFileSecure(config.historyPath, filtered);
+        utils.logAudit("INFO", `Deleted SKU ${targetSku} from history`);
+
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, message: `SKU ${targetSku} successfully removed.` }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // API: Get VeRO Brands
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/vero-brands') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ brands: config.getVERO_BRANDS() }));
+      return;
+    }
+
+    // API: Update Repricer Configuration
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/repricer') {
+      let bodyData = '';
+      req.on('data', chunk => bodyData += chunk);
+      req.on('end', async () => {
+        try {
+          const payload = JSON.parse(bodyData || '{}');
+          const { sku, priceFloor, priceCap, priceLocked } = payload;
+          if (!sku) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Missing required parameter: sku" }));
+            return;
+          }
+
+          const history = utils.readJsonFileSecure(config.historyPath, []);
+          const existingIndex = history.findIndex(item => item.sku === sku);
+          if (existingIndex === -1) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "SKU not found in history" }));
+            return;
+          }
+
+          let parsedFloor = null;
+          if (priceFloor !== undefined && priceFloor !== null && priceFloor !== '') {
+            parsedFloor = parseFloat(priceFloor);
+            if (isNaN(parsedFloor) || parsedFloor < 0) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: "Invalid priceFloor: must be a positive number" }));
+              return;
+            }
+          }
+
+          let parsedCap = null;
+          if (priceCap !== undefined && priceCap !== null && priceCap !== '') {
+            parsedCap = parseFloat(priceCap);
+            if (isNaN(parsedCap) || parsedCap < 0) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: "Invalid priceCap: must be a positive number" }));
+              return;
+            }
+          }
+
+          if (parsedFloor !== null && parsedCap !== null && parsedFloor > parsedCap) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "priceFloor cannot be greater than priceCap" }));
+            return;
+          }
+
+          // Update settings
+          history[existingIndex].priceFloor = parsedFloor;
+          history[existingIndex].priceCap = parsedCap;
+          history[existingIndex].priceLocked = !!priceLocked;
+          history[existingIndex].timestamp = new Date().toISOString();
+
+          utils.writeJsonFileSecure(config.historyPath, history);
+          utils.logAudit("INFO", `Updated repricer config for SKU ${sku}: Floor=${parsedFloor}, Cap=${parsedCap}, Locked=${!!priceLocked}`);
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ 
+            success: true, 
+            sku, 
+            priceFloor: parsedFloor, 
+            priceCap: parsedCap, 
+            priceLocked: !!priceLocked 
+          }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // API: Run Repricer Tool Immediately
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/repricer/run') {
+      try {
+        await ebayClient.runDailyRepricer();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/dlq') {
+      try {
+        const summary = await crossPost.getDlqSummary();
+        const entries = await crossPost.getDlqEntries();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, summary, entries }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/dlq/process') {
+      try {
+        const result = await crossPost.processPendingSyncsDlq();
+        const summary = await crossPost.getDlqSummary();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, result, summary }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/dlq/action') {
+      let bodyData = '';
+      req.on('data', chunk => bodyData += chunk);
+      req.on('end', async () => {
+        try {
+          const payload = JSON.parse(bodyData || '{}');
+          const { action, sku, platform, force } = payload;
+
+          if (!action) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing required field: action' }));
+            return;
+          }
+
+          if (action === 'clear') {
+            if (!payload.confirm) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'Set confirm: true to clear the entire sync queue' }));
+              return;
+            }
+            const removedCount = await crossPost.clearDlq();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, removedCount, summary: await crossPost.getDlqSummary() }));
+            return;
+          }
+
+          if (!sku || !platform) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Missing required fields: sku, platform' }));
+            return;
+          }
+
+          if (action === 'retry') {
+            const result = await crossPost.retryDlqJob(sku, platform, { force: !!force });
+            const summary = await crossPost.getDlqSummary();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, result, summary }));
+            return;
+          }
+
+          if (action === 'dismiss') {
+            const removed = await crossPost.removeFromDlq(sku, platform);
+            if (!removed) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: 'DLQ job not found' }));
+              return;
+            }
+            const summary = await crossPost.getDlqSummary();
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, summary }));
+            return;
+          }
+
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Invalid action. Use retry, dismiss, or clear.' }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
       return;
     }
 
@@ -913,7 +1213,8 @@ function startWebGuiServer(port = 45900) {
         circuitBreaker,
         diagnostics: diagnosticsOk ? "OK" : "FAILED",
         ebayAuthenticated: !!ebayClient.getAccessToken(),
-        shopifyConnected: !!(config.getSHOPIFY_SHOP_NAME() && config.getSHOPIFY_ACCESS_TOKEN())
+        shopifyConnected: !!(config.getSHOPIFY_SHOP_NAME() && config.getSHOPIFY_ACCESS_TOKEN()),
+        dlq: await crossPost.getDlqSummary()
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(statusInfo));
@@ -1018,6 +1319,244 @@ function startWebGuiServer(port = 45900) {
       return;
     }
 
+    // Serve local uploads statically (for image previews)
+    if (req.method === 'GET' && parsedUrl.pathname.startsWith('/uploads/')) {
+      const relativePath = parsedUrl.pathname.substring(9); // strip '/uploads/'
+      const safePath = path.join(config.uploadTempDir, relativePath);
+      try {
+        const resolved = utils.safeResolvePath(safePath);
+        if (fs.existsSync(resolved) && fs.statSync(resolved).isFile()) {
+          const ext = path.extname(resolved).toLowerCase();
+          let contentType = 'application/octet-stream';
+          if (ext === '.jpg' || ext === '.jpeg') contentType = 'image/jpeg';
+          else if (ext === '.png') contentType = 'image/png';
+          else if (ext === '.webp') contentType = 'image/webp';
+          
+          res.writeHead(200, { 'Content-Type': contentType });
+          fs.createReadStream(resolved).pipe(res);
+          return;
+        }
+      } catch (err) {
+        utils.logAudit("WARN", `Failed to serve static upload: ${err.message}`);
+      }
+      res.writeHead(404, { 'Content-Type': 'text/plain' });
+      res.end("404 Not Found");
+      return;
+    }
+
+    // API: Import and spruce remote image URLs
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/images/import-urls') {
+      let bodyData = '';
+      req.on('data', chunk => bodyData += chunk);
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(bodyData);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+
+          const { urls, options: rawOptions = {} } = payload;
+          if (!urls || !Array.isArray(urls) || urls.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Invalid payload: urls must be a non-empty array" }));
+            return;
+          }
+          if (urls.length > utils.MAX_LISTING_IMAGES) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Too many URLs (max ${utils.MAX_LISTING_IMAGES})` }));
+            return;
+          }
+
+          const options = sanitizeSpruceOptions(rawOptions);
+
+          const validated = [];
+          const rejected = [];
+          for (const rawUrl of urls) {
+            try {
+              validated.push({ input: String(rawUrl).trim(), url: utils.validateRemoteImageUrl(String(rawUrl)) });
+            } catch (err) {
+              rejected.push({ input: String(rawUrl).slice(0, 200), error: err.message });
+            }
+          }
+
+          if (validated.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+              success: false,
+              error: "No valid URLs to import",
+              rejected
+            }));
+            return;
+          }
+
+          const imageDownloader = require('./lib/imageDownloader');
+          const imagePipeline = require('./lib/imagePipeline');
+
+          const responsePayload = [];
+          for (const entry of validated) {
+            try {
+              const entryFiles = await imageDownloader.downloadUrlsConcurrently([entry.url], options);
+              if (entryFiles.length === 0) {
+                responsePayload.push({
+                  success: false,
+                  sourceUrl: entry.input,
+                  error: 'No images could be downloaded from this URL'
+                });
+                continue;
+              }
+
+              for (const filepath of entryFiles) {
+                try {
+                  const result = await imagePipeline.processImageSource(filepath, options);
+                  const localUrl = `/uploads/processed/${path.basename(result.outputPath)}`;
+                  let uploadedUrl = null;
+                  try {
+                    uploadedUrl = await uploadImage(result.outputPath);
+                  } catch (uploadErr) {
+                    utils.logAudit("WARN", `External upload failed for imported image; local URL available: ${uploadErr.message}`);
+                  }
+                  responsePayload.push({
+                    success: true,
+                    sourceUrl: entry.input,
+                    localUrl,
+                    uploadedUrl,
+                    metadata: result.metadata
+                  });
+                } catch (procErr) {
+                  responsePayload.push({
+                    success: false,
+                    sourceUrl: entry.input,
+                    error: procErr.message
+                  });
+                }
+              }
+            } catch (entryErr) {
+              responsePayload.push({
+                success: false,
+                sourceUrl: entry.input,
+                error: entryErr.message
+              });
+            }
+          }
+
+          rejected.forEach(r => {
+            responsePayload.push({ success: false, sourceUrl: r.input, error: r.error });
+          });
+
+          const successCount = responsePayload.filter(r => r.success).length;
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: successCount > 0,
+            imported: successCount,
+            failed: responsePayload.length - successCount,
+            rejected,
+            results: responsePayload
+          }));
+        } catch (e) {
+          utils.logAudit("ERROR", `Import URLs failed: ${e.message}`);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+      return;
+    }
+
+    // API: Spruce image with custom options (crop, watermark, color Correction, bgRemove)
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/images/spruce') {
+      let bodyData = '';
+      req.on('data', chunk => bodyData += chunk);
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(bodyData);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+
+          const { image, options: rawOptions = {} } = payload;
+          if (!image || typeof image !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Missing required field: image" }));
+            return;
+          }
+
+          const options = sanitizeSpruceOptions(rawOptions);
+          let inputSource;
+          let tempFilePath = null;
+          
+          if (image.startsWith('data:image')) {
+            const base64Data = image.replace(/^data:image\/\w+;base64,/, "");
+            if (!base64Data) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: "Invalid base64 image payload" }));
+              return;
+            }
+            const fileBuffer = Buffer.from(base64Data, 'base64');
+            if (fileBuffer.length === 0 || fileBuffer.length > 12 * 1024 * 1024) {
+              res.writeHead(400, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: "Image payload is empty or exceeds 12MB" }));
+              return;
+            }
+            tempFilePath = path.join(config.uploadTempDir, `spruce-upload-${Date.now()}.jpg`);
+            fs.writeFileSync(tempFilePath, fileBuffer);
+            utils.verifyImageFile(tempFilePath);
+            inputSource = tempFilePath;
+          } else if (image.startsWith('/uploads/')) {
+            inputSource = utils.resolveUploadsPath(image);
+            if (!fs.existsSync(inputSource)) {
+              res.writeHead(404, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({ error: "Source image not found" }));
+              return;
+            }
+            utils.verifyImageFile(inputSource);
+          } else if (/^https?:\/\//i.test(image)) {
+            utils.validateRemoteImageUrl(image);
+            const imageDownloader = require('./lib/imageDownloader');
+            inputSource = await imageDownloader.downloadAndCacheImage(image);
+            tempFilePath = inputSource;
+          } else {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Unsupported image reference format" }));
+            return;
+          }
+
+          const imagePipeline = require('./lib/imagePipeline');
+          const result = await imagePipeline.processImageSource(inputSource, options);
+          const localUrl = `/uploads/processed/${path.basename(result.outputPath)}`;
+          let uploadedUrl = null;
+          try {
+            uploadedUrl = await uploadImage(result.outputPath);
+          } catch (uploadErr) {
+            utils.logAudit("WARN", `External upload failed after spruce; local URL available: ${uploadErr.message}`);
+          }
+
+          if (tempFilePath && tempFilePath !== inputSource && fs.existsSync(tempFilePath)) {
+            try { fs.unlinkSync(tempFilePath); } catch (e) {}
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: true,
+            localUrl,
+            uploadedUrl,
+            metadata: result.metadata
+          }));
+        } catch (e) {
+          utils.logAudit("ERROR", `Spruce image failed: ${e.message}`);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+      return;
+    }
+
     // API: Analyze product photos
     if (req.method === 'POST' && parsedUrl.pathname === '/api/analyze') {
       let body = '';
@@ -1044,6 +1583,11 @@ function startWebGuiServer(port = 45900) {
             res.end(JSON.stringify({ error: "Missing or empty images array" }));
             return;
           }
+          if (payload.images.length > utils.MAX_LISTING_IMAGES) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `Too many images (max ${utils.MAX_LISTING_IMAGES})` }));
+            return;
+          }
           if (payload.barcode !== undefined && payload.barcode !== null && typeof payload.barcode !== 'string') {
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: "Invalid barcode: must be a string" }));
@@ -1066,34 +1610,18 @@ function startWebGuiServer(port = 45900) {
           const tempPaths = [];
 
           for (let i = 0; i < payload.images.length; i++) {
-            const base64Data = payload.images[i].replace(/^data:image\/\w+;base64,/, "");
-            const fileBuffer = Buffer.from(base64Data, 'base64');
-            const tempFilename = `web-upload-${Date.now()}-${i}.jpg`;
-            const tempFilePath = path.join(config.uploadTempDir, tempFilename);
-
-            fs.writeFileSync(tempFilePath, fileBuffer);
+            let materialized;
             try {
-              utils.verifyImageFile(tempFilePath);
+              materialized = await materializeImageReference(payload.images[i], i);
             } catch (imgErr) {
-              try { fs.unlinkSync(tempFilePath); } catch (e) {}
               tempPaths.forEach(p => { try { fs.unlinkSync(p); } catch (e) {} });
               res.writeHead(400, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ error: `Image validation failed: ${imgErr.message}` }));
+              res.end(JSON.stringify({ error: imgErr.message }));
               return;
             }
-            
-            const optimizedFilename = `opt-web-upload-${Date.now()}-${i}.jpg`;
-            const optimizedFilePath = path.join(config.uploadTempDir, optimizedFilename);
-            try {
-              await utils.optimizeImageNative(tempFilePath, optimizedFilePath, 1600);
-              try { fs.unlinkSync(tempFilePath); } catch (e) {}
-              fileBuffers.push(fs.readFileSync(optimizedFilePath));
-              tempPaths.push(optimizedFilePath);
-            } catch (optErr) {
-              utils.logAudit("WARN", `Failed to optimize image ${tempFilename}: ${optErr.message}`);
-              fileBuffers.push(fileBuffer);
-              tempPaths.push(tempFilePath);
-            }
+
+            fileBuffers.push(materialized.fileBuffer);
+            tempPaths.push(...materialized.tempPaths);
           }
 
           const listing = await geminiClient.runAIOrchestration(fileBuffers, tempPaths.map(p => path.basename(p)), payload.barcode, payload.notes, upcData);
@@ -1180,6 +1708,44 @@ function startWebGuiServer(port = 45900) {
 
           // Sanitize listing object to conform to invariants
           geminiClient.validateAndFixListingSchema(finalListing);
+
+          // 1. Deduplication Gatekeeper Check
+          if (payload.force !== true) {
+            const history = utils.readJsonFileSecure(config.historyPath, []);
+            const isDuplicate = history.some(item => {
+              if (item.status !== "ACTIVE" && item.status !== "DRAFT") return false;
+              const ageMs = Date.now() - new Date(item.timestamp).getTime();
+              if (ageMs > 60 * 60 * 1000) return false;
+              const titleMatch = item.title && finalListing.title &&
+                (item.title.toLowerCase().replace(/[^a-z0-9]/g, '') === finalListing.title.toLowerCase().replace(/[^a-z0-9]/g, ''));
+              const upcMatch = item.listingDetails?.upc && finalListing.upc &&
+                item.listingDetails.upc !== "Does Not Apply" && item.listingDetails.upc === finalListing.upc;
+              return titleMatch || upcMatch;
+            });
+
+            if (isDuplicate) {
+              res.writeHead(409, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                error: "DUPLICATE_LISTING",
+                message: `A listing with a very similar title ("${finalListing.title}") was published or created in the last 60 minutes.`
+              }));
+              return;
+            }
+          }
+
+          // 2. VeRO Brand Gatekeeper Check for publishing
+          if (payload.force !== true && finalListing.brand) {
+            const normalizedBrand = finalListing.brand.trim().toLowerCase();
+            const veroBrands = config.getVERO_BRANDS();
+            if (veroBrands.includes(normalizedBrand)) {
+              res.writeHead(409, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                error: "VERO_BRAND_BLOCKED",
+                message: `Brand "${finalListing.brand}" is registered under eBay's VeRO protection list. Publishing blocked to prevent policy violations.`
+              }));
+              return;
+            }
+          }
 
           await ebayClient.refreshEbayAccessToken();
           
@@ -1359,6 +1925,31 @@ function startWebGuiServer(port = 45900) {
 
           geminiClient.validateAndFixListingSchema(finalListing);
 
+          // 1. Deduplication Gatekeeper Check
+          if (payload.force !== true) {
+            const history = utils.readJsonFileSecure(config.historyPath, []);
+            const isDuplicate = history.some(item => {
+              if (item.status !== "ACTIVE" && item.status !== "DRAFT") return false;
+              if (payload.sku && item.sku === payload.sku) return false; // Overwriting self is fine
+              const ageMs = Date.now() - new Date(item.timestamp).getTime();
+              if (ageMs > 60 * 60 * 1000) return false;
+              const titleMatch = item.title && finalListing.title &&
+                (item.title.toLowerCase().replace(/[^a-z0-9]/g, '') === finalListing.title.toLowerCase().replace(/[^a-z0-9]/g, ''));
+              const upcMatch = item.listingDetails?.upc && finalListing.upc &&
+                item.listingDetails.upc !== "Does Not Apply" && item.listingDetails.upc === finalListing.upc;
+              return titleMatch || upcMatch;
+            });
+
+            if (isDuplicate) {
+              res.writeHead(409, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                error: "DUPLICATE_LISTING",
+                message: `A listing with a very similar title ("${finalListing.title}") was published or created in the last 60 minutes.`
+              }));
+              return;
+            }
+          }
+
           // Auto-Enriched UPC Sourcing from active comps if missing
           if (!finalListing.upc || finalListing.upc === "" || finalListing.upc === "Does Not Apply") {
             try {
@@ -1382,13 +1973,40 @@ function startWebGuiServer(port = 45900) {
           }
           finalListing.veroWarning = veroWarning;
 
-          // Download and optimize external/stock images
+          let sku = payload.sku;
+          if (!sku) {
+            const skuPrefix = config.getSKU_PREFIX();
+            sku = `${skuPrefix}SKU-${Date.now()}`;
+          }
+
+          // Establish persistent listing image directory under data/uploads/listings/<SKU>/
+          const skuClean = sku.replace(/[^a-zA-Z0-9-]/g, '_');
+          const persistentDir = path.join(config.uploadTempDir, 'listings', skuClean);
+          if (!fs.existsSync(persistentDir)) {
+            fs.mkdirSync(persistentDir, { recursive: true });
+          }
+
+          // Download and optimize external/stock images, moving local ones to persistent directory
           const finalImageUrls = [];
           if (imageUrls && Array.isArray(imageUrls)) {
             for (const url of imageUrls) {
               if (url.startsWith('http') && !url.includes('tmpfiles.org') && !url.includes('file.io')) {
                 const optUrl = await downloadAndOptimizeStockPhoto(url);
                 finalImageUrls.push(optUrl);
+              } else if (url.includes('/uploads/')) {
+                const filename = path.basename(url);
+                let sourcePath = path.join(config.uploadTempDir, 'processed', filename);
+                if (!fs.existsSync(sourcePath)) {
+                  sourcePath = path.join(config.uploadTempDir, filename);
+                }
+                
+                if (fs.existsSync(sourcePath)) {
+                  const targetPath = path.join(persistentDir, filename);
+                  fs.copyFileSync(sourcePath, targetPath);
+                  finalImageUrls.push(`/uploads/listings/${skuClean}/${filename}`);
+                } else {
+                  finalImageUrls.push(url);
+                }
               } else {
                 finalImageUrls.push(url);
               }
@@ -1400,9 +2018,8 @@ function startWebGuiServer(port = 45900) {
             imageUrls: finalImageUrls
           };
 
-          let sku = payload.sku;
           const history = utils.readJsonFileSecure(config.historyPath, []);
-          const existingIndex = sku ? history.findIndex(item => item.sku === sku) : -1;
+          const existingIndex = history.findIndex(item => item.sku === sku);
 
           if (existingIndex !== -1) {
             // Update existing draft
@@ -1417,8 +2034,6 @@ function startWebGuiServer(port = 45900) {
             utils.logAudit("INFO", `Updated existing draft. SKU: ${sku}`);
           } else {
             // Create new draft
-            const skuPrefix = config.getSKU_PREFIX();
-            sku = `${skuPrefix}SKU-${Date.now()}`;
             utils.saveListingToHistory(sku, null, finalListing.title, finalListing.suggestedPrice, finalListing.categoryId, null, null, "DRAFT", listingDetails);
           }
 
@@ -1469,6 +2084,44 @@ function startWebGuiServer(port = 45900) {
           }
 
           const finalListing = item.listingDetails;
+          
+          // 1. Deduplication Gatekeeper Check
+          if (payload.force !== true) {
+            const isDuplicate = history.some(item => {
+              if (item.status !== "ACTIVE") return false;
+              const ageMs = Date.now() - new Date(item.timestamp).getTime();
+              if (ageMs > 60 * 60 * 1000) return false;
+              const titleMatch = item.title && finalListing.title &&
+                (item.title.toLowerCase().replace(/[^a-z0-9]/g, '') === finalListing.title.toLowerCase().replace(/[^a-z0-9]/g, ''));
+              const upcMatch = item.listingDetails?.upc && finalListing.upc &&
+                item.listingDetails.upc !== "Does Not Apply" && item.listingDetails.upc === finalListing.upc;
+              return titleMatch || upcMatch;
+            });
+
+            if (isDuplicate) {
+              res.writeHead(409, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                error: "DUPLICATE_LISTING",
+                message: `A listing with a very similar title ("${finalListing.title}") was published in the last 60 minutes.`
+              }));
+              return;
+            }
+          }
+
+          // 2. VeRO Brand Gatekeeper Check
+          if (payload.force !== true && finalListing.brand) {
+            const normalizedBrand = finalListing.brand.trim().toLowerCase();
+            const veroBrands = config.getVERO_BRANDS();
+            if (veroBrands.includes(normalizedBrand)) {
+              res.writeHead(409, { 'Content-Type': 'application/json' });
+              res.end(JSON.stringify({
+                error: "VERO_BRAND_BLOCKED",
+                message: `Brand "${finalListing.brand}" is registered under eBay's VeRO protection list. Publishing blocked.`
+              }));
+              return;
+            }
+          }
+
           const imageUrls = finalListing.imageUrls || [];
 
           // Download and optimize external/stock images
@@ -1722,6 +2375,130 @@ function startWebGuiServer(port = 45900) {
   });
 
   return server;
+}
+
+const SPRUCE_BG_STYLES = new Set(['white', 'gradient', 'transparent']);
+const SPRUCE_WATERMARK_POSITIONS = new Set([
+  'bottom-right', 'bottom-left', 'top-right', 'top-left', 'diagonal', 'diagonal-tile'
+]);
+
+/**
+ * Sanitizes spruce/image pipeline options from client payloads.
+ * @param {object} raw
+ * @returns {object}
+ */
+function sanitizeSpruceOptions(raw = {}) {
+  const opts = {};
+  if (typeof raw.watermarkText === 'string') {
+    opts.watermarkText = raw.watermarkText.trim().slice(0, 120);
+  }
+  if (typeof raw.watermarkPosition === 'string' && SPRUCE_WATERMARK_POSITIONS.has(raw.watermarkPosition)) {
+    opts.watermarkPosition = raw.watermarkPosition;
+  }
+  if (typeof raw.bgStyle === 'string' && SPRUCE_BG_STYLES.has(raw.bgStyle)) {
+    opts.bgStyle = raw.bgStyle;
+  }
+  if (typeof raw.colorCorrection === 'boolean') opts.colorCorrection = raw.colorCorrection;
+  if (typeof raw.bgRemove === 'boolean') opts.bgRemove = raw.bgRemove;
+  if (typeof raw.watermark === 'boolean') opts.watermark = raw.watermark;
+
+  const rotate = parseInt(raw.rotate, 10);
+  if ([0, 90, 180, 270].includes(rotate)) opts.rotate = rotate;
+
+  const canvasSize = parseInt(raw.canvasSize, 10);
+  if ([800, 1200, 1600].includes(canvasSize)) opts.canvasSize = canvasSize;
+
+  const brightness = parseFloat(raw.brightness);
+  if (!Number.isNaN(brightness)) opts.brightness = Math.min(1.5, Math.max(0.5, brightness));
+
+  const saturation = parseFloat(raw.saturation);
+  if (!Number.isNaN(saturation)) opts.saturation = Math.min(1.5, Math.max(0.5, saturation));
+
+  if (raw.crop && typeof raw.crop === 'object') {
+    const x = Number(raw.crop.x);
+    const y = Number(raw.crop.y);
+    const w = Number(raw.crop.w);
+    const h = Number(raw.crop.h);
+    if ([x, y, w, h].every(v => Number.isFinite(v)) && w > 0 && h > 0) {
+      opts.crop = {
+        x: Math.min(0.99, Math.max(0, x)),
+        y: Math.min(0.99, Math.max(0, y)),
+        w: Math.min(1, Math.max(0.01, w)),
+        h: Math.min(1, Math.max(0.01, h))
+      };
+    }
+  }
+
+  return opts;
+}
+
+/**
+ * Materializes an image reference (base64, /uploads/ path, or remote URL) into a verified temp file.
+ * @param {string} imageRef
+ * @param {number} index
+ * @returns {Promise<{fileBuffer: Buffer, tempPaths: string[]}>}
+ */
+async function materializeImageReference(imageRef, index) {
+  if (typeof imageRef !== 'string' || !imageRef.trim()) {
+    throw new Error(`Image ${index + 1}: empty or invalid reference`);
+  }
+
+  const tempPaths = [];
+  let workingPath;
+
+  if (imageRef.startsWith('data:image')) {
+    const base64Data = imageRef.replace(/^data:image\/\w+;base64,/, "");
+    if (!base64Data) {
+      throw new Error(`Image ${index + 1}: invalid base64 payload`);
+    }
+    const fileBuffer = Buffer.from(base64Data, 'base64');
+    if (fileBuffer.length === 0) {
+      throw new Error(`Image ${index + 1}: decoded image is empty`);
+    }
+    if (fileBuffer.length > 12 * 1024 * 1024) {
+      throw new Error(`Image ${index + 1}: exceeds 12MB limit`);
+    }
+
+    workingPath = path.join(config.uploadTempDir, `web-upload-${Date.now()}-${index}.jpg`);
+    fs.writeFileSync(workingPath, fileBuffer);
+    tempPaths.push(workingPath);
+  } else if (imageRef.startsWith('/uploads/')) {
+    workingPath = utils.resolveUploadsPath(imageRef);
+    if (!fs.existsSync(workingPath)) {
+      throw new Error(`Image ${index + 1}: local file not found`);
+    }
+    utils.verifyImageFile(workingPath);
+  } else if (/^https?:\/\//i.test(imageRef)) {
+    utils.validateRemoteImageUrl(imageRef);
+    const imageDownloader = require('./lib/imageDownloader');
+    workingPath = await imageDownloader.downloadAndCacheImage(imageRef);
+    tempPaths.push(workingPath);
+  } else {
+    throw new Error(`Image ${index + 1}: unsupported format (use upload, import, or data URL)`);
+  }
+
+  try {
+    utils.verifyImageFile(workingPath);
+  } catch (imgErr) {
+    tempPaths.forEach(p => { try { fs.unlinkSync(p); } catch (e) {} });
+    throw new Error(`Image ${index + 1}: ${imgErr.message}`);
+  }
+
+  const optimizedFilename = `opt-web-upload-${Date.now()}-${index}.jpg`;
+  const optimizedFilePath = path.join(config.uploadTempDir, optimizedFilename);
+
+  try {
+    await utils.optimizeImageNative(workingPath, optimizedFilePath, 1600);
+    if (tempPaths.includes(workingPath)) {
+      try { fs.unlinkSync(workingPath); } catch (e) {}
+    }
+    tempPaths.push(optimizedFilePath);
+    return { fileBuffer: fs.readFileSync(optimizedFilePath), tempPaths };
+  } catch (optErr) {
+    utils.logAudit("WARN", `Failed to optimize image ${path.basename(workingPath)}: ${optErr.message}`);
+    if (!tempPaths.includes(workingPath)) tempPaths.push(workingPath);
+    return { fileBuffer: fs.readFileSync(workingPath), tempPaths };
+  }
 }
 
 /**

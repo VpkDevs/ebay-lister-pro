@@ -267,6 +267,21 @@ async function refreshEbayAccessToken() {
   const clientSecret = config.getEBAY_CLIENT_SECRET();
   const refreshToken = config.getEBAY_REFRESH_TOKEN();
 
+  if (!clientId || !clientSecret || !refreshToken) {
+    const errMsg = "Credentials missing. Run --bootstrap to configure your settings.";
+    utils.logAudit("FATAL", errMsg);
+    console.error(`Error: ${errMsg}`);
+    throw new OAuthRefreshError(errMsg);
+  }
+
+  const isPlaceholder = (val) => val.includes('your_ebay') || val === 'default';
+  if (isPlaceholder(clientId) || isPlaceholder(clientSecret) || isPlaceholder(refreshToken)) {
+    const errMsg = "eBay credentials are placeholder values. Run node bootstrap.js to configure.";
+    utils.logAudit("FATAL", errMsg);
+    console.error(`Error: ${errMsg}`);
+    throw new OAuthRefreshError(errMsg);
+  }
+
   if (clientId && clientSecret && refreshToken) {
     utils.logAudit("INFO", "Refreshing eBay Access Token using Client credentials.");
     const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
@@ -386,8 +401,18 @@ async function getOrCreateListingPolicies(shippingOption = "USPS_GROUND", return
   let paymentId = config.getEBAY_PAYMENT_POLICY_ID();
   let returnId = config.getEBAY_RETURN_POLICY_ID();
 
-  if (fulfillmentId && paymentId && returnId && shippingOption === "USPS_GROUND" && returnOption === "NO_RETURNS" && immediatePay) {
-    return { fulfillmentId, paymentId, returnId };
+  const isFulfillmentCustom = /^\d+$/.test(String(shippingOption));
+  const isReturnCustom = /^\d+$/.test(String(returnOption));
+  const isPaymentCustom = /^\d+$/.test(String(immediatePay));
+
+  if (isFulfillmentCustom) fulfillmentId = String(shippingOption);
+  if (isReturnCustom) returnId = String(returnOption);
+  if (isPaymentCustom) paymentId = String(immediatePay);
+
+  if (!isFulfillmentCustom && !isReturnCustom && !isPaymentCustom) {
+    if (fulfillmentId && paymentId && returnId && shippingOption === "USPS_GROUND" && returnOption === "NO_RETURNS" && immediatePay) {
+      return { fulfillmentId, paymentId, returnId };
+    }
   }
 
   const headers = {
@@ -396,149 +421,150 @@ async function getOrCreateListingPolicies(shippingOption = "USPS_GROUND", return
   };
 
   // 1. Return Policy
-  let returnPolicyName = "ListerReturnPolicy_NoReturns";
-  let returnsAccepted = false;
-  let returnPeriod = null;
-  let refundMethod = null;
-  let shippingCostPayer = null;
+  if (isReturnCustom) {
+    returnId = String(returnOption);
+  } else {
+    let returnPolicyName = "ListerReturnPolicy_NoReturns";
+    let returnsAccepted = false;
+    let returnPeriod = null;
+    let refundMethod = null;
+    let shippingCostPayer = null;
 
-  if (returnOption === "30_DAYS_BUYER_PAYS") {
-    returnPolicyName = "ListerReturnPolicy_30DaysBuyerPays";
-    returnsAccepted = true;
-    returnPeriod = { value: 30, unit: "DAY" };
-    refundMethod = "MONEY_BACK";
-    shippingCostPayer = "BUYER";
-  } else if (returnOption === "30_DAYS_FREE") {
-    returnPolicyName = "ListerReturnPolicy_30DaysFree";
-    returnsAccepted = true;
-    returnPeriod = { value: 30, unit: "DAY" };
-    refundMethod = "MONEY_BACK";
-    shippingCostPayer = "SELLER";
-  }
-
-  try {
-    const res = await ebayFetch("https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_US", { headers });
-    const data = await res.json();
-    const existing = (data.returnPolicies || []).find(p => p.name === returnPolicyName);
-    if (existing) {
-      returnId = existing.returnPolicyId;
-    } else {
-      const payload = {
-        name: returnPolicyName,
-        description: `Returns managed by Auto Lister: ${returnOption}`,
-        marketplaceId: "EBAY_US",
-        categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
-        returnsAccepted
-      };
-      if (returnsAccepted) {
-        payload.returnPeriod = returnPeriod;
-        payload.refundMethod = refundMethod;
-        payload.shippingCostPayer = shippingCostPayer;
-      }
-      const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/return_policy", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload)
-      });
-      const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(`Return policy creation failed: ${JSON.stringify(createData)}`);
-      returnId = createData.returnPolicyId;
+    if (returnOption === "30_DAYS_BUYER_PAYS") {
+      returnPolicyName = "ListerReturnPolicy_30DaysBuyerPays";
+      returnsAccepted = true;
+      returnPeriod = { value: 30, unit: "DAY" };
+      refundMethod = "MONEY_BACK";
+      shippingCostPayer = "BUYER";
+    } else if (returnOption === "30_DAYS_FREE") {
+      returnPolicyName = "ListerReturnPolicy_30DaysFree";
+      returnsAccepted = true;
+      returnPeriod = { value: 30, unit: "DAY" };
+      refundMethod = "MONEY_BACK";
+      shippingCostPayer = "SELLER";
     }
-  } catch (err) {
-    utils.logAudit("ERROR", `Failed to resolve return policy: ${err.message}`);
-    throw err;
+
+    try {
+      const res = await ebayFetch("https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_US", { headers });
+      const data = await res.json();
+      const existing = (data.returnPolicies || []).find(p => p.name === returnPolicyName);
+      if (existing) {
+        returnId = existing.returnPolicyId;
+      } else {
+        const payload = {
+          name: returnPolicyName,
+          description: `Returns managed by Auto Lister: ${returnOption}`,
+          marketplaceId: "EBAY_US",
+          categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
+          returnsAccepted
+        };
+        if (returnsAccepted) {
+          payload.returnPeriod = returnPeriod;
+          payload.refundMethod = refundMethod;
+          payload.shippingCostPayer = shippingCostPayer;
+        }
+        const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/return_policy", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload)
+        });
+        const createData = await createRes.json();
+        if (!createRes.ok) throw new Error(`Return policy creation failed: ${JSON.stringify(createData)}`);
+        returnId = createData.returnPolicyId;
+      }
+    } catch (err) {
+      utils.logAudit("ERROR", `Failed to resolve return policy: ${err.message}`);
+      throw err;
+    }
   }
 
   // 2. Shipping Policy
-  let shippingPolicyName = "ListerFulfillmentPolicy_USPSGround";
-  let carrier = "USPS";
-  let serviceCode = "US_USPSGroundAdvantage";
-  let costType = "CALCULATED";
+  if (isFulfillmentCustom) {
+    fulfillmentId = String(shippingOption);
+  } else {
+    let shippingPolicyName = "ListerFulfillmentPolicy_USPSGround";
+    let carrier = "USPS";
+    let serviceCode = "US_USPSGroundAdvantage";
+    let costType = "CALCULATED";
 
-  if (shippingOption === "USPS_PRIORITY") {
-    shippingPolicyName = "ListerFulfillmentPolicy_USPSPriority";
-    carrier = "USPS";
-    serviceCode = "US_USPSPriority";
-  } else if (shippingOption === "UPS_GROUND") {
-    shippingPolicyName = "ListerFulfillmentPolicy_UPSGround";
-    carrier = "UPS";
-    serviceCode = "US_UPSGround";
-  } else if (shippingOption === "FLAT_RATE_STANDARD") {
-    shippingPolicyName = "ListerFulfillmentPolicy_FlatStandard";
-    carrier = "USPS";
-    serviceCode = "US_USPSGroundAdvantage";
-    costType = "FLAT_RATE";
-  }
-
-  try {
-    const res = await ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers });
-    const data = await res.json();
-    const existing = (data.fulfillmentPolicies || []).find(p => p.name === shippingPolicyName);
-    if (existing) {
-      fulfillmentId = existing.fulfillmentPolicyId;
-    } else {
-      const payload = {
-        name: shippingPolicyName,
-        description: `Shipping managed by Auto Lister: ${shippingOption}`,
-        marketplaceId: "EBAY_US",
-        categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
-        handlingTime: { value: 1, unit: "DAY" },
-        shippingOptions: [{
-          optionType: "DOMESTIC",
-          costType,
-          shippingServices: [{
-            shippingCarrierCode: carrier,
-            shippingServiceCode: serviceCode,
-            buyerResponsibleForShippingFee: costType === "CALCULATED" ? true : false,
-            freeShipping: false
-          }]
-        }]
-      };
-      if (costType === "FLAT_RATE") {
-        payload.shippingOptions[0].shippingServices[0].shippingFee = { currency: "USD", value: "5.00" };
-      }
-      const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload)
-      });
-      const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(`Fulfillment policy creation failed: ${JSON.stringify(createData)}`);
-      fulfillmentId = createData.fulfillmentPolicyId;
+    if (shippingOption === "USPS_PRIORITY") {
+      shippingPolicyName = "ListerFulfillmentPolicy_USPSPriority";
+      carrier = "USPS";
+      serviceCode = "US_USPSPriority";
+    } else if (shippingOption === "UPS_GROUND") {
+      shippingPolicyName = "ListerFulfillmentPolicy_UPSGround";
+      carrier = "UPS";
+      serviceCode = "US_UPSGround";
     }
-  } catch (err) {
-    utils.logAudit("ERROR", `Failed to resolve fulfillment policy: ${err.message}`);
-    throw err;
+
+    try {
+      const res = await ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers });
+      const data = await res.json();
+      const existing = (data.fulfillmentPolicies || []).find(p => p.name === shippingPolicyName);
+      if (existing) {
+        fulfillmentId = existing.fulfillmentPolicyId;
+      } else {
+        const payload = {
+          name: shippingPolicyName,
+          description: `Fulfillment managed by Auto Lister: ${shippingOption}`,
+          marketplaceId: "EBAY_US",
+          categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
+          handlingTime: { value: 1, unit: "DAY" },
+          shipToLocations: { regionGroups: [{ regionGroupId: "DOMESTIC" }] },
+          shippingOptions: [{
+            optionMode: "DOMESTIC",
+            costType,
+            shippingServices: [{ carrierType: carrier, shippingServiceCode: serviceCode }]
+          }]
+        };
+        const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload)
+        });
+        const createData = await createRes.json();
+        if (!createRes.ok) throw new Error(`Fulfillment policy creation failed: ${JSON.stringify(createData)}`);
+        fulfillmentId = createData.fulfillmentPolicyId;
+      }
+    } catch (err) {
+      utils.logAudit("ERROR", `Failed to resolve fulfillment policy: ${err.message}`);
+      throw err;
+    }
   }
 
   // 3. Payment Policy
-  const paymentPolicyName = immediatePay ? "ListerPaymentPolicy_Immediate" : "ListerPaymentPolicy_Standard";
-  try {
-    const res = await ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US", { headers });
-    const data = await res.json();
-    const existing = (data.paymentPolicies || []).find(p => p.name === paymentPolicyName);
-    if (existing) {
-      paymentId = existing.paymentPolicyId;
-    } else {
-      const payload = {
-        name: paymentPolicyName,
-        description: `Payment managed by Auto Lister. Immediate Pay: ${immediatePay}`,
-        marketplaceId: "EBAY_US",
-        categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
-        immediatePayment: immediatePay
-      };
-      const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload)
-      });
-      const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(`Payment policy creation failed: ${JSON.stringify(createData)}`);
-      paymentId = createData.paymentPolicyId;
+  if (isPaymentCustom) {
+    paymentId = String(immediatePay);
+  } else {
+    const isImmediate = immediatePay === true || String(immediatePay) === 'true';
+    const paymentPolicyName = isImmediate ? "ListerPaymentPolicy_Immediate" : "ListerPaymentPolicy_Standard";
+    try {
+      const res = await ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US", { headers });
+      const data = await res.json();
+      const existing = (data.paymentPolicies || []).find(p => p.name === paymentPolicyName);
+      if (existing) {
+        paymentId = existing.paymentPolicyId;
+      } else {
+        const payload = {
+          name: paymentPolicyName,
+          description: `Payment managed by Auto Lister. Immediate Pay: ${isImmediate}`,
+          marketplaceId: "EBAY_US",
+          categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
+          immediatePayment: isImmediate
+        };
+        const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload)
+        });
+        const createData = await createRes.json();
+        if (!createRes.ok) throw new Error(`Payment policy creation failed: ${JSON.stringify(createData)}`);
+        paymentId = createData.paymentPolicyId;
+      }
+    } catch (err) {
+      utils.logAudit("ERROR", `Failed to resolve payment policy: ${err.message}`);
+      throw err;
     }
-  } catch (err) {
-    utils.logAudit("ERROR", `Failed to resolve payment policy: ${err.message}`);
-    throw err;
   }
 
   return { fulfillmentId, paymentId, returnId };
@@ -1108,6 +1134,46 @@ async function sendOffersToWatchers(itemId, discountPercentage = 10) {
   return data;
 }
 
+/**
+ * Fetches active business policies from the seller's eBay account.
+ * @returns {Promise<{fulfillment: Array, return: Array, payment: Array}>}
+ */
+async function getEbayPolicies() {
+  await refreshEbayAccessToken();
+  const [fRes, rRes, pRes] = await Promise.all([
+    ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers: { "Accept": "application/json" } }),
+    ebayFetch("https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_US", { headers: { "Accept": "application/json" } }),
+    ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US", { headers: { "Accept": "application/json" } })
+  ]);
+
+  let fulfillment = [];
+  let returns = [];
+  let payment = [];
+
+  try {
+    if (fRes && fRes.ok) {
+      const data = await fRes.json();
+      fulfillment = data.fulfillmentPolicies || [];
+    }
+  } catch (e) {}
+
+  try {
+    if (rRes && rRes.ok) {
+      const data = await rRes.json();
+      returns = data.returnPolicies || [];
+    }
+  } catch (e) {}
+
+  try {
+    if (pRes && pRes.ok) {
+      const data = await pRes.json();
+      payment = data.paymentPolicies || [];
+    }
+  } catch (e) {}
+
+  return { fulfillment, return: returns, payment };
+}
+
 module.exports = {
   getAccessToken,
   setAccessToken,
@@ -1128,5 +1194,7 @@ module.exports = {
   resetCircuitBreaker,
   runDailyRepricer,
   findUpcFromComps,
-  sendOffersToWatchers
+  sendOffersToWatchers,
+  getEbayPolicies
 };
+
