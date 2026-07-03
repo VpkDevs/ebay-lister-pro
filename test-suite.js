@@ -2533,6 +2533,62 @@ test('Additional maximal coverage and edge cases', async (t) => {
     }
   });
 
+  await t.test('GET /api/ebay/import falls back to Gemini AI when eBay Browse API returns 403', async () => {
+    const originalToken = ebayClient.getAccessToken();
+    ebayClient.setAccessToken("active-token");
+
+    const originalFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/identity/v1/oauth2/token')) {
+        const tokenBody = JSON.stringify({ access_token: "mocked-access-token" });
+        return { status: 200, ok: true, json: async () => JSON.parse(tokenBody), text: async () => tokenBody };
+      }
+      if (urlStr.includes('/buy/browse/v1/item_summary/search')) {
+        return { status: 403, ok: false, json: async () => ({ error: "Forbidden" }), text: async () => "Forbidden" };
+      }
+      if (urlStr.includes('/v1beta/models/gemini-2.5-flash:generateContent')) {
+        const geminiText = JSON.stringify({
+          title: "Gemini Generated Prevagen Listing",
+          brand: "Prevagen",
+          model: "PREV-60-AI",
+          suggestedPrice: 32.99,
+          condition: "NEW",
+          description: "AI Generated Description",
+          categoryId: "111422",
+          aspects: { Brand: "Prevagen", Quantity: "60 caps" }
+        });
+        const geminiRes = JSON.stringify({
+          candidates: [{
+            content: { parts: [{ text: geminiText }] }
+          }]
+        });
+        return { status: 200, ok: true, json: async () => JSON.parse(geminiRes), text: async () => geminiRes };
+      }
+      return { status: 404, ok: false };
+    };
+
+    const serverPort = 49100 + Math.round(Math.random() * 500);
+    const testServer = webServer.startWebGuiServer(serverPort);
+
+    try {
+      const url = `http://127.0.0.1:${serverPort}/api/ebay/import?itemIdOrUrl=prevagen%20extra%20str%2060%20caps`;
+      const res = await REAL_FETCH(url);
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      
+      assert.strictEqual(data.title, "Gemini Generated Prevagen Listing");
+      assert.strictEqual(data.brand, "Prevagen");
+      assert.strictEqual(data.model, "PREV-60-AI");
+      assert.strictEqual(data.suggestedPrice, 32.99);
+      assert.strictEqual(data.aspects.Quantity, "60 caps");
+    } finally {
+      testServer.close();
+      ebayClient.setAccessToken(originalToken);
+      global.fetch = originalFetch;
+    }
+  });
+
   await t.test('Daily repricer UNDERCUT strategy sets price to $0.05 under min comp price', async () => {
     const testSku = "REPRICE-UNDERCUT";
     const history = [{

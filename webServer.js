@@ -1441,6 +1441,40 @@ function startWebGuiServer(port = 45900) {
       // Parse item ID (e.g. extracts a 12-digit number from URL or raw input)
       const match = targetInput.match(/(?:\/itm\/|active\/|item\/|v1\|)?(\d{11,13})/i);
       let itemId = match ? match[1] : targetInput.trim();
+      const isOriginalKeywordSearch = !match;
+
+      // Helper function to handle Gemini fallback
+      const handleGeminiListingFallback = async (keywords, response) => {
+        try {
+          const geminiListing = await geminiClient.generateListingFromKeywords(keywords);
+          let stockPhotos = [];
+          try {
+            stockPhotos = await ebayClient.searchCatalogStockPhotos(geminiListing.title || keywords);
+          } catch (pErr) {
+            utils.logAudit("WARN", `Failed to fetch stock photos for Gemini generated listing: ${pErr.message}`);
+          }
+          response.writeHead(200, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({
+            title: geminiListing.title,
+            suggestedPrice: geminiListing.suggestedPrice,
+            condition: geminiListing.condition,
+            brand: geminiListing.brand,
+            model: geminiListing.model,
+            weightMajor: geminiListing.weightMajor || 1,
+            weightMinor: geminiListing.weightMinor || 0,
+            packageLength: geminiListing.packageLength || 10,
+            packageWidth: geminiListing.packageWidth || 8,
+            packageHeight: geminiListing.packageHeight || 6,
+            description: geminiListing.description,
+            categoryId: geminiListing.categoryId || "111422",
+            aspects: geminiListing.aspects || {},
+            imageUrls: stockPhotos
+          }));
+        } catch (geminiErr) {
+          response.writeHead(500, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ error: `Listing generation failed: ${geminiErr.message}` }));
+        }
+      };
 
       if (!itemId || !/^\d{11,13}$/.test(itemId)) {
         if (!targetInput.trim()) {
@@ -1450,17 +1484,19 @@ function startWebGuiServer(port = 45900) {
         }
         try {
           const foundId = await ebayClient.searchItemIdByKeywords(targetInput.trim());
-          if (!foundId) {
-            res.writeHead(404, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: `No matching items found on eBay for search query "${targetInput}"` }));
-            return;
+          if (foundId) {
+            itemId = foundId;
           }
-          itemId = foundId;
         } catch (err) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: `Search failed: ${err.message}` }));
-          return;
+          utils.logAudit("WARN", `eBay Browse API search failed for keywords "${targetInput}": ${err.message}. Falling back to Gemini AI generation.`);
         }
+      }
+
+      // If we don't have a valid Item ID after searching, use Gemini AI generation directly
+      if (!itemId || !/^\d{11,13}$/.test(itemId)) {
+        utils.logAudit("INFO", `No valid Item ID found. Using Gemini AI generation for "${targetInput}"`);
+        await handleGeminiListingFallback(targetInput.trim(), res);
+        return;
       }
 
       try {
@@ -1509,8 +1545,15 @@ function startWebGuiServer(port = 45900) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(listingData));
       } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `Failed to import eBay listing details: ${err.message}` }));
+        utils.logAudit("WARN", `Failed to get item details from Browse API: ${err.message}`);
+        // If this was a keyword search, fallback to Gemini instead of returning 500
+        if (isOriginalKeywordSearch) {
+          utils.logAudit("INFO", `Falling back to Gemini AI generation for "${targetInput}"`);
+          await handleGeminiListingFallback(targetInput.trim(), res);
+        } else {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Failed to import eBay listing details: ${err.message}` }));
+        }
       }
       return;
     }

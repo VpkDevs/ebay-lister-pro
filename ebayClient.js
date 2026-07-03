@@ -1607,7 +1607,7 @@ async function searchItemIdByKeywords(keywords) {
     utils.logAudit("INFO", `Browse API search response: ${JSON.stringify(data)}`);
     const items = data.itemSummaries || [];
     if (items.length > 0 && items[0].itemId) {
-      const match = items[0].itemId.match(/(\d+)/);
+      const match = items[0].itemId.match(/(\d{11,13})/);
       return match ? match[1] : null;
     }
     return null;

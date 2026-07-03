@@ -468,8 +468,85 @@ function validateAndFixListingSchema(data) {
   }
 }
 
+/**
+ * Generates an optimized eBay listing draft from plain text keywords/title using Gemini.
+ * @param {string} keywords - Product search term/title.
+ * @returns {Promise<object>} Generated listing details matching the editor schema.
+ */
+async function generateListingFromKeywords(keywords) {
+  const geminiKey = config.getGEMINI_API_KEY();
+  if (!geminiKey) {
+    throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");
+  }
+
+  utils.logAudit("INFO", `Generating listing details from keywords via Gemini: "${keywords}"`);
+
+  const schema = {
+    type: "OBJECT",
+    properties: {
+      title: { type: "STRING", description: "Optimized title under 80 characters" },
+      brand: { type: "STRING", description: "Brand name of the product" },
+      model: { type: "STRING", description: "Model or part number of the product" },
+      suggestedPrice: { type: "NUMBER", description: "Typical market retail/resale price in USD, e.g., 24.99" },
+      condition: { type: "STRING", description: "One of: NEW, LIKE_NEW, USED_VERY_GOOD, USED_GOOD, USED_ACCEPTABLE" },
+      weightMajor: { type: "INTEGER", description: "Estimated package weight in pounds (lbs), default 1" },
+      weightMinor: { type: "INTEGER", description: "Estimated package weight in ounces (oz), default 0" },
+      packageLength: { type: "INTEGER", description: "Estimated package length in inches, default 10" },
+      packageWidth: { type: "INTEGER", description: "Estimated package width in inches, default 8" },
+      packageHeight: { type: "INTEGER", description: "Estimated package height in inches, default 6" },
+      description: { type: "STRING", description: "A detailed HTML or plain text eBay listing description including specifications and package contents" },
+      categoryId: { type: "STRING", description: "Estimated eBay leaf category ID matching this item, default to '111422'" },
+      aspects: { 
+        type: "OBJECT", 
+        description: "Key-value pairs of important product aspects like Brand, Model, Capacity, Color, Type, Size etc.",
+        properties: {},
+        additionalProperties: { type: "STRING" }
+      }
+    },
+    required: ["title", "brand", "model", "suggestedPrice", "condition", "description", "categoryId", "aspects"]
+  };
+
+  const prompt = `
+    Generate a complete, professional eBay listing draft for the product: "${keywords}".
+    Based on the product name, estimate the correct specifications, typical size, color, brand, model, weight, dimensions, and the best matching eBay category ID.
+    Provide only a raw JSON matching the schema.
+  `;
+
+  const response = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{
+        parts: [{ text: prompt }]
+      }],
+      generationConfig: { 
+        responseMimeType: "application/json",
+        responseSchema: schema
+      }
+    })
+  });
+
+  const resData = await response.json();
+  if (!response.ok || !resData.candidates?.[0]?.content?.parts?.[0]?.text) {
+    throw new Error(`Gemini keyword listing generation failed: ${JSON.stringify(resData)}`);
+  }
+
+  const generated = JSON.parse(resData.candidates[0].content.parts[0].text);
+  
+  // Set default values if missing
+  if (!generated.condition) generated.condition = "USED_GOOD";
+  if (typeof generated.suggestedPrice !== 'number') generated.suggestedPrice = 19.99;
+  if (!generated.title) generated.title = keywords;
+  if (!generated.description) generated.description = `eBay listing for ${keywords}`;
+  if (!generated.aspects) generated.aspects = {};
+  
+  return generated;
+}
+
+
 module.exports = {
   runAIOrchestration,
   parseSafeJsonString,
-  validateAndFixListingSchema
+  validateAndFixListingSchema,
+  generateListingFromKeywords
 };
