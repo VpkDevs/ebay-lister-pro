@@ -13,6 +13,27 @@ const utils = require('./utils');
 const ebayClient = require('./ebayClient');
 const geminiClient = require('./geminiClient');
 
+function sendError(res, err, status = 500) {
+  if (res.headersSent || res.writableEnded) return;
+  const statusCode = err.status || err.statusCode || status;
+  const errorCode = err.code || "INTERNAL_SERVER_ERROR";
+  const responseBody = {
+    error: errorCode,
+    message: utils.sanitizeLog(err.message || String(err))
+  };
+  if (err.details) {
+    responseBody.details = err.details;
+  }
+  if (err.ebayErrorCode) {
+    responseBody.ebayErrorCode = err.ebayErrorCode;
+  }
+  if (err.ebayTraceId) {
+    responseBody.ebayTraceId = err.ebayTraceId;
+  }
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(responseBody));
+}
+
 let shutdownRegistered = false;
 let shopifyLocationId = null;
 
@@ -1551,8 +1572,7 @@ function startWebGuiServer(port = 45900) {
           utils.logAudit("INFO", `Falling back to Gemini AI generation for "${targetInput}"`);
           await handleGeminiListingFallback(targetInput.trim(), res);
         } else {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: `Failed to import eBay listing details: ${err.message}` }));
+          sendError(res, new Error(`Failed to import eBay listing details: ${err.message}`), 500);
         }
       }
       return;
@@ -3110,10 +3130,7 @@ function startWebGuiServer(port = 45900) {
     res.end("404 Not Found");
       } catch (err) {
         utils.logAudit("ERROR", `Unhandled request error: ${err.message}`, { stack: err.stack });
-        if (!res.headersSent && !res.writableEnded) {
-          res.writeHead(err.statusCode || 500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: err.code || "INTERNAL_SERVER_ERROR", message: err.message }));
-        }
+        sendError(res, err);
       }
     });
   });

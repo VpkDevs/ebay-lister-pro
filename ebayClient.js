@@ -804,7 +804,9 @@ async function endListingOnEbay(sku, offerId = null) {
         item.status = "ENDED";
         utils.writeJsonFileSecure(config.historyPath, history);
       }
-    } catch (e) {}
+    } catch (e) {
+      utils.logAudit("WARN", `Failed to update local history file after ending listing ${sku}: ${e.message}`);
+    }
     
     return res.listingId;
   } catch (err) {
@@ -1238,21 +1240,27 @@ async function getEbayPolicies() {
       const data = await fRes.json();
       fulfillment = data.fulfillmentPolicies || [];
     }
-  } catch (e) {}
+  } catch (e) {
+    utils.logAudit("WARN", `Failed to parse eBay fulfillment policies: ${e.message}`);
+  }
 
   try {
     if (rRes && rRes.ok) {
       const data = await rRes.json();
       returns = data.returnPolicies || [];
     }
-  } catch (e) {}
+  } catch (e) {
+    utils.logAudit("WARN", `Failed to parse eBay return policies: ${e.message}`);
+  }
 
   try {
     if (pRes && pRes.ok) {
       const data = await pRes.json();
       payment = data.paymentPolicies || [];
     }
-  } catch (e) {}
+  } catch (e) {
+    utils.logAudit("WARN", `Failed to parse eBay payment policies: ${e.message}`);
+  }
 
   return { fulfillment, return: returns, payment };
 }

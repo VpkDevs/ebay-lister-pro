@@ -531,7 +531,10 @@ async function generateListingFromKeywords(keywords) {
     throw new Error(`Gemini keyword listing generation failed: ${JSON.stringify(resData)}`);
   }
 
-  const generated = JSON.parse(resData.candidates[0].content.parts[0].text);
+  const generated = parseSafeJsonString(resData.candidates[0].content.parts[0].text, null);
+  if (!generated) {
+    throw new Error("Failed to parse valid JSON listing draft from Gemini response.");
+  }
   
   // Set default values if missing
   if (!generated.condition) generated.condition = "USED_GOOD";

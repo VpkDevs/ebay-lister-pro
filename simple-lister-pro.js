@@ -21,14 +21,15 @@ const yellow = "\x1b[33m";
 const reset = "\x1b[0m";
 
 function cleanupTempFiles() {
+  const dir = config.uploadTempDir;
   if (fs.existsSync(tempPath)) {
     try { fs.unlinkSync(tempPath); } catch (e) {}
   }
-  if (fs.existsSync(uploadTempDir)) {
+  if (fs.existsSync(dir)) {
     try {
-      const files = fs.readdirSync(uploadTempDir);
+      const files = fs.readdirSync(dir);
       for (const file of files) {
-        fs.unlinkSync(path.join(uploadTempDir, file));
+        fs.unlinkSync(path.join(dir, file));
       }
     } catch (e) {}
   }
@@ -150,7 +151,7 @@ async function preOptimizeImages(imagePaths) {
   for (let i = 0; i < imagePaths.length; i++) {
     const originalPath = imagePaths[i];
     const optFilename = `opt-cli-${Date.now()}-${i}-${Math.round(Math.random() * 1000)}.jpg`;
-    const optPath = path.join(uploadTempDir, optFilename);
+    const optPath = path.join(config.uploadTempDir, optFilename);
     try {
       await utils.optimizeImageNative(originalPath, optPath, 1600);
       optimizedPaths.push(optPath);
@@ -491,8 +492,10 @@ async function filterStableFiles(filePaths) {
  * @returns {Promise<void>}
  */
 async function startWatchDaemon() {
-  const watchDir = path.join(uploadTempDir, 'watch');
-  const processedDir = path.join(uploadTempDir, 'processed');
+  const dir = config.uploadTempDir;
+  const watchDir = path.join(dir, 'watch');
+  const processedDir = path.join(dir, 'processed');
+  const deadLetterDir = path.join(dir, 'dead_letter');
 
   if (!fs.existsSync(watchDir)) {
     fs.mkdirSync(watchDir, { recursive: true });
@@ -500,9 +503,13 @@ async function startWatchDaemon() {
   if (!fs.existsSync(processedDir)) {
     fs.mkdirSync(processedDir, { recursive: true });
   }
+  if (!fs.existsSync(deadLetterDir)) {
+    fs.mkdirSync(deadLetterDir, { recursive: true });
+  }
 
   console.log(`\n👁️  ${boldGreen}Watching directory:${reset} ${watchDir}`);
   console.log(`📂 Processed items will be moved to: ${processedDir}`);
+  console.log(`📭 Dead letter items will be moved to: ${deadLetterDir}`);
   console.log("Press Ctrl+C to terminate watch daemon.\n");
 
   utils.logAudit("INFO", "Directory watch daemon started.");
@@ -571,6 +578,15 @@ async function startWatchDaemon() {
             } catch (err) {
               console.error(`[Watch] Failed to process directory ${item.name}: ${err.message}`);
               utils.logAudit("ERROR", `Failed to process directory ${item.name}: ${err.message}`);
+              try {
+                const destDir = path.join(deadLetterDir, `${item.name}-${Date.now()}`);
+                fs.renameSync(dirPath, destDir);
+                console.log(`[Watch] Moved failed directory ${item.name} to dead_letter folder.`);
+                utils.logAudit("WARN", `Moved failed directory ${item.name} to dead_letter folder.`);
+              } catch (moveErr) {
+                console.error(`[Watch] Failed to move directory to dead_letter: ${moveErr.message}`);
+                utils.logAudit("ERROR", `Failed to move directory to dead_letter: ${moveErr.message}`);
+              }
             }
           }
         }
@@ -593,47 +609,59 @@ async function startWatchDaemon() {
           const clusters = clusterFilesByTime(stableLooseFiles);
           for (let idx = 0; idx < clusters.length; idx++) {
             const cluster = clusters[idx];
-          const clusterSignature = cluster.map(f => {
-            try {
-              const s = fs.statSync(f);
-              return `${path.basename(f)}_${s.size}_${s.mtimeMs}`;
-            } catch (e) {
-              return `${path.basename(f)}_unknown`;
-            }
-          }).join('|');
-
-          if (processedSignatures.has(clusterSignature)) {
-            continue;
-          }
-
-          console.log(`\n[Watch] Found clustered loose images (${cluster.length} files) from timestamps.`);
-          utils.logAudit("INFO", `Watch daemon processing clustered loose images: ${cluster.map(f => path.basename(f)).join(', ')}`);
-
-          try {
-            await runAutoListingPipeline(cluster);
-            cluster.forEach(file => {
+            const clusterSignature = cluster.map(f => {
               try {
-                if (fs.existsSync(file)) {
-                  const dest = path.join(processedDir, `${Date.now()}-${path.basename(file)}`);
-                  fs.renameSync(file, dest);
-                }
-              } catch (renameErr) {
-                utils.logAudit("ERROR", `Failed to move file ${file} to processed: ${renameErr.message}`);
+                const s = fs.statSync(f);
+                return `${path.basename(f)}_${s.size}_${s.mtimeMs}`;
+              } catch (e) {
+                return `${path.basename(f)}_unknown`;
               }
-            });
-            console.log(`[Watch] Completed. Moved files to processed.`);
-            processedSignatures.add(clusterSignature);
-            if (processedSignatures.size > 200) {
-              const firstVal = processedSignatures.values().next().value;
-              processedSignatures.delete(firstVal);
+            }).join('|');
+
+            if (processedSignatures.has(clusterSignature)) {
+              continue;
             }
-          } catch (err) {
-            console.error(`[Watch] Failed to process clustered loose files: ${err.message}`);
-            utils.logAudit("ERROR", `Failed to process clustered loose files: ${err.message}`);
+
+            console.log(`\n[Watch] Found clustered loose images (${cluster.length} files) from timestamps.`);
+            utils.logAudit("INFO", `Watch daemon processing clustered loose images: ${cluster.map(f => path.basename(f)).join(', ')}`);
+
+            try {
+              await runAutoListingPipeline(cluster);
+              cluster.forEach(file => {
+                try {
+                  if (fs.existsSync(file)) {
+                    const dest = path.join(processedDir, `${Date.now()}-${path.basename(file)}`);
+                    fs.renameSync(file, dest);
+                  }
+                } catch (renameErr) {
+                  utils.logAudit("ERROR", `Failed to move file ${file} to processed: ${renameErr.message}`);
+                }
+              });
+              console.log(`[Watch] Completed. Moved files to processed.`);
+              processedSignatures.add(clusterSignature);
+              if (processedSignatures.size > 200) {
+                const firstVal = processedSignatures.values().next().value;
+                processedSignatures.delete(firstVal);
+              }
+            } catch (err) {
+              console.error(`[Watch] Failed to process clustered loose files: ${err.message}`);
+              utils.logAudit("ERROR", `Failed to process clustered loose files: ${err.message}`);
+              cluster.forEach(file => {
+                try {
+                  if (fs.existsSync(file)) {
+                    const dest = path.join(deadLetterDir, `${Date.now()}-${path.basename(file)}`);
+                    fs.renameSync(file, dest);
+                  }
+                } catch (moveErr) {
+                  utils.logAudit("ERROR", `Failed to move file ${file} to dead_letter: ${moveErr.message}`);
+                }
+              });
+              console.log(`[Watch] Moved failed clustered loose files to dead_letter.`);
+              utils.logAudit("WARN", `Moved failed clustered loose files to dead_letter.`);
+            }
           }
         }
       }
-    }
     } catch (e) {
       utils.logAudit("ERROR", `Watch daemon scanning error: ${e.message}`);
     } finally {
@@ -651,16 +679,39 @@ async function startWatchDaemon() {
   // Process any files already present on startup
   triggerProcessing();
 
-  const watcher = fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
-    if (filename) {
-      if (filename.includes('processed')) return;
-      utils.logAudit("INFO", `Watch event detected: [${eventType}] on ${filename}`);
-      triggerProcessing();
+  let watcher = null;
+  const startWatcher = () => {
+    try {
+      if (!fs.existsSync(watchDir)) {
+        fs.mkdirSync(watchDir, { recursive: true });
+      }
+      watcher = fs.watch(watchDir, { recursive: true }, (eventType, filename) => {
+        if (filename) {
+          if (filename.includes('processed') || filename.includes('dead_letter')) return;
+          utils.logAudit("INFO", `Watch event detected: [${eventType}] on ${filename}`);
+          triggerProcessing();
+        }
+      });
+      watcher.on('error', (err) => {
+        utils.logAudit("ERROR", `Watcher encountered error: ${err.message}. Attempting self-healing recovery...`);
+        try {
+          if (watcher) watcher.close();
+        } catch (e) {}
+        setTimeout(startWatcher, 5000);
+      });
+    } catch (err) {
+      utils.logAudit("ERROR", `Failed to initialize watcher on ${watchDir}: ${err.message}. Retrying in 5 seconds...`);
+      setTimeout(startWatcher, 5000);
     }
-  });
+  };
 
-  // Keep watcher active (do not unref, so the process remains alive)
-  // watcher.unref();
+  startWatcher();
+  return {
+    close: () => {
+      if (watcher) watcher.close();
+      if (debounceTimeout) clearTimeout(debounceTimeout);
+    }
+  };
 }
 
 async function main() {
@@ -1454,6 +1505,7 @@ module.exports = {
   crossPostToWooCommerce,
   crossPostToEtsy,
   filterStableFiles,
-  handleVeroAutoListingFallback
+  handleVeroAutoListingFallback,
+  startWatchDaemon
 };
 

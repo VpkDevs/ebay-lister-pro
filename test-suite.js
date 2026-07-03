@@ -2030,6 +2030,73 @@ test('Advanced Self-Healing and Robust Error Handling', async (t) => {
     }
   });
 
+  await t.test('Custom structured error JSON serialization', () => {
+    const { ListerError, EbayApiError } = require('./lib/errors');
+    const err = new EbayApiError('eBay API call failed', {
+      ebayErrorCode: 'E001',
+      ebayTraceId: 'T123',
+      status: 503
+    });
+    assert.strictEqual(err.status, 503);
+    assert.strictEqual(err.code, 'EBAY_API_ERROR');
+    const json = err.toJSON();
+    assert.strictEqual(json.error, 'eBay API call failed');
+    assert.strictEqual(json.status, 503);
+    assert.strictEqual(json.ebayErrorCode, 'E001');
+    assert.strictEqual(json.ebayTraceId, 'T123');
+  });
+
+  await t.test('Web server error response credential sanitization', async () => {
+    const webServer = require('./webServer');
+    const testPort = 49700 + Math.round(Math.random() * 200);
+    const server = webServer.startWebGuiServer(testPort);
+
+    const originalGetItem = ebayClient.getItemFromBrowse;
+    const secretKey = config.getGEMINI_API_KEY() || 'secret-gemini-key-placeholder';
+    
+    // Force direct failure containing the credential
+    ebayClient.getItemFromBrowse = async () => {
+      throw new Error(`Connection failed using API key: ${secretKey}`);
+    };
+
+    try {
+      const res = await originalFetch(`http://127.0.0.1:${testPort}/api/ebay/import?itemIdOrUrl=123456789012`);
+      assert.strictEqual(res.status, 500);
+      const data = await res.json();
+      assert.ok(data.message);
+      assert.ok(!data.message.includes(secretKey), "Response error message should not leak credentials");
+      assert.ok(data.message.includes('[REDACTED_GEMINI_KEY]'), "Response error message should contain redact label");
+    } finally {
+      ebayClient.getItemFromBrowse = originalGetItem;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test('Watch daemon folder auto-creation and dead-letter quarantine presence', async () => {
+    const fs = require('fs');
+    const path = require('path');
+    const simpleLister = require('./simple-lister-pro');
+    
+    const testWatchDir = path.join(config.uploadTempDir, 'watch');
+    const testDeadLetterDir = path.join(config.uploadTempDir, 'dead_letter');
+    
+    // Clean up directories to test auto-creation
+    try { fs.rmdirSync(testWatchDir); } catch (e) {}
+    try { fs.rmdirSync(testDeadLetterDir); } catch (e) {}
+
+    // Initialize watcher daemon
+    const watcher = await simpleLister.startWatchDaemon();
+    
+    try {
+      assert.ok(fs.existsSync(testWatchDir), "watch directory should be auto-created");
+      assert.ok(fs.existsSync(testDeadLetterDir), "dead_letter directory should be auto-created");
+    } finally {
+      if (watcher && typeof watcher.close === 'function') {
+        watcher.close();
+      }
+    }
+  });
+
   global.fetch = originalFetch;
 });
 
