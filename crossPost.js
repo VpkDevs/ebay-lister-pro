@@ -112,6 +112,15 @@ async function crossPostToShopifyDirect(finalListing, imageUrls, sku) {
 
   const safeImages = sanitizeImageUrlsForDlq(imageUrls);
 
+  const aspectTags = Object.entries(finalListing.aspects || {})
+    .map(([key, val]) => {
+      const displayVal = Array.isArray(val) ? val[0] : val;
+      return displayVal ? displayVal.trim() : null;
+    })
+    .filter(val => val && val.length > 0 && val.length <= 40);
+  const uniqueTags = [...new Set(aspectTags)];
+  const tagsString = uniqueTags.join(', ');
+
   const payload = {
     product: {
       title: finalListing.title,
@@ -119,6 +128,7 @@ async function crossPostToShopifyDirect(finalListing, imageUrls, sku) {
       vendor: finalListing.brand || "Generic",
       product_type: finalListing.model || "Product",
       status: "active",
+      tags: tagsString,
       variants: [{
         price: String(finalListing.suggestedPrice),
         sku: sku,
@@ -215,6 +225,20 @@ async function crossPostToWooCommerceDirect(finalListing, imageUrls, sku) {
 
   const safeImages = sanitizeImageUrlsForDlq(imageUrls);
 
+  const wcAttributes = Object.entries(finalListing.aspects || {})
+    .map(([key, val]) => {
+      const optionsArray = Array.isArray(val) ? val : [val];
+      const cleanOptions = optionsArray.map(o => String(o).trim()).filter(o => o.length > 0);
+      if (cleanOptions.length === 0) return null;
+      return {
+        name: key,
+        visible: true,
+        variation: false,
+        options: cleanOptions
+      };
+    })
+    .filter(attr => attr !== null);
+
   const wcPayload = {
     name: finalListing.title,
     type: "simple",
@@ -224,6 +248,7 @@ async function crossPostToWooCommerceDirect(finalListing, imageUrls, sku) {
     manage_stock: true,
     stock_quantity: 1,
     sku: sku,
+    attributes: wcAttributes,
     images: safeImages.map(url => ({ src: url }))
   };
 
@@ -258,16 +283,28 @@ async function crossPostToEtsyDirect(finalListing, sku) {
   }
 
   const cleanTitle = (finalListing.title || "No Title").replace(/\s+/g, ' ').trim().slice(0, 140);
+  const conditionStr = String(finalListing.condition || "").toUpperCase();
+  const isUsedOrVintage = conditionStr.includes("USED") || conditionStr.includes("PREOWNED") || conditionStr.includes("PRE-OWNED") || cleanTitle.toLowerCase().includes("vintage") || (finalListing.description || "").toLowerCase().includes("vintage");
+
+  const whoMade = isUsedOrVintage ? "someone_else" : "i_did";
+  const whenMade = isUsedOrVintage ? "before_2007" : "made_to_order";
+
+  const aspectTags = Object.values(finalListing.aspects || {})
+    .flat()
+    .map(t => String(t).trim())
+    .filter(t => t.length > 0 && t.length <= 20 && /^[a-zA-Z0-9\s-]+$/.test(t));
+  const uniqueTags = [...new Set(aspectTags)].slice(0, 13);
 
   const etsyPayload = {
     quantity: 1,
     title: cleanTitle,
     description: finalListing.description || "",
     price: finalListing.suggestedPrice,
-    who_made: "i_did",
-    when_made: "made_to_order",
+    who_made: whoMade,
+    when_made: whenMade,
     taxonomy_id: 1,
-    is_personalizable: false
+    is_personalizable: false,
+    tags: uniqueTags
   };
 
   const etsyRes = await ebayClient.fetchWithRetry(`https://api.etsy.com/v3/application/shops/${etsyShopId}/listings`, {

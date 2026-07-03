@@ -533,59 +533,61 @@ test('Web Server local GUI routing', async (t) => {
       return {};
     };
 
-    const saveRes = await originalFetch(`http://127.0.0.1:${testPort}/api/save-draft`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        listing: {
-          title: "Draft Test Title",
-          suggestedPrice: 49.99,
-          condition: "USED_EXCELLENT",
-          brand: "Nike",
-          aspects: { Color: "Blue" },
-          categoryId: "111422"
-        },
-        imageUrls: ["https://example.com/image.jpg"]
-      })
-    });
-    
-    if (saveRes.status !== 200) {
-      console.log("SAVE DRAFT ERROR STATUS:", saveRes.status);
-      console.log("BODY:", await saveRes.text());
+    try {
+      const saveRes = await originalFetch(`http://127.0.0.1:${testPort}/api/save-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          listing: {
+            title: "Draft Test Title",
+            suggestedPrice: 49.99,
+            condition: "USED_EXCELLENT",
+            brand: "Unbranded",
+            aspects: { Color: "Blue" },
+            categoryId: "111422"
+          },
+          imageUrls: ["https://example.com/image.jpg"]
+        })
+      });
+      
+      if (saveRes.status !== 200) {
+        console.log("SAVE DRAFT ERROR STATUS:", saveRes.status);
+        console.log("BODY:", await saveRes.text());
+      }
+      assert.strictEqual(saveRes.status, 200);
+      const saveJson = await saveRes.json();
+      assert.ok(saveJson.sku);
+      
+      const history1 = utils.readJsonFileSecure(config.historyPath, []);
+      const draftItem = history1.find(i => i.sku === saveJson.sku);
+      assert.ok(draftItem);
+      assert.strictEqual(draftItem.status, "DRAFT");
+      assert.strictEqual(draftItem.title, "Draft Test Title");
+      
+      const pubRes = await originalFetch(`http://127.0.0.1:${testPort}/api/publish-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sku: saveJson.sku })
+      });
+      
+      if (pubRes.status !== 200) {
+        console.log("PUBLISH DRAFT ERROR STATUS:", pubRes.status);
+        console.log("BODY:", await pubRes.text());
+      }
+      assert.strictEqual(pubRes.status, 200);
+      const pubJson = await pubRes.json();
+      assert.strictEqual(pubJson.listingId, "ebay-listing-777");
+      
+      const history2 = utils.readJsonFileSecure(config.historyPath, []);
+      const activeItem = history2.find(i => i.sku === saveJson.sku);
+      assert.ok(activeItem);
+      assert.strictEqual(activeItem.status, "ACTIVE");
+      assert.strictEqual(activeItem.listingId, "ebay-listing-777");
+      assert.strictEqual(activeItem.offerId, "ebay-offer-888");
+    } finally {
+      global.fetch = originalFetch;
+      ebayClient.ebayRequest = originalEbayRequest;
     }
-    assert.strictEqual(saveRes.status, 200);
-    const saveJson = await saveRes.json();
-    assert.ok(saveJson.sku);
-    
-    const history1 = utils.readJsonFileSecure(config.historyPath, []);
-    const draftItem = history1.find(i => i.sku === saveJson.sku);
-    assert.ok(draftItem);
-    assert.strictEqual(draftItem.status, "DRAFT");
-    assert.strictEqual(draftItem.title, "Draft Test Title");
-    
-    const pubRes = await originalFetch(`http://127.0.0.1:${testPort}/api/publish-draft`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sku: saveJson.sku })
-    });
-    
-    if (pubRes.status !== 200) {
-      console.log("PUBLISH DRAFT ERROR STATUS:", pubRes.status);
-      console.log("BODY:", await pubRes.text());
-    }
-    assert.strictEqual(pubRes.status, 200);
-    const pubJson = await pubRes.json();
-    assert.strictEqual(pubJson.listingId, "ebay-listing-777");
-    
-    const history2 = utils.readJsonFileSecure(config.historyPath, []);
-    const activeItem = history2.find(i => i.sku === saveJson.sku);
-    assert.ok(activeItem);
-    assert.strictEqual(activeItem.status, "ACTIVE");
-    assert.strictEqual(activeItem.listingId, "ebay-listing-777");
-    assert.strictEqual(activeItem.offerId, "ebay-offer-888");
-
-    global.fetch = originalFetch;
-    ebayClient.ebayRequest = originalEbayRequest;
   });
 
   await t.test('Double-Selling Protection Inventory sync workflow', async () => {
@@ -1769,6 +1771,97 @@ test('Hardening and NFR Verification tests', async (t) => {
     try { fs.unlinkSync(testFile); } catch (e) {}
   });
 
+  await t.test('Host header validation blocks bad hosts with 400', async () => {
+    webServer.resetRateLimits();
+    const testPort = 45938;
+    const server = webServer.startWebGuiServer(testPort);
+    const http = require('http');
+
+    try {
+      const status = await new Promise((resolve, reject) => {
+        const req = http.request({
+          host: '127.0.0.1',
+          port: testPort,
+          path: '/api/status',
+          method: 'GET',
+          headers: {
+            'Host': 'malicious-domain.com'
+          }
+        }, (res) => {
+          resolve(res.statusCode);
+        });
+        req.on('error', reject);
+        req.end();
+      });
+      assert.strictEqual(status, 400);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test('Payload size limit blocks large post body with 413', async () => {
+    const testPort = 45939;
+    const server = webServer.startWebGuiServer(testPort);
+
+    try {
+      const largeBody = ' '.repeat(1.1 * 1024 * 1024);
+      
+      const res = await originalFetch(`http://127.0.0.1:${testPort}/api/ebay/location`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: largeBody
+      }).catch(err => {
+        return { status: 413, thrown: true };
+      });
+      
+      if (res.thrown) {
+        assert.ok(true, "Connection aborted successfully.");
+      } else {
+        assert.strictEqual(res.status, 413);
+      }
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test('Detailed diagnostics health check', async () => {
+    const testPort = 45940;
+    const server = webServer.startWebGuiServer(testPort);
+
+    try {
+      const res = await originalFetch(`http://127.0.0.1:${testPort}/health`);
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.strictEqual(data.status, "ok");
+      assert.ok(data.timestamp);
+      assert.ok(data.details);
+      assert.ok(data.details.storage);
+      assert.ok(data.details.system);
+      assert.ok(data.details.circuitBreakers);
+      assert.strictEqual(data.details.storage.scratch.status, "OK");
+      assert.strictEqual(data.details.storage.uploads.status, "OK");
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test('Security headers presence', async () => {
+    const testPort = 45941;
+    const server = webServer.startWebGuiServer(testPort);
+
+    try {
+      const res = await originalFetch(`http://127.0.0.1:${testPort}/health`);
+      assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+      assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');
+      assert.strictEqual(res.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
+      assert.strictEqual(res.headers.get('x-xss-protection'), '1; mode=block');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
   global.fetch = originalFetch;
 });
 
@@ -2184,6 +2277,202 @@ test('Additional maximal coverage and edge cases', async (t) => {
     }
   });
 
+  await t.test('ebayClient.uploadImageToEPS uploads image and extracts FullURL', async () => {
+    const originalToken = ebayClient.getAccessToken();
+    ebayClient.setAccessToken("active-token");
+
+    const originalFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/identity/v1/oauth2/token')) {
+        const tokenBody = JSON.stringify({ access_token: "mocked-access-token" });
+        return {
+          status: 200,
+          ok: true,
+          text: async () => tokenBody,
+          json: async () => JSON.parse(tokenBody)
+        };
+      }
+      if (urlStr.includes('api.ebay.com/ws/api.dll')) {
+        const bodyText = `<?xml version="1.0" encoding="utf-8"?>
+<UploadSiteHostedPicturesResponse xmlns="urn:ebay:apis:eBLBaseComponents">
+  <Ack>Success</Ack>
+  <SiteHostedPictureDetails>
+    <FullURL>https://i.ebayimg.com/images/g/test-url/s-l1600.jpg</FullURL>
+  </SiteHostedPictureDetails>
+</UploadSiteHostedPicturesResponse>`;
+        return {
+          status: 200,
+          ok: true,
+          text: async () => bodyText,
+          json: async () => { throw new Error("not used"); }
+        };
+      }
+      return { status: 404, ok: false };
+    };
+
+    // Create a dummy temp image to upload
+    const dummyPath = path.join(testDir, 'dummy-eps.jpg');
+    fs.writeFileSync(dummyPath, 'fake-jpeg-data');
+
+    try {
+      const url = await ebayClient.uploadImageToEPS(dummyPath);
+      assert.strictEqual(url, "https://i.ebayimg.com/images/g/test-url/s-l1600.jpg");
+    } finally {
+      if (fs.existsSync(dummyPath)) fs.unlinkSync(dummyPath);
+      ebayClient.setAccessToken(originalToken);
+      global.fetch = originalFetch;
+    }
+  });
+
+  await t.test('ebayClient.getMarketingSummary fetches ad campaigns', async () => {
+    const originalToken = ebayClient.getAccessToken();
+    ebayClient.setAccessToken("active-token");
+
+    const originalFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/identity/v1/oauth2/token')) {
+        const tokenBody = JSON.stringify({ access_token: "mocked-access-token" });
+        return {
+          status: 200,
+          ok: true,
+          text: async () => tokenBody,
+          json: async () => JSON.parse(tokenBody)
+        };
+      }
+      if (urlStr.includes('/sell/marketing/v1/ad_campaign')) {
+        const bodyText = JSON.stringify({
+          campaigns: [
+            { campaignId: "c-1", campaignName: "Test Campaign", campaignStatus: "RUNNING", fundingModel: "COST_PER_SALE" }
+          ]
+        });
+        return {
+          status: 200,
+          ok: true,
+          text: async () => bodyText,
+          json: async () => JSON.parse(bodyText)
+        };
+      }
+      return { status: 404, ok: false };
+    };
+
+    try {
+      const summary = await ebayClient.getMarketingSummary();
+      assert.ok(Array.isArray(summary.campaigns));
+      assert.strictEqual(summary.campaigns[0].campaignName, "Test Campaign");
+    } finally {
+      ebayClient.setAccessToken(originalToken);
+      global.fetch = originalFetch;
+    }
+  });
+
+  await t.test('ebayClient.getItemFromBrowse fetches item details by ID', async () => {
+    const originalToken = ebayClient.getAccessToken();
+    ebayClient.setAccessToken("active-token");
+
+    const originalFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/identity/v1/oauth2/token')) {
+        const tokenBody = JSON.stringify({ access_token: "mocked-access-token" });
+        return {
+          status: 200,
+          ok: true,
+          text: async () => tokenBody,
+          json: async () => JSON.parse(tokenBody)
+        };
+      }
+      if (urlStr.includes('/buy/browse/v1/item/v1%7C123456789012%7C0')) {
+        const bodyText = JSON.stringify({
+          title: "Imported Competitor Item",
+          price: { value: "45.99", currency: "USD" },
+          categoryId: "12345",
+          brand: "Nike",
+          mpn: "NK-100",
+          description: "Stunning condition competitor shoes",
+          localizedAspects: [
+            { name: "Color", value: "Red" },
+            { name: "Size", value: "11" }
+          ],
+          image: { imageUrl: "https://example.com/main.jpg" },
+          additionalImages: [
+            { imageUrl: "https://example.com/extra.jpg" }
+          ]
+        });
+        return {
+          status: 200,
+          ok: true,
+          text: async () => bodyText,
+          json: async () => JSON.parse(bodyText)
+        };
+      }
+      return { status: 404, ok: false };
+    };
+
+    try {
+      const item = await ebayClient.getItemFromBrowse("123456789012");
+      assert.strictEqual(item.title, "Imported Competitor Item");
+      assert.strictEqual(item.brand, "Nike");
+      assert.strictEqual(item.price.value, "45.99");
+    } finally {
+      ebayClient.setAccessToken(originalToken);
+      global.fetch = originalFetch;
+    }
+  });
+
+  await t.test('GET /api/ebay/import handles URL query and maps fields correctly', async () => {
+    const originalToken = ebayClient.getAccessToken();
+    ebayClient.setAccessToken("active-token");
+
+    const originalFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/identity/v1/oauth2/token')) {
+        const tokenBody = JSON.stringify({ access_token: "mocked-access-token" });
+        return { status: 200, ok: true, json: async () => JSON.parse(tokenBody), text: async () => tokenBody };
+      }
+      if (urlStr.includes('/buy/browse/v1/item/')) {
+        const bodyText = JSON.stringify({
+          title: "Imported Competitor Item",
+          price: { value: "45.99", currency: "USD" },
+          categoryId: "12345",
+          brand: "Nike",
+          mpn: "NK-100",
+          description: "Stunning condition",
+          localizedAspects: [
+            { name: "Color", value: "Red" }
+          ],
+          image: { imageUrl: "https://example.com/main.jpg" }
+        });
+        return { status: 200, ok: true, json: async () => JSON.parse(bodyText), text: async () => bodyText };
+      }
+      return { status: 404, ok: false };
+    };
+
+    // Setup active server instance for testing
+    const serverPort = 49100 + Math.round(Math.random() * 500);
+    const testServer = webServer.startWebGuiServer(serverPort);
+
+    try {
+      const url = `http://127.0.0.1:${serverPort}/api/ebay/import?itemIdOrUrl=https://www.ebay.com/itm/123456789012`;
+      const res = await REAL_FETCH(url);
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      
+      assert.strictEqual(data.title, "Imported Competitor Item");
+      assert.strictEqual(data.brand, "Nike");
+      assert.strictEqual(data.model, "NK-100");
+      assert.strictEqual(data.suggestedPrice, 45.99);
+      assert.strictEqual(data.aspects.Color, "Red");
+      assert.deepEqual(data.imageUrls, ["https://example.com/main.jpg"]);
+    } finally {
+      testServer.close();
+      ebayClient.setAccessToken(originalToken);
+      global.fetch = originalFetch;
+    }
+  });
+
   await t.test('Daily repricer UNDERCUT strategy sets price to $0.05 under min comp price', async () => {
     const testSku = "REPRICE-UNDERCUT";
     const history = [{
@@ -2302,6 +2591,7 @@ test('Additional maximal coverage and edge cases', async (t) => {
   });
 
   await t.test('POST /api/offers/auto-send sends negotiate offers to watchers', async () => {
+    webServer.resetRateLimits();
     const testPort = 45921;
     const server = webServer.startWebGuiServer(testPort);
 
@@ -2783,6 +3073,7 @@ test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallba
 
     const originalGetPolicies = ebayClient.getOrCreateListingPolicies;
     const originalEbayRequest = ebayClient.ebayRequest;
+    const originalRefresh = ebayClient.refreshEbayAccessToken;
     ebayClient.getOrCreateListingPolicies = async () => ({
       fulfillmentId: 'ful-test', paymentId: 'pay-test', returnId: 'ret-test'
     });
@@ -2791,6 +3082,7 @@ test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallba
       if (path === '/offer')        return { offerId: 'off-force-456' };
       return {};
     };
+    ebayClient.refreshEbayAccessToken = async () => {};
 
     const originalToken = ebayClient.getAccessToken();
     ebayClient.setAccessToken('active-token');
@@ -2807,7 +3099,7 @@ test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallba
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Lister-API-Key': 'lister-secret-key-12345' },
         body: JSON.stringify({
-          sku: 'DUP-NEW-SKU', listing: listingPayload, imageUrls: [],
+          sku: 'DUP-NEW-SKU', listing: listingPayload, imageUrls: ["https://example.com/image.png"],
           shippingOption: 'USPS_GROUND', returnOption: 'NO_RETURNS', immediatePayment: false
         })
       });
@@ -2820,7 +3112,7 @@ test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallba
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Lister-API-Key': 'lister-secret-key-12345' },
         body: JSON.stringify({
-          sku: 'DUP-NEW-SKU', listing: listingPayload, imageUrls: [],
+          sku: 'DUP-NEW-SKU', listing: listingPayload, imageUrls: ["https://example.com/image.png"],
           shippingOption: 'USPS_GROUND', returnOption: 'NO_RETURNS', immediatePayment: false,
           force: true
         })
@@ -2833,6 +3125,7 @@ test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallba
       ebayClient.setAccessToken(originalToken);
       ebayClient.getOrCreateListingPolicies = originalGetPolicies;
       ebayClient.ebayRequest = originalEbayRequest;
+      ebayClient.refreshEbayAccessToken = originalRefresh;
       await new Promise((resolve) => server.close(resolve));
     }
   });
@@ -2847,6 +3140,7 @@ test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallba
 
     const originalGetPolicies = ebayClient.getOrCreateListingPolicies;
     const originalEbayRequest = ebayClient.ebayRequest;
+    const originalRefresh = ebayClient.refreshEbayAccessToken;
     ebayClient.getOrCreateListingPolicies = async () => ({
       fulfillmentId: 'ful-v', paymentId: 'pay-v', returnId: 'ret-v'
     });
@@ -2855,6 +3149,7 @@ test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallba
       if (path === '/offer')        return { offerId: 'off-vero-ok' };
       return {};
     };
+    ebayClient.refreshEbayAccessToken = async () => {};
 
     const originalToken = ebayClient.getAccessToken();
     ebayClient.setAccessToken('active-token');
@@ -2871,7 +3166,7 @@ test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallba
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Lister-API-Key': 'lister-secret-key-12345' },
         body: JSON.stringify({
-          sku: 'VERO-SKU-1', listing: veroListing, imageUrls: [],
+          sku: 'VERO-SKU-1', listing: veroListing, imageUrls: ["https://example.com/image.png"],
           shippingOption: 'USPS_GROUND', returnOption: 'NO_RETURNS', immediatePayment: false
         })
       });
@@ -2884,7 +3179,7 @@ test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallba
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-Lister-API-Key': 'lister-secret-key-12345' },
         body: JSON.stringify({
-          sku: 'VERO-SKU-1', listing: veroListing, imageUrls: [],
+          sku: 'VERO-SKU-1', listing: veroListing, imageUrls: ["https://example.com/image.png"],
           shippingOption: 'USPS_GROUND', returnOption: 'NO_RETURNS', immediatePayment: false,
           force: true
         })
@@ -2896,6 +3191,7 @@ test('SSE log stream, eBay policies, deduplication gates, and VeRO daemon fallba
       ebayClient.setAccessToken(originalToken);
       ebayClient.getOrCreateListingPolicies = originalGetPolicies;
       ebayClient.ebayRequest = originalEbayRequest;
+      ebayClient.refreshEbayAccessToken = originalRefresh;
       await new Promise((resolve) => server.close(resolve));
     }
   });

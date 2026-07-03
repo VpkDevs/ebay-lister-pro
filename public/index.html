@@ -248,6 +248,22 @@
     }
     /* Hide emoji icons — replaced by text-only nav */
     .nav-icon { display: none; }
+    .nav-badge-status {
+      font-size: 0.65rem;
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-left: auto;
+      text-transform: uppercase;
+      font-weight: bold;
+    }
+    .status--connected {
+      background: rgba(16, 185, 129, 0.15);
+      color: #10b981;
+    }
+    .status--disconnected {
+      background: rgba(239, 68, 68, 0.15);
+      color: #ef4444;
+    }
     .nav-badge {
       margin-left: auto;
       background: var(--amber-dim);
@@ -1244,1215 +1260,125 @@
       *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
       body::after { animation: none; }
     }
-  </style>
-    :root {
-      /* Dark palette */
-      --bg:          #070b14;
-      --bg-2:        #0d1422;
-      --surface:     #111827;
-      --surface-2:   #1a2235;
-      --surface-3:   #1f2d45;
-      --border:      rgba(255,255,255,0.065);
-      --border-2:    rgba(255,255,255,0.12);
-      --border-acc:  rgba(99,102,241,0.45);
 
-      --brand:       #6366f1;
-      --brand-2:     #4f46e5;
-      --brand-glow:  rgba(99,102,241,0.28);
-      --brand-light: #818cf8;
-      --brand-dim:   rgba(99,102,241,0.08);
-
-      --accent:      #22d3ee;
-      --amber:       #f59e0b;
-      --green:       #10b981;
-      --red:         #ef4444;
-      --purple:      #a855f7;
-
-      --text:        #f1f5f9;
-      --text-muted:  #94a3b8;
-      --text-dim:    #475569;
-
-      --sidebar-w:   240px;
-      --header-h:    64px;
-
-      --radius-sm:   6px;
-      --radius:      10px;
-      --radius-lg:   16px;
-      --radius-xl:   22px;
-
-      --ease:        cubic-bezier(.4,0,.2,1);
-      --t:           0.18s;
-
-      --shadow:      0 4px 6px -1px rgba(0,0,0,0.5), 0 2px 4px -2px rgba(0,0,0,0.5);
-      --shadow-lg:   0 20px 60px rgba(0,0,0,0.5);
-      --shadow-glow: 0 0 40px rgba(99,102,241,0.2);
-    }
-    [data-theme="light"] {
-      --bg:         #f0f4fb;
-      --bg-2:       #e8eef8;
-      --surface:    #ffffff;
-      --surface-2:  #f8faff;
-      --surface-3:  #eef2fb;
-      --border:     rgba(0,0,0,0.07);
-      --border-2:   rgba(0,0,0,0.12);
-      --text:       #0f172a;
-      --text-muted: #475569;
-      --text-dim:   #94a3b8;
-      --brand-dim:  rgba(99,102,241,0.06);
-    }
-
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html { font-size: 15px; }
-    body {
-      font-family: 'Inter', sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      min-height: 100vh;
-      display: flex;
-      overflow-x: hidden;
-      line-height: 1.5;
-    }
-    ::selection { background: rgba(99,102,241,0.35); }
-
-    /* ── Scrollbar ─────────────────────────────────── */
-    ::-webkit-scrollbar { width: 6px; height: 6px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--surface-3); border-radius: 99px; }
-
-    /* ══════════════════════════════════════════════════
-       SIDEBAR
-    ══════════════════════════════════════════════════ */
-    .sidebar {
-      width: var(--sidebar-w);
-      min-height: 100vh;
-      background: var(--bg-2);
-      border-right: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      position: fixed;
-      left: 0; top: 0; bottom: 0;
-      z-index: 50;
-      transition: transform var(--t) var(--ease);
-    }
-    .sidebar__logo {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 0 20px;
-      height: var(--header-h);
-      border-bottom: 1px solid var(--border);
-      font-size: 1rem;
-      font-weight: 800;
-      letter-spacing: -0.02em;
-      flex-shrink: 0;
-    }
-    .logo-mark {
-      width: 30px; height: 30px;
-      background: linear-gradient(135deg, var(--brand), var(--brand-2));
-      border-radius: 8px;
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.9rem;
-      box-shadow: 0 0 16px var(--brand-glow);
-      flex-shrink: 0;
-    }
-    .logo-name { background: linear-gradient(135deg, var(--brand-light), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-
-    .sidebar__nav { flex: 1; padding: 16px 12px; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
-    .nav-section-label {
-      font-size: 0.65rem;
-      font-weight: 700;
-      letter-spacing: 0.1em;
-      text-transform: uppercase;
-      color: var(--text-dim);
-      padding: 12px 8px 6px;
-    }
-    .nav-item {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 9px 12px;
-      border-radius: var(--radius);
-      font-size: 0.875rem;
-      font-weight: 500;
-      color: var(--text-muted);
-      cursor: pointer;
-      border: none;
-      background: transparent;
-      width: 100%;
-      text-align: left;
-      transition: all var(--t) var(--ease);
-      position: relative;
-    }
-    .nav-item:hover { background: var(--surface); color: var(--text); }
-    .nav-item.active {
-      background: var(--brand-dim);
-      color: var(--brand-light);
-      font-weight: 600;
-      border: 1px solid var(--border-acc);
-    }
-    .nav-item.active::before {
-      content: '';
-      position: absolute;
-      left: 0; top: 50%;
-      transform: translateY(-50%);
-      width: 3px; height: 60%;
-      background: var(--brand);
-      border-radius: 0 99px 99px 0;
-    }
-    .nav-icon { font-size: 1rem; width: 20px; text-align: center; flex-shrink: 0; }
-    .nav-badge {
-      margin-left: auto;
-      background: var(--brand-dim);
-      color: var(--brand-light);
-      font-size: 0.65rem;
-      font-weight: 700;
-      padding: 2px 7px;
-      border-radius: 99px;
-    }
-
-    .sidebar__footer {
-      padding: 16px 12px;
-      border-top: 1px solid var(--border);
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-
-    /* ══════════════════════════════════════════════════
-       MAIN LAYOUT
-    ══════════════════════════════════════════════════ */
-    .main-wrapper {
-      margin-left: var(--sidebar-w);
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      min-height: 100vh;
-    }
-
-    /* ── Topbar ────────────────────────────────────── */
-    .topbar {
-      height: var(--header-h);
-      border-bottom: 1px solid var(--border);
-      background: rgba(7,11,20,0.85);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      position: sticky;
-      top: 0;
-      z-index: 40;
-      display: flex;
-      align-items: center;
-      padding: 0 28px;
-      gap: 16px;
-    }
-    [data-theme="light"] .topbar { background: rgba(240,244,251,0.9); }
-    .topbar__title {
-      font-size: 1rem;
-      font-weight: 700;
-      flex: 1;
-    }
-    .topbar__right { display: flex; align-items: center; gap: 10px; }
-
-    /* ── Status badge ─────────────────────────────── */
-    .status-badge {
-      display: inline-flex;
-      align-items: center;
-      gap: 7px;
-      padding: 5px 12px;
-      border-radius: 99px;
-      font-size: 0.75rem;
-      font-weight: 600;
-      border: 1px solid var(--border);
-      background: var(--surface);
-      color: var(--text-muted);
-      transition: all var(--t) var(--ease);
-    }
-    .status-badge .dot {
-      width: 7px; height: 7px;
-      border-radius: 50%;
-      background: var(--text-dim);
-      transition: background var(--t);
-    }
-    .status-badge.ok { border-color: rgba(16,185,129,0.35); background: rgba(16,185,129,0.07); color: var(--green); }
-    .status-badge.ok .dot { background: var(--green); box-shadow: 0 0 8px var(--green); animation: breathe 2s ease-in-out infinite; }
-    .status-badge.warn { border-color: rgba(245,158,11,0.35); background: rgba(245,158,11,0.07); color: var(--amber); }
-    .status-badge.warn .dot { background: var(--amber); }
-    .status-badge.err { border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.07); color: var(--red); }
-    .status-badge.err .dot { background: var(--red); }
-    @keyframes breathe { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.6;transform:scale(.7)} }
-
-    /* ── Icon button ──────────────────────────────── */
-    .icon-btn {
-      width: 36px; height: 36px;
-      border-radius: var(--radius);
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--text-muted);
-      display: flex; align-items: center; justify-content: center;
-      cursor: pointer;
-      font-size: 1rem;
-      transition: all var(--t) var(--ease);
-    }
-    .icon-btn:hover { background: var(--surface-2); border-color: var(--border-2); color: var(--text); }
-
-    /* ── User chip ────────────────────────────────── */
-    .user-chip {
-      display: flex;
-      align-items: center;
-      gap: 9px;
-      padding: 4px 12px 4px 4px;
-      border-radius: 99px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      cursor: pointer;
-      transition: all var(--t) var(--ease);
-      font-size: 0.825rem;
-    }
-    .user-chip:hover { border-color: var(--border-2); }
-    .user-chip__avatar {
-      width: 28px; height: 28px;
-      border-radius: 50%;
-      background: linear-gradient(135deg, var(--brand), var(--brand-2));
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.75rem;
-      font-weight: 700;
-      color: #fff;
-      flex-shrink: 0;
-      overflow: hidden;
-    }
-    .user-chip__avatar img { width: 100%; height: 100%; object-fit: cover; }
-
-    /* ══════════════════════════════════════════════════
-       CONTENT AREA
-    ══════════════════════════════════════════════════ */
-    .content { flex: 1; padding: 28px; }
-
-    /* ── Section header ───────────────────────────── */
-    .section-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 24px;
-      gap: 16px;
-      flex-wrap: wrap;
-    }
-    .section-header__left { display: flex; flex-direction: column; gap: 3px; }
-    .section-title { font-size: 1.25rem; font-weight: 800; letter-spacing: -0.025em; }
-    .section-subtitle { font-size: 0.825rem; color: var(--text-muted); }
-
-    /* ══════════════════════════════════════════════════
-       CARDS
-    ══════════════════════════════════════════════════ */
-    .card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      padding: 24px;
-      position: relative;
-      transition: border-color var(--t) var(--ease);
-    }
-    .card:hover { border-color: var(--border-2); }
-    .card--glow { box-shadow: var(--shadow-glow); border-color: var(--border-acc); }
-
-    .card__title {
-      font-size: 0.8rem;
-      font-weight: 700;
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-      color: var(--text-dim);
-      margin-bottom: 18px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .card__title-dot {
-      width: 6px; height: 6px;
-      border-radius: 50%;
-      background: var(--brand);
-    }
-
-    /* ══════════════════════════════════════════════════
-       METRICS ROW
-    ══════════════════════════════════════════════════ */
-    .metrics-grid {
-      display: grid;
-      grid-template-columns: repeat(5, 1fr);
-      gap: 14px;
-      margin-bottom: 24px;
-    }
-    .metric-card {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      padding: 18px 20px;
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-      transition: all var(--t) var(--ease);
-      cursor: default;
-    }
-    .metric-card:hover { border-color: var(--border-2); transform: translateY(-2px); box-shadow: var(--shadow); }
-    .metric-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; color: var(--text-dim); }
-    .metric-value { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.03em; line-height: 1; }
-    .metric-value--green { color: var(--green); }
-    .metric-value--blue { color: var(--brand-light); }
-    .metric-value--amber { color: var(--amber); }
-    .metric-value--red { color: var(--red); }
-    .metric-value--purple { color: var(--purple); }
-    .metric-sub { font-size: 0.7rem; color: var(--text-dim); }
-
-    /* ══════════════════════════════════════════════════
-       LISTING FORM LAYOUT
-    ══════════════════════════════════════════════════ */
-    .listing-grid {
-      display: grid;
-      grid-template-columns: 400px 1fr;
-      gap: 20px;
-      align-items: start;
-    }
-
-    /* ── Drop zone ────────────────────────────────── */
-    .dropzone {
-      border: 2px dashed var(--border-acc);
-      border-radius: var(--radius-lg);
-      padding: 36px 20px;
-      text-align: center;
-      cursor: pointer;
-      transition: all var(--t) var(--ease);
-      background: var(--brand-dim);
-      position: relative;
-      overflow: hidden;
-    }
-    .dropzone:hover, .dropzone.drag-over {
-      border-color: var(--brand);
-      background: rgba(99,102,241,0.1);
-    }
-    .dropzone__icon { font-size: 2.2rem; margin-bottom: 12px; display: block; }
-    .dropzone__text { font-size: 0.875rem; font-weight: 600; color: var(--text); margin-bottom: 4px; }
-    .dropzone__sub { font-size: 0.775rem; color: var(--text-muted); }
-
-    /* ── URL import panel ─────────────────────────── */
-    .url-import {
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
-      padding: 14px;
-      border-radius: var(--radius-lg);
-      border: 1px solid var(--border);
-      background: linear-gradient(180deg, var(--surface-2) 0%, var(--surface) 100%);
-    }
-    .url-import__header {
-      display: flex;
-      align-items: flex-start;
-      justify-content: space-between;
-      gap: 12px;
-    }
-    .url-import__title {
-      font-size: 0.875rem;
-      font-weight: 700;
-      color: var(--text);
-      margin-bottom: 2px;
-    }
-    .url-import__hint {
-      font-size: 0.75rem;
-      color: var(--text-muted);
-      line-height: 1.45;
-    }
-    .url-import__count {
-      font-size: 0.7rem;
-      font-weight: 700;
-      color: var(--brand-light);
-      background: var(--brand-dim);
-      border: 1px solid var(--border-acc);
-      padding: 4px 10px;
-      border-radius: 99px;
-      white-space: nowrap;
-      flex-shrink: 0;
-    }
-    .url-import__textarea {
-      width: 100%;
-      min-height: 72px;
-      resize: vertical;
-      border-radius: var(--radius);
-      border: 1px solid var(--border);
-      background: var(--bg);
-      color: var(--text);
-      padding: 10px 12px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.78rem;
-      line-height: 1.5;
-      transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
-    }
-    .url-import__textarea:focus {
-      outline: none;
-      border-color: var(--brand);
-      box-shadow: 0 0 0 3px var(--brand-glow);
-    }
-    .url-import__textarea::placeholder { color: var(--text-dim); }
-    .url-import__actions {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-    .url-import__actions .btn { flex: 1; }
-    .url-import__progress {
+    /* ── Mobile responsiveness enhancements ── */
+    .sidebar-toggle {
       display: none;
-      flex-direction: column;
-      gap: 6px;
-    }
-    .url-import__progress.visible { display: flex; }
-    .url-import__progress-bar {
-      height: 6px;
-      border-radius: 99px;
-      background: var(--surface-3);
-      overflow: hidden;
-    }
-    .url-import__progress-fill {
-      height: 100%;
-      width: 0%;
-      border-radius: 99px;
-      background: linear-gradient(90deg, var(--brand), var(--accent));
-      transition: width 0.35s var(--ease);
-    }
-    .url-import__progress-label {
-      font-size: 0.72rem;
-      color: var(--text-muted);
-    }
-    .url-import__results {
-      display: none;
-      flex-direction: column;
-      gap: 6px;
-      max-height: 140px;
-      overflow-y: auto;
-      padding-top: 4px;
-    }
-    .url-import__results.visible { display: flex; }
-    .url-import__result {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      padding: 8px 10px;
+      width: 34px;
+      height: 34px;
       border-radius: var(--radius-sm);
-      font-size: 0.75rem;
-      line-height: 1.4;
-      border: 1px solid var(--border);
       background: var(--surface);
-    }
-    .url-import__result--ok { border-color: rgba(16,185,129,0.35); background: rgba(16,185,129,0.08); }
-    .url-import__result--err { border-color: rgba(239,68,68,0.35); background: rgba(239,68,68,0.08); }
-    .url-import__result-icon { flex-shrink: 0; font-size: 0.85rem; margin-top: 1px; }
-    .url-import__result-body { min-width: 0; }
-    .url-import__result-url {
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.68rem;
-      color: var(--text-muted);
-      word-break: break-all;
-    }
-    .url-import__chips {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-    }
-    .url-chip {
-      font-size: 0.68rem;
-      font-family: 'JetBrains Mono', monospace;
-      padding: 3px 8px;
-      border-radius: 99px;
-      background: var(--surface-3);
-      color: var(--text-muted);
       border: 1px solid var(--border);
-      max-width: 100%;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .url-chip--page { border-color: rgba(34,211,238,0.35); color: var(--accent); }
-
-    /* ── Preview grid ─────────────────────────────── */
-    .preview-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
-      gap: 8px;
-      margin-top: 14px;
-    }
-    .preview-thumb {
-      aspect-ratio: 1;
-      border-radius: var(--radius);
-      overflow: hidden;
-      border: 1px solid var(--border);
-      cursor: zoom-in;
-      transition: all var(--t) var(--ease);
-      position: relative;
-    }
-    .preview-thumb:hover { border-color: var(--brand); transform: scale(1.04); }
-    .preview-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-    .preview-thumb .remove-btn {
-      position: absolute;
-      top: 3px; right: 3px;
-      width: 18px; height: 18px;
-      border-radius: 50%;
-      background: rgba(0,0,0,0.7);
-      color: #fff;
-      font-size: 0.6rem;
-      display: none;
+      color: var(--text-muted);
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      border: none;
-    }
-    .preview-thumb:hover .remove-btn { display: flex; }
-    .preview-thumb .spruce-thumb-btn {
-      position: absolute;
-      top: 3px; left: 3px;
-      width: 18px; height: 18px;
-      border-radius: 50%;
-      background: rgba(0,0,0,0.7);
-      color: #fff;
-      font-size: 0.65rem;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      cursor: pointer;
-      border: none;
-    }
-    .preview-thumb:hover .spruce-thumb-btn { display: flex; }
-
-    /* ── Form fields ──────────────────────────────── */
-    .form-group { margin-bottom: 16px; }
-    .field-label {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      margin-bottom: 6px;
-    }
-    .field-label label {
-      font-size: 0.75rem;
-      font-weight: 600;
-      color: var(--text-dim);
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-    }
-    .field-label .field-meta { font-size: 0.72rem; color: var(--text-dim); }
-
-    input, textarea, select {
-      width: 100%;
-      background: var(--bg-2);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 10px 13px;
-      border-radius: var(--radius);
-      font-family: 'Inter', sans-serif;
-      font-size: 0.875rem;
-      outline: none;
-      transition: border-color var(--t) var(--ease), box-shadow var(--t) var(--ease);
-      -webkit-appearance: none;
-    }
-    [data-theme="light"] input,
-    [data-theme="light"] textarea,
-    [data-theme="light"] select {
-      background: var(--surface-2);
-      border-color: var(--border);
-    }
-    input:focus, textarea:focus, select:focus {
-      border-color: var(--brand);
-      box-shadow: 0 0 0 3px var(--brand-dim);
-    }
-    input::placeholder, textarea::placeholder { color: var(--text-dim); }
-    textarea { resize: vertical; line-height: 1.6; }
-    select { cursor: pointer; }
-
-    .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-    .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
-
-    /* ── Checkbox / toggle ────────────────────────── */
-    .toggle-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.85rem;
-      cursor: pointer;
-    }
-    .toggle-row input[type="checkbox"] {
-      width: auto;
-      accent-color: var(--brand);
-      width: 15px; height: 15px;
-      cursor: pointer;
-    }
-    .platform-toggles {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      margin-top: 8px;
-    }
-    .platform-toggle {
-      display: flex;
-      align-items: center;
-      gap: 7px;
-      padding: 7px 13px;
-      border-radius: var(--radius);
-      border: 1px solid var(--border);
-      background: var(--surface-2);
-      cursor: pointer;
-      font-size: 0.8rem;
-      font-weight: 600;
-      color: var(--text-muted);
       transition: all var(--t) var(--ease);
-      user-select: none;
-    }
-    .platform-toggle:has(input:checked) {
-      border-color: var(--brand);
-      background: var(--brand-dim);
-      color: var(--brand-light);
-    }
-    .platform-toggle input { display: none; }
-
-    /* ── Buttons ──────────────────────────────────── */
-    .btn {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 7px;
-      padding: 10px 20px;
-      border-radius: var(--radius);
-      font-family: 'Inter', sans-serif;
-      font-size: 0.875rem;
-      font-weight: 700;
-      cursor: pointer;
-      border: none;
-      transition: all var(--t) var(--ease);
-      white-space: nowrap;
+      margin-right: 12px;
       flex-shrink: 0;
     }
-    .btn--primary {
-      background: linear-gradient(135deg, var(--brand), var(--brand-2));
-      color: #fff;
-    }
-    .btn--primary:hover { opacity: .9; box-shadow: 0 4px 20px var(--brand-glow); transform: translateY(-1px); }
-    .btn--primary:active { transform: none; }
-    .btn--secondary {
+    .sidebar-toggle:hover {
       background: var(--surface-2);
-      border: 1px solid var(--border);
+      border-color: var(--border-2);
       color: var(--text);
     }
-    .btn--secondary:hover { border-color: var(--border-2); background: var(--surface-3); }
-    .btn--danger { background: rgba(239,68,68,0.12); border: 1px solid rgba(239,68,68,0.25); color: var(--red); }
-    .btn--danger:hover { background: rgba(239,68,68,0.2); }
-    .btn--ghost { background: transparent; border: 1px solid var(--border); color: var(--text-muted); }
-    .btn--ghost:hover { background: var(--surface); color: var(--text); }
-    .btn--sm { padding: 6px 12px; font-size: 0.8rem; }
-    .btn--xs { padding: 4px 9px; font-size: 0.72rem; }
-    .btn--full { width: 100%; }
-    .btn:disabled { opacity: 0.42; cursor: not-allowed; transform: none !important; box-shadow: none !important; }
+    .sidebar-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(4px);
+      -webkit-backdrop-filter: blur(4px);
+      z-index: 240;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity var(--t) var(--ease);
+    }
+    .sidebar-backdrop.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
 
-    /* ── Price presets ────────────────────────────── */
-    .preset-group {
-      display: flex;
-      gap: 6px;
-      margin-top: 8px;
+    @media (max-width: 700px) {
+      .sidebar-toggle {
+        display: inline-flex;
+      }
+      .sidebar {
+        z-index: 250;
+      }
+      .topbar {
+        padding: 0 16px;
+      }
     }
-    .preset-btn {
-      flex: 1;
-      padding: 7px 6px;
-      border-radius: var(--radius);
-      border: 1px solid var(--border);
-      background: var(--surface-2);
-      color: var(--text-muted);
-      font-size: 0.75rem;
-      font-weight: 600;
-      cursor: pointer;
-      text-align: center;
-      transition: all var(--t) var(--ease);
-    }
-    .preset-btn:hover { border-color: var(--border-2); color: var(--text); }
-    .preset-btn.active { background: var(--brand-dim); border-color: var(--brand); color: var(--brand-light); }
-    .preset-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
-    /* ── Aspects ──────────────────────────────────── */
-    .aspects-container {
-      background: var(--bg-2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 7px;
-      max-height: 220px;
-      overflow-y: auto;
+    /* Thumbnail processing/spinner state */
+    .preview-thumb.processing::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background: rgba(7, 8, 11, 0.65);
+      z-index: 2;
     }
-    .aspect-row {
-      display: flex;
-      gap: 8px;
-      align-items: center;
-    }
-    .aspect-row input { flex: 1; padding: 7px 10px; font-size: 0.8rem; }
-
-    /* ── AI Pipeline stepper ──────────────────────── */
-    .pipeline {
-      margin-top: 18px;
-      display: none;
-      flex-direction: column;
-      gap: 0;
-      background: var(--bg-2);
-      border: 1px solid var(--border-acc);
-      border-radius: var(--radius-lg);
-      overflow: hidden;
-    }
-    .pipeline.visible { display: flex; }
-    .pipeline__header {
-      padding: 12px 16px;
-      background: var(--brand-dim);
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      color: var(--brand-light);
-      border-bottom: 1px solid var(--border-acc);
-    }
-    .pipeline__spinner {
-      width: 14px; height: 14px;
-      border: 2px solid rgba(129,140,248,0.25);
-      border-top-color: var(--brand-light);
+    .preview-thumb.processing::before {
+      content: "";
+      position: absolute;
+      top: calc(50% - 12px);
+      left: calc(50% - 12px);
+      width: 24px;
+      height: 24px;
+      border: 3.5px solid rgba(200, 146, 26, 0.15);
+      border-top-color: var(--amber);
       border-radius: 50%;
       animation: spin 0.8s linear infinite;
-      flex-shrink: 0;
+      z-index: 3;
     }
-    .step-row {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 16px;
-      font-size: 0.8rem;
-      color: var(--text-muted);
-      border-bottom: 1px solid var(--border);
-      transition: all var(--t) var(--ease);
-    }
-    .step-row:last-child { border-bottom: none; }
-    .step-row.active { color: var(--text); background: rgba(99,102,241,0.04); }
-    .step-row.done { color: var(--green); }
-    .step-indicator {
-      width: 20px; height: 20px;
-      border-radius: 50%;
-      border: 2px solid var(--border);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 0.65rem;
-      flex-shrink: 0;
-      font-weight: 700;
-      color: var(--text-dim);
-      transition: all var(--t) var(--ease);
-    }
-    .step-row.active .step-indicator {
-      border-color: var(--brand);
-      background: var(--brand-dim);
-      color: var(--brand-light);
-      box-shadow: 0 0 0 3px var(--brand-dim);
-    }
-    .step-row.done .step-indicator {
-      border-color: var(--green);
-      background: rgba(16,185,129,0.12);
-      color: var(--green);
-    }
-
-    /* ── Description tabs ─────────────────────────── */
-    .tab-group {
-      display: flex;
-      gap: 4px;
-      padding: 4px;
-      background: var(--bg-2);
-      border-radius: var(--radius);
-      border: 1px solid var(--border);
-    }
-    .tab-pill {
-      padding: 5px 12px;
-      border-radius: var(--radius-sm);
-      font-size: 0.75rem;
-      font-weight: 600;
-      cursor: pointer;
-      border: none;
-      background: transparent;
-      color: var(--text-muted);
-      transition: all var(--t) var(--ease);
-    }
-    .tab-pill.active { background: var(--surface-3); color: var(--text); }
-    .tab-pill:disabled { opacity: 0.4; cursor: not-allowed; }
-
-    /* ── Description preview ──────────────────────── */
-    .desc-preview {
-      display: none;
-      background: var(--bg-2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      padding: 14px;
-      min-height: 100px;
-      max-height: 240px;
-      overflow-y: auto;
-      font-size: 0.85rem;
-      line-height: 1.65;
-    }
-
-    /* ── Comps chart ──────────────────────────────── */
-    .comps-bar {
-      display: none;
-      align-items: center;
-      gap: 10px;
-      padding: 10px 14px;
-      background: var(--bg-2);
-      border: 1px solid var(--border);
-      border-radius: var(--radius);
-      margin-top: 8px;
-      font-size: 0.78rem;
-    }
-    .comps-bar.visible { display: flex; }
-    .comps-bar .label { color: var(--text-dim); white-space: nowrap; }
-    .comps-bar .val { font-weight: 700; color: var(--text); }
-    .comps-bar .avg-val { color: var(--green); font-weight: 700; cursor: pointer; text-decoration: underline dotted; }
-    .comps-bar .sep { color: var(--border-2); }
-    .comps-canvas-wrap { margin-top: 8px; }
-    #compsChart { display: none; width: 100%; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-2); }
-
-    /* ══════════════════════════════════════════════════
-       HISTORY / TABLE VIEW
-    ══════════════════════════════════════════════════ */
-    .table-wrap { overflow-x: auto; }
-    table { width: 100%; border-collapse: collapse; }
-    thead th {
-      padding: 10px 14px;
-      text-align: left;
-      font-size: 0.7rem;
-      font-weight: 700;
-      letter-spacing: 0.07em;
-      text-transform: uppercase;
-      color: var(--text-dim);
-      background: var(--bg-2);
-      border-bottom: 1px solid var(--border);
-      white-space: nowrap;
-    }
-    tbody td {
-      padding: 12px 14px;
-      font-size: 0.825rem;
-      border-bottom: 1px solid var(--border);
-      vertical-align: middle;
-    }
-    tbody tr { transition: background var(--t) var(--ease); }
-    tbody tr:hover td { background: var(--surface-2); }
-    tbody tr:last-child td { border-bottom: none; }
-
-    /* Status pill */
-    .pill {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      padding: 3px 9px;
-      border-radius: 99px;
-      font-size: 0.7rem;
-      font-weight: 700;
-      letter-spacing: 0.03em;
-    }
-    .pill--active { background: rgba(16,185,129,0.1); color: var(--green); border: 1px solid rgba(16,185,129,0.25); }
-    .pill--draft { background: rgba(245,158,11,0.1); color: var(--amber); border: 1px solid rgba(245,158,11,0.25); }
-    .pill--ended { background: rgba(239,68,68,0.1); color: var(--red); border: 1px solid rgba(239,68,68,0.25); }
-    .pill .dot { width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
-
-    .sku-mono { font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: var(--text-muted); }
-    .price-cell { font-weight: 700; color: var(--green); }
-
-    /* Action chip buttons in table */
-    .action-group { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; }
-
-    /* ── Search & filter bar ──────────────────────── */
-    .filter-bar {
-      display: flex;
-      gap: 12px;
-      margin-bottom: 18px;
-      align-items: center;
-    }
-    .filter-bar input { flex: 1; padding: 9px 13px; }
-    .filter-bar select { width: auto; min-width: 160px; }
-
-    /* ══════════════════════════════════════════════════
-       LOGS TERMINAL
-    ══════════════════════════════════════════════════ */
-    .terminal-section {
-      margin-top: 28px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: var(--radius-lg);
-      overflow: hidden;
-    }
-    .terminal-header {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      padding: 12px 18px;
-      cursor: pointer;
-      transition: background var(--t) var(--ease);
-    }
-    .terminal-header:hover { background: var(--surface-2); }
-    .terminal-header__left {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-size: 0.8rem;
-      font-weight: 600;
-      color: var(--text-muted);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
-    }
-    .terminal-header__toggle { font-size: 0.75rem; color: var(--text-dim); font-weight: 600; }
-    .terminal-controls {
-      display: none;
-      padding: 8px 18px;
-      border-top: 1px solid var(--border);
-      background: var(--bg-2);
-      align-items: center;
-      justify-content: flex-end;
-      gap: 14px;
-    }
-    .terminal-controls.visible { display: flex; }
-    .terminal-body {
-      display: none;
-      padding: 14px 18px;
-      font-family: 'JetBrains Mono', monospace;
-      font-size: 0.78rem;
-      background: #03060e;
-      color: #4ade80;
-      max-height: 240px;
-      overflow-y: auto;
-      line-height: 1.55;
-      white-space: pre-wrap;
-      word-break: break-all;
-      border-top: 1px solid var(--border);
-    }
-    .terminal-body.visible { display: block; }
-    .log-info { color: #4ade80; }
-    .log-warn { color: #fbbf24; }
-    .log-error { color: #f87171; font-weight: 600; }
-    .log-fatal { color: #f87171; font-weight: 700; animation: blink .8s step-start infinite; }
-    @keyframes blink { 0%,100%{opacity:1} 50%{opacity:.3} }
-
-    /* ══════════════════════════════════════════════════
-       MODALS
-    ══════════════════════════════════════════════════ */
-    .modal-backdrop {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.72);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      z-index: 200;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-    }
-    .modal-backdrop.open { display: flex; }
-    .modal {
-      background: var(--surface);
-      border: 1px solid var(--border-2);
-      border-radius: var(--radius-xl);
-      width: 100%;
-      max-width: 580px;
-      max-height: 88vh;
-      overflow-y: auto;
-      box-shadow: var(--shadow-lg);
-      animation: modal-in 0.22s var(--ease);
-    }
-    @keyframes modal-in { from { opacity:0; transform:scale(.96) translateY(8px); } to { opacity:1; transform:none; } }
-    .modal__header {
-      padding: 20px 24px 16px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .modal__title { font-size: 1rem; font-weight: 700; }
-    .modal__close {
-      width: 30px; height: 30px;
-      border-radius: 50%;
-      border: none;
-      background: var(--surface-2);
-      color: var(--text-muted);
-      cursor: pointer;
-      font-size: 1rem;
-      display: flex; align-items: center; justify-content: center;
-      transition: all var(--t) var(--ease);
-    }
-    .modal__close:hover { background: var(--surface-3); color: var(--text); }
-    .modal__body { padding: 20px 24px; }
-    .modal__footer { padding: 16px 24px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 10px; }
-
-    /* Auth overlay */
-    .auth-overlay {
-      position: fixed; inset: 0;
-      background: var(--bg);
-      z-index: 1000;
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      background-image: radial-gradient(ellipse at 50% 30%, rgba(99,102,241,0.12), transparent 60%);
-    }
-    .auth-overlay.open { display: flex; }
-    .auth-card {
-      background: var(--surface);
-      border: 1px solid var(--border-acc);
-      border-radius: var(--radius-xl);
-      padding: 48px 40px;
-      width: 360px;
-      text-align: center;
-      box-shadow: var(--shadow-glow);
-    }
-    .auth-logo { font-size: 2rem; font-weight: 800; letter-spacing: -0.04em; margin-bottom: 8px; background: linear-gradient(135deg, var(--brand-light), var(--accent)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
-    .auth-sub { color: var(--text-muted); font-size: 0.875rem; margin-bottom: 32px; }
-
-    /* Stock photos */
-    .stock-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(80px, 1fr)); gap: 8px; padding: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); }
-    .stock-thumb { position: relative; cursor: pointer; }
-    .stock-thumb img { width: 100%; height: 70px; object-fit: cover; border-radius: var(--radius-sm); border: 2px solid transparent; transition: border-color var(--t) var(--ease); display: block; }
-    .stock-thumb input { position: absolute; top: 4px; left: 4px; width: auto; accent-color: var(--brand); }
-    .stock-thumb:has(input:checked) img { border-color: var(--brand); }
-
-    /* ══════════════════════════════════════════════════
-       TOAST NOTIFICATIONS
-    ══════════════════════════════════════════════════ */
-    .toast-tray {
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      z-index: 9000;
-      display: flex;
-      flex-direction: column;
-      gap: 10px;
+    .preview-thumb.processing {
       pointer-events: none;
     }
-    .toast {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      padding: 14px 18px;
-      border-radius: var(--radius-lg);
-      background: var(--surface);
-      border: 1px solid var(--border-2);
-      box-shadow: var(--shadow-lg);
-      max-width: 380px;
-      animation: toast-in 0.28s var(--ease);
-      pointer-events: auto;
-      cursor: pointer;
-    }
-    .toast.closing { animation: toast-out 0.22s var(--ease) forwards; }
-    @keyframes toast-in { from { opacity:0; transform: translateX(20px); } to { opacity:1; transform:none; } }
-    @keyframes toast-out { to { opacity:0; transform: translateX(20px); } }
-    .toast__icon { font-size: 1.1rem; flex-shrink: 0; margin-top: 1px; }
-    .toast__content { flex: 1; }
-    .toast__title { font-size: 0.875rem; font-weight: 700; margin-bottom: 2px; }
-    .toast__msg { font-size: 0.8rem; color: var(--text-muted); line-height: 1.5; }
-    .toast--success { border-color: rgba(16,185,129,0.35); }
-    .toast--error { border-color: rgba(239,68,68,0.35); }
-    .toast--warn { border-color: rgba(245,158,11,0.35); }
-    .toast--info { border-color: var(--border-acc); }
 
-    /* ══════════════════════════════════════════════════
-       LOADING OVERLAY (AI processing)
-    ══════════════════════════════════════════════════ */
-    .ai-overlay {
-      position: fixed; inset: 0;
-      background: rgba(7,11,20,0.88);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      z-index: 8000;
-      display: none;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 20px;
-    }
-    .ai-overlay.open { display: flex; }
-    .ai-ring {
-      width: 70px; height: 70px;
-      border: 3px solid rgba(99,102,241,0.15);
-      border-top-color: var(--brand);
-      border-radius: 50%;
-      animation: spin 0.9s linear infinite;
-      box-shadow: 0 0 30px var(--brand-glow);
-    }
-    .ai-status { font-size: 1.05rem; font-weight: 700; animation: breathe 1.8s ease-in-out infinite; }
-    .ai-sub { font-size: 0.875rem; color: var(--text-muted); max-width: 300px; text-align: center; }
-
-    /* ══════════════════════════════════════════════════
-       LIGHTBOX
-    ══════════════════════════════════════════════════ */
-    .lightbox {
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.93);
-      z-index: 10000;
-      display: none;
-      align-items: center;
-      justify-content: center;
-      backdrop-filter: blur(4px);
-    }
-    .lightbox.open { display: flex; }
-    .lightbox__close {
-      position: absolute;
-      top: 20px; right: 24px;
-      font-size: 2rem;
-      color: rgba(255,255,255,0.6);
-      cursor: pointer;
-      background: none;
-      border: none;
-      line-height: 1;
-      transition: color var(--t);
-    }
-    .lightbox__close:hover { color: #fff; }
-    .lightbox img {
-      max-width: 90vw;
-      max-height: 90vh;
-      border-radius: var(--radius-lg);
-      box-shadow: var(--shadow-lg);
-    }
-
-    /* ══════════════════════════════════════════════════
-       ANIMATIONS
-    ══════════════════════════════════════════════════ */
-    @keyframes spin { to { transform: rotate(360deg); } }
-    @keyframes fade-in { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
-    .fade-in { animation: fade-in 0.3s var(--ease); }
-
-    /* ══════════════════════════════════════════════════
-       RESPONSIVE
-    ══════════════════════════════════════════════════ */
-    @media (max-width: 1100px) { .listing-grid { grid-template-columns: 1fr; } }
-    @media (max-width: 900px) { .metrics-grid { grid-template-columns: repeat(3, 1fr); } }
-    @media (max-width: 700px) {
-      .sidebar { transform: translateX(-100%); }
-      .sidebar.mobile-open { transform: none; }
-      .main-wrapper { margin-left: 0; }
-      .metrics-grid { grid-template-columns: 1fr 1fr; }
-      .grid-2 { grid-template-columns: 1fr; }
-    }
-
-    /* ── Empty state ──────────────────────────────── */
-    .empty-state {
-      text-align: center;
-      padding: 48px 20px;
-      color: var(--text-dim);
-      font-size: 0.875rem;
-    }
-    .empty-state__icon { font-size: 2.5rem; margin-bottom: 12px; opacity: 0.4; }
-
-    /* ── Copy button ──────────────────────────────── */
-    .copy-btn {
-      background: transparent;
-      border: 1px solid var(--border);
-      color: var(--brand-light);
-      padding: 2px 8px;
-      border-radius: 4px;
-      font-size: 0.7rem;
-      cursor: pointer;
-      font-weight: 600;
+    /* ── Anchor navigation toolbar & sections ── */
+    .form-anchor-nav::-webkit-scrollbar { display: none; }
+    .anchor-link {
+      font-size: 0.72rem;
+      font-family: 'IBM Plex Mono', monospace;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      text-decoration: none;
+      padding: 4px 8px;
+      border-radius: 3px;
+      border: 1px solid transparent;
+      white-space: nowrap;
       transition: all var(--t) var(--ease);
     }
-    .copy-btn:hover { background: var(--brand-dim); }
+    .anchor-link:hover, .anchor-link.active {
+      color: var(--amber-bright);
+      background: var(--amber-dim);
+      border-color: var(--border-acc);
+    }
+    .form-section {
+      padding-top: 10px;
+      margin-bottom: 20px;
+      border-bottom: 1px solid rgba(255,255,255,0.05);
+      padding-bottom: 10px;
+    }
+    .form-section:last-of-type {
+      border-bottom: none;
+    }
 
-    /* ── Divider ──────────────────────────────────── */
-    .divider { height: 1px; background: var(--border); margin: 20px 0; }
+    /* ── Dropdown Category results ── */
+    .dropdown-results { display: none; }
+    .dropdown-item {
+      padding: 10px 14px;
+      font-size: 0.82rem;
+      cursor: pointer;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      transition: all var(--t) var(--ease);
+    }
+    .dropdown-item:hover {
+      background: var(--amber-dim);
+      color: var(--amber-bright);
+    }
+    .dropdown-item:last-child { border-bottom: none; }
   </style>
 </head>
 <body>
@@ -2482,17 +1408,23 @@
     </button>
 
     <span class="nav-section-label" style="margin-top:8px;">Channels</span>
-    <button class="nav-item" onclick="showToast('info','eBay','API connection managed in Settings.',3000)">
-      <span class="nav-icon" aria-hidden="true">🛒</span> eBay
+    <button class="nav-item" onclick="openOnboardingWizard('ebay')">
+      <span class="nav-icon" aria-hidden="true">🛒</span> eBay <span id="statusBadgeEbay" class="nav-badge-status status--disconnected">disconnected</span>
     </button>
-    <button class="nav-item" onclick="showToast('info','Shopify','Configure in your .env file.',3000)">
-      <span class="nav-icon" aria-hidden="true">🟢</span> Shopify
+    <button class="nav-item" onclick="openOnboardingWizard('shopify')">
+      <span class="nav-icon" aria-hidden="true">🟢</span> Shopify <span id="statusBadgeShopify" class="nav-badge-status status--disconnected">disconnected</span>
     </button>
-    <button class="nav-item" onclick="showToast('info','Etsy','Configure in your .env file.',3000)">
-      <span class="nav-icon" aria-hidden="true">🧡</span> Etsy
+    <button class="nav-item" onclick="openOnboardingWizard('etsy')">
+      <span class="nav-icon" aria-hidden="true">🧡</span> Etsy <span id="statusBadgeEtsy" class="nav-badge-status status--disconnected">disconnected</span>
     </button>
-    <button class="nav-item" onclick="showToast('info','WooCommerce','Configure in your .env file.',3000)">
-      <span class="nav-icon" aria-hidden="true">🟣</span> WooCommerce
+    <button class="nav-item" onclick="openOnboardingWizard('woocommerce')">
+      <span class="nav-icon" aria-hidden="true">🟣</span> WooCommerce <span id="statusBadgeWooCommerce" class="nav-badge-status status--disconnected">disconnected</span>
+    </button>
+    <button class="nav-item" onclick="openOnboardingWizard('poshmark')">
+      <span class="nav-icon" aria-hidden="true">🎀</span> Poshmark <span id="statusBadgePoshmark" class="nav-badge-status status--disconnected">disconnected</span>
+    </button>
+    <button class="nav-item" onclick="openOnboardingWizard('mercari')">
+      <span class="nav-icon" aria-hidden="true">🔵</span> Mercari <span id="statusBadgeMercari" class="nav-badge-status status--disconnected">disconnected</span>
     </button>
   </nav>
 
@@ -2505,11 +1437,20 @@
   </div>
 </aside>
 
+<div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeSidebar()" aria-hidden="true"></div>
+
 <!-- ═══════════════════════════════════════════════ MAIN -->
 <div class="main-wrapper">
 
   <!-- Topbar -->
   <header class="topbar" role="banner">
+    <button class="sidebar-toggle" id="sidebarToggle" onclick="toggleSidebar()" aria-label="Toggle navigation menu" aria-expanded="false">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <line x1="3" y1="12" x2="21" y2="12"></line>
+        <line x1="3" y1="6" x2="21" y2="6"></line>
+        <line x1="3" y1="18" x2="21" y2="18"></line>
+      </svg>
+    </button>
     <span class="topbar__title" id="topbarTitle">New Listing</span>
     <div class="topbar__right">
       <div class="status-badge" id="apiStatusBadge" role="status" aria-live="polite">
@@ -2551,6 +1492,13 @@
           </div>
 
           <div class="preview-grid" id="previewContainer" role="list" aria-label="Uploaded photos"></div>
+
+          <div style="margin-top: 14px; margin-bottom: 2px;">
+            <label style="display: inline-flex; align-items: center; gap: 8px; font-size: 0.8rem; cursor: pointer; user-select: none; font-family: 'Outfit', sans-serif;">
+              <input type="checkbox" id="autoSpruceToggle" style="width: auto; width: 14px; height: 14px; accent-color: var(--amber);" checked />
+              <span><strong>Auto-Spruce on upload</strong> (AI background removal & color correction)</span>
+            </label>
+          </div>
 
           <div class="divider"></div>
 
@@ -2606,6 +1554,32 @@
             <textarea id="notesInput" rows="3" placeholder="Describe scratches, defects, size, colour, anything extra for the AI…"></textarea>
           </div>
 
+          <div class="form-group">
+            <div class="field-label">
+              <label for="personaInput">AI Copywriting Persona</label>
+            </div>
+            <select id="personaInput" style="width:100%;">
+              <option value="standard" selected>Standard (SEO-Optimized)</option>
+              <option value="luxury">Luxury (Polished & Authentic)</option>
+              <option value="friendly">Friendly (Warm & Casual)</option>
+              <option value="vintage">Vintage (Detailed & Collector-focused)</option>
+              <option value="discount">Discount Warehouse (Direct & Value)</option>
+            </select>
+          </div>
+
+          <div class="form-group">
+            <div class="field-label">
+              <label for="templateInput">HTML Description Template</label>
+            </div>
+            <select id="templateInput" style="width:100%;">
+              <option value="classic" selected>Classic Paragraph & Bullets</option>
+              <option value="sleek_grid">Sleek Product Grid (Table)</option>
+              <option value="vintage_accordion">Vintage Accordion Sections</option>
+              <option value="minimalist">Minimalist Clean Whitespace</option>
+              <option value="tech_dark">Tech Dark Terminal Layout</option>
+            </select>
+          </div>
+
           <button class="btn btn--primary btn--full" id="analyzeBtn" onclick="runAnalysis()">
             <span id="analyzeBtnIcon">⚡</span>
             <span id="analyzeBtnLabel">Run AI Listing Generator</span>
@@ -2639,181 +1613,292 @@
             </div>
           </div>
         </div>
+
+        <!-- Sell Similar card -->
+        <div class="card" style="margin-top: 0px;">
+          <div class="card__title">
+            <span class="card__title-dot" style="background-color: var(--amber);"></span>
+            Sell Similar (Import eBay Listing)
+          </div>
+          <div class="form-group" style="margin-bottom: 12px;">
+            <div class="field-label">
+              <label for="ebayImportInput">eBay URL or 12-digit Item ID</label>
+            </div>
+            <input type="text" id="ebayImportInput" placeholder="e.g., https://www.ebay.com/itm/123456789012" style="width: 100%;" autocomplete="off" />
+          </div>
+          <button class="btn btn--secondary btn--full" id="ebayImportBtn" onclick="runEbayImport()">
+            📥 Import Listing Details
+          </button>
+        </div>
       </div>
 
       <!-- RIGHT: Listing form -->
       <div class="card" id="formContainer" style="opacity:0.55;transition:opacity .4s var(--ease);" aria-label="Listing details form">
-        <div class="card__title">
-          <span class="card__title-dot"></span>
-          Listing Details
-          <span id="draftSkuLabel" style="font-size:0.7rem;color:var(--amber);font-weight:700;margin-left:8px;text-transform:none;letter-spacing:0;"></span>
-        </div>
-
-        <!-- Title -->
-        <div class="form-group">
-          <div class="field-label">
-            <label for="title">SEO Title</label>
-            <span class="field-meta" id="titleCharCount">0 / 80</span>
+        <div class="card__title" style="display:flex; justify-content:space-between; align-items:center;">
+          <div>
+            <span class="card__title-dot"></span>
+            Listing Details
+            <span id="draftSkuLabel" style="font-size:0.7rem;color:var(--amber);font-weight:700;margin-left:8px;text-transform:none;letter-spacing:0;"></span>
           </div>
-          <input type="text" id="title" maxlength="80" disabled oninput="updateTitleCharCount()" autocomplete="off" />
-        </div>
-
-        <!-- Category -->
-        <div class="form-group">
-          <div class="field-label"><label for="categoryId">eBay Category</label></div>
-          <select id="categoryId" disabled>
-            <option value="">Run AI first…</option>
-          </select>
-        </div>
-
-        <!-- Price + Condition -->
-        <div class="grid-2">
-          <div class="form-group">
-            <div class="field-label"><label for="price">Price ($)</label></div>
-            <input type="number" id="price" step="0.01" min="0.01" disabled />
-            <!-- Comps -->
-            <div class="comps-bar" id="compsBar" role="status">
-              <span class="label">Comps:</span>
-              <span class="val" id="compMin">$—</span>
-              <span class="sep">·</span>
-              <span class="avg-val" id="compAvg" title="Click to use this price" tabindex="0">$—</span>
-              <span class="sep">·</span>
-              <span class="val" id="compMax">$—</span>
-            </div>
-            <div class="comps-canvas-wrap">
-              <canvas id="compsChart" width="400" height="140" aria-label="Market price comparison chart"></canvas>
-            </div>
-            <!-- Presets -->
-            <div class="preset-group" role="group" aria-label="Price presets">
-              <button class="preset-btn" id="presetFastBtn" onclick="applyPricePreset(0.9)" disabled>Fast (−10%)</button>
-              <button class="preset-btn active" id="presetMarketBtn" onclick="applyPricePreset(1.0)" disabled>Market</button>
-              <button class="preset-btn" id="presetPremiumBtn" onclick="applyPricePreset(1.1)" disabled>Premium (+10%)</button>
-            </div>
-          </div>
-          <div class="form-group">
-            <div class="field-label"><label for="condition">Condition</label></div>
-            <select id="condition" disabled>
-              <option value="NEW">New</option>
-              <option value="USED_EXCELLENT">Used — Like New</option>
-              <option value="USED_VERY_GOOD">Used — Very Good</option>
-              <option value="USED_GOOD">Used — Good</option>
-              <option value="FOR_PARTS_OR_NOT_WORKING">For Parts / Repair</option>
+          <!-- Template selector -->
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <select id="listingTemplateSelect" onchange="loadTemplateSelected()" disabled style="font-size: 0.72rem; padding: 4px 8px; width: auto; height: auto;">
+              <option value="">-- Load Template --</option>
             </select>
+            <button class="btn btn--secondary btn--xs" onclick="saveAsTemplate()" id="saveTemplateBtn" disabled>Save As Preset</button>
           </div>
         </div>
 
-        <!-- Brand + Model -->
-        <div class="grid-2">
-          <div class="form-group">
-            <div class="field-label"><label for="brand">Brand</label></div>
-            <input type="text" id="brand" disabled autocomplete="off" />
-            <div id="veroWarningAlert" style="color: #ef4444; font-size: 0.85rem; font-weight: bold; margin-top: 4px; display: none;">⚠️ Warning: VeRO High-Risk Brand! Listing may be removed by eBay.</div>
+        <!-- Completeness Indicator -->
+        <div id="completenessContainer" style="margin-top: 12px; margin-bottom: 12px; display: none;">
+          <div style="display: flex; justify-content: space-between; font-size: 0.72rem; color: var(--text-muted); margin-bottom: 4px; font-family: 'IBM Plex Mono', monospace;">
+            <span>Listing Completeness</span>
+            <span id="completenessLabel">0 of 9 fields ready</span>
           </div>
-          <div class="form-group">
-            <div class="field-label"><label for="model">Model / MPN</label></div>
-            <input type="text" id="model" disabled autocomplete="off" />
+          <div style="height: 6px; background: var(--surface-3); border-radius: 3px; overflow: hidden; border: 1px solid var(--border);">
+            <div id="completenessFill" style="height: 100%; width: 0%; background: var(--signal-green); transition: width 0.3s ease;"></div>
           </div>
         </div>
 
-        <!-- Weight + Dimensions -->
-        <div class="grid-2">
+        <!-- Anchor Navigation Toolbar -->
+        <div class="form-anchor-nav" style="position: sticky; top: 0; background: var(--surface); z-index: 10; display: flex; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--border); overflow-x: auto; margin-bottom: 15px;">
+          <a href="#sec-details" class="anchor-link active" onclick="scrollToAnchor(event, 'sec-details')">Details</a>
+          <a href="#sec-pricing" class="anchor-link" onclick="scrollToAnchor(event, 'sec-pricing')">Pricing &amp; Qty</a>
+          <a href="#sec-shipping" class="anchor-link" onclick="scrollToAnchor(event, 'sec-shipping')">Shipping</a>
+          <a href="#sec-aspects" class="anchor-link" onclick="scrollToAnchor(event, 'sec-aspects')">Specifics</a>
+          <a href="#sec-description" class="anchor-link" onclick="scrollToAnchor(event, 'sec-description')">Description</a>
+        </div>
+
+        <!-- Section 1: Details -->
+        <div id="sec-details" class="form-section">
+          <!-- Title -->
           <div class="form-group">
-            <div class="field-label"><label>Weight</label></div>
-            <div style="display:flex;gap:8px;">
-              <input type="number" id="weightLbs" placeholder="lbs" min="0" disabled />
-              <input type="number" id="weightOz" placeholder="oz" min="0" max="15" disabled />
+            <div class="field-label">
+              <label for="title">SEO Title</label>
+              <span class="field-meta" id="titleCharCount">0 / 80</span>
+            </div>
+            <input type="text" id="title" maxlength="80" disabled oninput="updateTitleCharCount(); updateCompletenessIndicator();" autocomplete="off" />
+          </div>
+
+          <!-- Category Type-Ahead -->
+          <div class="form-group" style="position: relative;">
+            <div class="field-label">
+              <label for="categorySearchInput">eBay Category</label>
+              <span id="categoryLabelBadge" style="font-size:0.75rem; color:var(--amber-bright); font-family: 'IBM Plex Mono', monospace;"></span>
+            </div>
+            <input type="text" id="categorySearchInput" placeholder="Search categories..." disabled oninput="debounceCategorySearch()" autocomplete="off" />
+            <select id="categoryId" disabled style="display: none;">
+              <option value="">Run AI first…</option>
+            </select>
+            <div id="categorySearchResults" class="dropdown-results" style="display: none; position: absolute; left: 0; right: 0; z-index: 100; max-height: 200px; overflow-y: auto; background: var(--surface); border: 1px solid var(--border-acc); border-radius: var(--radius); margin-top: 4px; box-shadow: var(--shadow-lg);"></div>
+          </div>
+        </div>
+
+        <!-- Section 2: Pricing & Condition -->
+        <div id="sec-pricing" class="form-section">
+          <!-- Price + Condition + Quantity -->
+          <div class="grid-3">
+            <div class="form-group">
+              <div class="field-label"><label for="price">Price ($)</label></div>
+              <input type="number" id="price" step="0.01" min="0.01" disabled oninput="updateCompletenessIndicator()" />
+              <!-- Comps -->
+              <div class="comps-bar" id="compsBar" role="status">
+                <span class="label">Comps:</span>
+                <span class="val" id="compMin">$—</span>
+                <span class="sep">·</span>
+                <span class="avg-val" id="compAvg" title="Click to use this price" tabindex="0">$—</span>
+                <span class="sep">·</span>
+                <span class="val" id="compMax">$—</span>
+              </div>
+              <div class="comps-canvas-wrap">
+                <canvas id="compsChart" width="400" height="140" aria-label="Market price comparison chart"></canvas>
+              </div>
+              <!-- Presets -->
+              <div class="preset-group" role="group" aria-label="Price presets">
+                <button class="preset-btn" id="presetFastBtn" onclick="applyPricePreset(0.9)" disabled>Fast (−10%利润)</button>
+                <button class="preset-btn active" id="presetMarketBtn" onclick="applyPricePreset(1.0)" disabled>Market</button>
+                <button class="preset-btn" id="presetPremiumBtn" onclick="applyPricePreset(1.1)" disabled>Premium (+10%)</button>
+              </div>
+            </div>
+            <div class="form-group">
+              <div class="field-label"><label for="condition">Condition</label></div>
+              <select id="condition" disabled onchange="updateCompletenessIndicator(); handleConditionChangeWarn();">
+                <option value="NEW">New</option>
+                <option value="USED_EXCELLENT">Used — Like New</option>
+                <option value="USED_VERY_GOOD">Used — Very Good</option>
+                <option value="USED_GOOD">Used — Good</option>
+                <option value="FOR_PARTS_OR_NOT_WORKING">For Parts / Repair</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <div class="field-label"><label for="quantity">Quantity</label></div>
+              <input type="number" id="quantity" min="1" value="1" disabled oninput="updateCompletenessIndicator()" />
             </div>
           </div>
-          <div class="form-group">
-            <div class="field-label"><label>Dimensions (in)</label></div>
-            <div style="display:flex;gap:6px;">
-              <input type="number" id="dimL" placeholder="L" min="1" disabled />
-              <input type="number" id="dimW" placeholder="W" min="1" disabled />
-              <input type="number" id="dimH" placeholder="H" min="1" disabled />
+
+          <!-- Brand + Model -->
+          <div class="grid-2">
+            <div class="form-group">
+              <div class="field-label"><label for="brand">Brand</label></div>
+              <input type="text" id="brand" disabled autocomplete="off" oninput="updateCompletenessIndicator()" />
+              <div id="veroWarningAlert" style="color: #ef4444; font-size: 0.85rem; font-weight: bold; margin-top: 4px; display: none;">⚠️ Warning: VeRO High-Risk Brand! Listing may be removed by eBay.</div>
+            </div>
+            <div class="form-group">
+              <div class="field-label"><label for="model">Model / MPN</label></div>
+              <input type="text" id="model" disabled autocomplete="off" />
             </div>
           </div>
         </div>
 
-        <!-- Shipping + Returns + Payment Custom Policies -->
-        <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
-          <div class="form-group">
-            <div class="field-label"><label for="shippingOption">Shipping Policy</label></div>
-            <select id="shippingOption" disabled style="width:100%;">
-              <optgroup label="Default Presets" id="shippingPresets">
-                <option value="USPS_GROUND">Calculated USPS Ground</option>
-                <option value="USPS_PRIORITY">Calculated USPS Priority</option>
-                <option value="UPS_GROUND">Calculated UPS Ground</option>
-                <option value="FLAT_RATE_STANDARD">Flat Rate ($5.00)</option>
-              </optgroup>
-              <optgroup label="eBay Business Policies" id="ebayShippingPolicies" style="display:none;"></optgroup>
-            </select>
-          </div>
-          <div class="form-group">
-            <div class="field-label"><label for="returnOption">Return Policy</label></div>
-            <select id="returnOption" disabled style="width:100%;">
-              <optgroup label="Default Presets" id="returnPresets">
-                <option value="NO_RETURNS">No Returns</option>
-                <option value="30_DAYS_BUYER_PAYS">30-Day (Buyer Pays)</option>
-                <option value="30_DAYS_FREE">30-Day Free Returns</option>
-              </optgroup>
-              <optgroup label="eBay Business Policies" id="ebayReturnPolicies" style="display:none;"></optgroup>
-            </select>
-          </div>
-          <div class="form-group">
-            <div class="field-label"><label for="paymentOption">Payment Policy</label></div>
-            <select id="paymentOption" disabled style="width:100%;">
-              <option value="AUTO">Auto (Use Switch Below)</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Cross-post toggles -->
-        <div class="form-group">
-          <div class="field-label"><label>Publish To</label></div>
-          <div class="platform-toggles" role="group" aria-label="Cross-posting platforms">
-            <label class="platform-toggle">
-              <input type="checkbox" id="immediatePayment" checked disabled /> 💳 Immediate Payment
-            </label>
-            <label class="platform-toggle">
-              <input type="checkbox" id="crossPostShopify" disabled /> 🟢 Shopify
-            </label>
-            <label class="platform-toggle">
-              <input type="checkbox" id="crossPostWooCommerce" disabled /> 🟣 WooCommerce
-            </label>
-            <label class="platform-toggle">
-              <input type="checkbox" id="crossPostEtsy" disabled /> 🧡 Etsy
-            </label>
-          </div>
-        </div>
-
-        <!-- Stock photos -->
-        <div class="form-group" id="stockPhotosGroup" style="display:none;">
-          <div class="field-label"><label>Catalog Stock Photos</label></div>
-          <div class="stock-grid" id="stockPhotosContainer"></div>
-        </div>
-
-        <!-- Aspects -->
-        <div class="form-group">
-          <div class="field-label">
-            <label>Item Specifics</label>
-            <button class="btn btn--ghost btn--xs" id="addAspectBtn" onclick="addAspectRow()" disabled>+ Add</button>
-          </div>
-          <div class="aspects-container" id="aspectsContainer">
-            <p style="color:var(--text-dim);font-size:0.8rem;text-align:center;padding:12px 0;">Run AI analysis to populate aspects</p>
-          </div>
-        </div>
-
-        <!-- Description -->
-        <div class="form-group">
-          <div class="field-label">
-            <label>SEO Description (HTML)</label>
-            <div class="tab-group" role="tablist">
-              <button class="tab-pill active" id="descEditTab" role="tab" aria-selected="true" onclick="switchDescTab('edit')" disabled>Source</button>
-              <button class="tab-pill" id="descPreviewTab" role="tab" aria-selected="false" onclick="switchDescTab('preview')" disabled>Preview</button>
+        <!-- Section 3: Shipping -->
+        <div id="sec-shipping" class="form-section">
+          <!-- Weight + Dimensions -->
+          <div class="grid-2">
+            <div class="form-group">
+              <div class="field-label"><label>Weight</label></div>
+              <div style="display:flex;gap:8px;">
+                <input type="number" id="weightLbs" placeholder="lbs" min="0" disabled oninput="updateCompletenessIndicator()" />
+                <input type="number" id="weightOz" placeholder="oz" min="0" max="15" disabled oninput="updateCompletenessIndicator()" />
+              </div>
+            </div>
+            <div class="form-group">
+              <div class="field-label"><label>Dimensions (in)</label></div>
+              <div style="display:flex;gap:6px;">
+                <input type="number" id="dimL" placeholder="L" min="1" disabled oninput="updateCompletenessIndicator()" />
+                <input type="number" id="dimW" placeholder="W" min="1" disabled oninput="updateCompletenessIndicator()" />
+                <input type="number" id="dimH" placeholder="H" min="1" disabled oninput="updateCompletenessIndicator()" />
+              </div>
             </div>
           </div>
-          <textarea id="description" rows="6" disabled></textarea>
-          <div id="descriptionPreviewBox" class="desc-preview" role="region" aria-label="Description preview"></div>
+
+          <!-- Shipping + Returns + Payment Custom Policies -->
+          <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px;">
+            <div class="form-group">
+              <div class="field-label"><label for="shippingOption">Shipping Policy</label></div>
+              <select id="shippingOption" disabled style="width:100%;">
+                <optgroup label="Default Presets" id="shippingPresets">
+                  <option value="USPS_GROUND">Calculated USPS Ground</option>
+                  <option value="USPS_PRIORITY">Calculated USPS Priority</option>
+                  <option value="UPS_GROUND">Calculated UPS Ground</option>
+                  <option value="FLAT_RATE_STANDARD">Flat Rate ($5.00)</option>
+                </optgroup>
+                <optgroup label="eBay Business Policies" id="ebayShippingPolicies" style="display:none;"></optgroup>
+              </select>
+              <!-- Shipping Type Toggle -->
+              <div style="margin-top: 8px;">
+                <select id="shippingType" disabled style="font-size:0.75rem; padding:6px; height:auto;" onchange="handleShippingTypeChange()">
+                  <option value="CALCULATED" selected>Calculated Rate</option>
+                  <option value="FLAT">Flat Rate ($5.00)</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-group">
+              <div class="field-label"><label for="returnOption">Return Policy</label></div>
+              <select id="returnOption" disabled style="width:100%;">
+                <optgroup label="Default Presets" id="returnPresets">
+                  <option value="NO_RETURNS">No Returns</option>
+                  <option value="30_DAYS_BUYER_PAYS">30-Day (Buyer Pays)</option>
+                  <option value="30_DAYS_FREE">30-Day Free Returns</option>
+                </optgroup>
+                <optgroup label="eBay Business Policies" id="ebayReturnPolicies" style="display:none;"></optgroup>
+              </select>
+            </div>
+            <div class="form-group">
+              <div class="field-label"><label for="paymentOption">Payment Policy</label></div>
+              <select id="paymentOption" disabled style="width:100%;">
+                <option value="AUTO">Auto (Use Switch Below)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Marketing & Compliance Optimization -->
+          <div class="form-group">
+            <div class="field-label"><label>Marketing &amp; Compliance</label></div>
+            <div class="platform-toggles" style="grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 8px;">
+              <label class="platform-toggle" style="justify-content: flex-start; gap: 8px;">
+                <input type="checkbox" id="bestOfferEnabled" onchange="toggleBestOfferFields()" disabled /> 🏷️ Best Offer
+              </label>
+              <label class="platform-toggle" style="justify-content: flex-start; gap: 8px;">
+                <input type="checkbox" id="promoteEnabled" onchange="togglePromoteFields()" disabled /> 📈 Ad Campaign
+              </label>
+              <label class="platform-toggle" style="justify-content: flex-start; gap: 8px;">
+                <input type="checkbox" id="genericizeVero" disabled /> 🛡️ Safe VeRO Clean
+              </label>
+            </div>
+            
+            <div id="bestOfferFields" style="display: none; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; margin-bottom: 10px; transition: all 0.3s ease;">
+              <div class="form-group" style="margin-bottom: 0;">
+                <div class="field-label" style="font-size: 0.75rem;"><label for="autoAcceptPrice">Auto-Accept Price ($)</label></div>
+                <input type="number" id="autoAcceptPrice" placeholder="Min to accept" step="0.01" style="font-size: 0.8rem; padding: 6px;" />
+              </div>
+              <div class="form-group" style="margin-bottom: 0;">
+                <div class="field-label" style="font-size: 0.75rem;"><label for="autoDeclinePrice">Auto-Decline Price ($)</label></div>
+                <input type="number" id="autoDeclinePrice" placeholder="Min to decline" step="0.01" style="font-size: 0.8rem; padding: 6px;" />
+              </div>
+            </div>
+
+            <div id="promoteFields" style="display: none; margin-top: 10px; margin-bottom: 10px; transition: all 0.3s ease;">
+              <div class="form-group" style="margin-bottom: 0;">
+                <div class="field-label" style="font-size: 0.75rem;"><label for="bidPercentage">Ad Campaign Bid Rate (%)</label></div>
+                <input type="number" id="bidPercentage" placeholder="Ad Rate % (default 2.0)" step="0.1" min="1.0" max="100.0" value="2.0" style="font-size: 0.8rem; padding: 6px; width: 100%;" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Cross-post toggles -->
+          <div class="form-group">
+            <div class="field-label"><label>Publish To</label></div>
+            <div class="platform-toggles" role="group" aria-label="Cross-posting platforms">
+              <label class="platform-toggle">
+                <input type="checkbox" id="immediatePayment" checked disabled /> 💳 Immediate Payment
+              </label>
+              <label class="platform-toggle">
+                <input type="checkbox" id="crossPostShopify" disabled /> 🟢 Shopify
+              </label>
+              <label class="platform-toggle">
+                <input type="checkbox" id="crossPostWooCommerce" disabled /> 🟣 WooCommerce
+              </label>
+              <label class="platform-toggle">
+                <input type="checkbox" id="crossPostEtsy" disabled /> 🧡 Etsy
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 4: Item Specifics -->
+        <div id="sec-aspects" class="form-section">
+          <!-- Stock photos -->
+          <div class="form-group" id="stockPhotosGroup" style="display:none;">
+            <div class="field-label"><label>Catalog Stock Photos</label></div>
+            <div class="stock-grid" id="stockPhotosContainer"></div>
+          </div>
+
+          <!-- Aspects -->
+          <div class="form-group">
+            <div class="field-label">
+              <label>Item Specifics</label>
+              <button class="btn btn--ghost btn--xs" id="addAspectBtn" onclick="addAspectRow()" disabled>+ Add</button>
+            </div>
+            <div class="aspects-container" id="aspectsContainer">
+              <p style="color:var(--text-dim);font-size:0.8rem;text-align:center;padding:12px 0;">Run AI analysis to populate aspects</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 5: Description -->
+        <div id="sec-description" class="form-section">
+          <!-- Description -->
+          <div class="form-group">
+            <div class="field-label">
+              <label>SEO Description (HTML)</label>
+              <div class="tab-group" role="tablist">
+                <button class="tab-pill active" id="descEditTab" role="tab" aria-selected="true" onclick="switchDescTab('edit')" disabled>Source</button>
+                <button class="tab-pill" id="descPreviewTab" role="tab" aria-selected="false" onclick="switchDescTab('preview')" disabled>Preview</button>
+              </div>
+            </div>
+            <textarea id="description" rows="6" disabled oninput="updateCompletenessIndicator()"></textarea>
+            <div id="descriptionPreviewBox" class="desc-preview" role="region" aria-label="Description preview"></div>
+          </div>
         </div>
 
         <!-- Publish buttons -->
@@ -2894,6 +1979,30 @@
         <span class="metric-label">Ended</span>
         <span class="metric-value metric-value--red" id="metricEndedItems">0</span>
         <span class="metric-sub">withdrawn</span>
+      </div>
+    </div>
+
+    <!-- Marketing Campaign performance -->
+    <div class="card" id="marketingCampaignsCard" style="margin-bottom: 24px; display: none;">
+      <div class="card__title">
+        <span class="card__title-dot" style="background-color: var(--blue);"></span>
+        Active eBay Promoted Listings Campaigns
+      </div>
+      <div class="table-wrap">
+        <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.9rem;">
+          <thead>
+            <tr style="border-bottom: 2px solid var(--border); color: var(--text-dim);">
+              <th style="padding: 10px;">Campaign Name</th>
+              <th style="padding: 10px;">Marketplace</th>
+              <th style="padding: 10px;">Ad Rate</th>
+              <th style="padding: 10px;">Funding Model</th>
+              <th style="padding: 10px; text-align: right;">Status</th>
+            </tr>
+          </thead>
+          <tbody id="marketingCampaignsTableBody">
+            <!-- Dynamic rows -->
+          </tbody>
+        </table>
       </div>
     </div>
 
@@ -3187,6 +2296,151 @@
   </div>
 </div>
 
+<!-- Onboarding Wizard Modal -->
+<div class="modal-backdrop" id="onboardingModal" role="dialog" aria-modal="true" aria-labelledby="onboardingModalTitle">
+  <div class="modal" style="max-width: 680px; width: 95%; max-height: 85vh; display: flex; flex-direction: column;">
+    <div class="modal__header">
+      <span class="modal__title" id="onboardingModalTitle">🚀 Multi-Channel Onboarding Wizard</span>
+      <button class="modal__close" onclick="closeOnboardingModal()" aria-label="Close">×</button>
+    </div>
+    <div class="modal__body" style="overflow-y: auto; flex: 1;">
+      <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 16px;">
+        Integrate your channels below. Once you click save, your credentials will sync to the server's environment configuration immediately.
+      </p>
+      
+      <!-- Tabs header -->
+      <div style="display: flex; gap: 8px; border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 8px; margin-bottom: 16px; overflow-x: auto;">
+        <button class="tab-pill active" onclick="switchOnboardingTab('ebay')" id="onbTab-ebay">eBay</button>
+        <button class="tab-pill" onclick="switchOnboardingTab('shopify')" id="onbTab-shopify">Shopify</button>
+        <button class="tab-pill" onclick="switchOnboardingTab('woocommerce')" id="onbTab-woocommerce">WooCommerce</button>
+        <button class="tab-pill" onclick="switchOnboardingTab('etsy')" id="onbTab-etsy">Etsy</button>
+        <button class="tab-pill" onclick="switchOnboardingTab('poshmark')" id="onbTab-poshmark">Poshmark</button>
+        <button class="tab-pill" onclick="switchOnboardingTab('mercari')" id="onbTab-mercari">Mercari</button>
+      </div>
+
+      <!-- Tab Content: eBay -->
+      <div class="onboarding-tab-content" id="onbContent-ebay">
+        <h3 style="color:var(--amber-bright); font-size:1.05rem; margin-bottom:8px;">eBay Integration Guide</h3>
+        <ol style="margin-left: 20px; font-size: 0.85rem; line-height: 1.5; margin-bottom: 16px;">
+          <li>Create or log in to your <a href="https://developer.ebay.com" target="_blank" style="color: var(--amber-bright); text-decoration: underline;">eBay Developer Account</a>.</li>
+          <li>Under <strong>Application Keys</strong>, generate <strong>Production</strong> keys.</li>
+          <li>Copy the <strong>App ID (Client ID)</strong> and <strong>Cert ID (Client Secret)</strong> and paste them below.</li>
+          <li>Set your redirect URI to: <code style="background: rgba(255,255,255,0.05); padding: 2px 4px;">http://localhost:45911/api/auth/google/callback</code>.</li>
+        </ol>
+        <div class="form-group">
+          <label>eBay Client ID (App ID)</label>
+          <input type="text" id="onb-ebay-client-id" placeholder="Enter Client ID..." style="width: 100%; margin-top: 4px;" />
+        </div>
+        <div class="form-group" style="margin-top:10px;">
+          <label>eBay Client Secret (Cert ID)</label>
+          <input type="text" id="onb-ebay-client-secret" placeholder="Enter Client Secret..." style="width: 100%; margin-top: 4px;" />
+        </div>
+        <div class="form-group" style="margin-top:10px;">
+          <label>eBay User Refresh Token</label>
+          <textarea id="onb-ebay-refresh-token" rows="3" placeholder="Enter long refresh token..." style="width: 100%; margin-top: 4px;"></textarea>
+        </div>
+        <button class="btn btn--primary" onclick="savePlatformCredentials('ebay')" style="margin-top:12px;">Save eBay Credentials</button>
+      </div>
+
+      <!-- Tab Content: Shopify -->
+      <div class="onboarding-tab-content" id="onbContent-shopify" style="display:none;">
+        <h3 style="color:var(--amber-bright); font-size:1.05rem; margin-bottom:8px;">Shopify Integration Guide</h3>
+        <ol style="margin-left: 20px; font-size: 0.85rem; line-height: 1.5; margin-bottom: 16px;">
+          <li>Log in to your Shopify Admin and go to <strong>Settings ➔ Apps and sales channels ➔ Develop apps</strong>.</li>
+          <li>Click <strong>Create an app</strong> and name it "eBay Lister Pro".</li>
+          <li>Under <strong>Admin API integration</strong>, select scopes: <code style="background:rgba(255,255,255,0.05);">write_products, read_products, write_inventory, read_inventory</code>.</li>
+          <li>Install the app and copy your <strong>Admin API Access Token</strong> (starts with <code style="background:rgba(255,255,255,0.05);">shpat_</code>).</li>
+        </ol>
+        <div class="form-group">
+          <label>Shopify Store Subdomain</label>
+          <input type="text" id="onb-shopify-shop-name" placeholder="my-shop (from my-shop.myshopify.com)" style="width: 100%; margin-top: 4px;" />
+        </div>
+        <div class="form-group" style="margin-top:10px;">
+          <label>Admin API Access Token</label>
+          <input type="password" id="onb-shopify-access-token" placeholder="shpat_..." style="width: 100%; margin-top: 4px;" />
+        </div>
+        <button class="btn btn--primary" onclick="savePlatformCredentials('shopify')" style="margin-top:12px;">Save Shopify Credentials</button>
+      </div>
+
+      <!-- Tab Content: WooCommerce -->
+      <div class="onboarding-tab-content" id="onbContent-woocommerce" style="display:none;">
+        <h3 style="color:var(--amber-bright); font-size:1.05rem; margin-bottom:8px;">WooCommerce Integration Guide</h3>
+        <ol style="margin-left: 20px; font-size: 0.85rem; line-height: 1.5; margin-bottom: 16px;">
+          <li>Go to WordPress Admin ➔ <strong>WooCommerce ➔ Settings ➔ Advanced ➔ REST API</strong>.</li>
+          <li>Click <strong>Add key</strong>, select Description: "Lister Pro", Permissions: <strong>Read/Write</strong>.</li>
+          <li>Generate and copy the <strong>Consumer Key</strong> (<code style="background:rgba(255,255,255,0.05);">ck_...</code>) and <strong>Consumer Secret</strong> (<code style="background:rgba(255,255,255,0.05);">cs_...</code>).</li>
+        </ol>
+        <div class="form-group">
+          <label>WooCommerce Store URL</label>
+          <input type="text" id="onb-woocommerce-url" placeholder="https://your-wordpress-site.com" style="width: 100%; margin-top: 4px;" />
+        </div>
+        <div class="form-group" style="margin-top:10px;">
+          <label>Consumer Key</label>
+          <input type="text" id="onb-woocommerce-key" placeholder="ck_..." style="width: 100%; margin-top: 4px;" />
+        </div>
+        <div class="form-group" style="margin-top:10px;">
+          <label>Consumer Secret</label>
+          <input type="password" id="onb-woocommerce-secret" placeholder="cs_..." style="width: 100%; margin-top: 4px;" />
+        </div>
+        <button class="btn btn--primary" onclick="savePlatformCredentials('woocommerce')" style="margin-top:12px;">Save WooCommerce Credentials</button>
+      </div>
+
+      <!-- Tab Content: Etsy -->
+      <div class="onboarding-tab-content" id="onbContent-etsy" style="display:none;">
+        <h3 style="color:var(--amber-bright); font-size:1.05rem; margin-bottom:8px;">Etsy Integration Guide</h3>
+        <ol style="margin-left: 20px; font-size: 0.85rem; line-height: 1.5; margin-bottom: 16px;">
+          <li>Navigate to <a href="https://www.etsy.com/developers/your-apps" target="_blank" style="color:var(--amber-bright); text-decoration:underline;">Etsy Developers Console</a>.</li>
+          <li>Register a new app to obtain your **API Keystring (Client ID)**.</li>
+          <li>Copy your **Shop ID** from your Etsy shop info.</li>
+        </ol>
+        <div class="form-group">
+          <label>Etsy Shop ID</label>
+          <input type="text" id="onb-etsy-shop-id" placeholder="Enter Shop ID..." style="width: 100%; margin-top: 4px;" />
+        </div>
+        <div class="form-group" style="margin-top:10px;">
+          <label>Etsy Access Token</label>
+          <input type="password" id="onb-etsy-access-token" placeholder="Enter Access Token..." style="width: 100%; margin-top: 4px;" />
+        </div>
+        <div class="form-group" style="margin-top:10px;">
+          <label>Etsy API Key (Client ID)</label>
+          <input type="text" id="onb-etsy-client-id" placeholder="Enter API Keystring..." style="width: 100%; margin-top: 4px;" />
+        </div>
+        <button class="btn btn--primary" onclick="savePlatformCredentials('etsy')" style="margin-top:12px;">Save Etsy Credentials</button>
+      </div>
+
+      <!-- Tab Content: Poshmark -->
+      <div class="onboarding-tab-content" id="onbContent-poshmark" style="display:none;">
+        <h3 style="color:var(--amber-bright); font-size:1.05rem; margin-bottom:8px;">Poshmark Extension Guide</h3>
+        <p style="font-size: 0.85rem; line-height: 1.5; margin-bottom: 12px;">
+          Poshmark listings are automated via the Chrome Extension. No API credentials are required.
+        </p>
+        <ol style="margin-left: 20px; font-size: 0.85rem; line-height: 1.5; margin-bottom: 16px;">
+          <li>Open <a href="https://poshmark.com/login" target="_blank" style="color: var(--amber-bright); text-decoration: underline;">Poshmark Login Page</a>.</li>
+          <li>Log in to your account.</li>
+          <li>The extension companion will automatically link and display a green connection status. You can now use the extension to scrape or autofill listing forms!</li>
+        </ol>
+      </div>
+
+      <!-- Tab Content: Mercari -->
+      <div class="onboarding-tab-content" id="onbContent-mercari" style="display:none;">
+        <h3 style="color:var(--amber-bright); font-size:1.05rem; margin-bottom:8px;">Mercari Extension Guide</h3>
+        <p style="font-size: 0.85rem; line-height: 1.5; margin-bottom: 12px;">
+          Mercari listings are automated via the Chrome Extension. No API credentials are required.
+        </p>
+        <ol style="margin-left: 20px; font-size: 0.85rem; line-height: 1.5; margin-bottom: 16px;">
+          <li>Open <a href="https://www.mercari.com/" target="_blank" style="color: var(--amber-bright); text-decoration: underline;">Mercari Page</a>.</li>
+          <li>Log in to your account.</li>
+          <li>The extension companion will automatically link and display a green connection status in the sidebar.</li>
+        </ol>
+      </div>
+
+    </div>
+    <div class="modal__footer">
+      <button class="btn btn--secondary" onclick="closeOnboardingModal()">Close Wizard</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════════════════════════════════════ AI OVERLAY -->
 <div class="ai-overlay" id="aiOverlay" role="status" aria-live="assertive">
   <div class="ai-ring" aria-hidden="true"></div>
@@ -3210,6 +2464,7 @@
 
   /* ── State ─────────────────────────────────────── */
   let uploadedBase64Files = [];
+  const processingSet     = new Set();
   let activeListingData   = null;
   let activeImageUrls     = [];
   let initialPrice        = 0;
@@ -3220,6 +2475,12 @@
   let currentView         = 'create';
   let terminalOpen        = false;
   let terminalInterval    = null;
+  
+  // New listing & aspect state references
+  let activeListingSku    = null;
+  let autosaveTimer       = null;
+  let categorySearchTimer = null;
+  let categoryAspectsMetadata = {};
 
   /* ── Toast system ─────────────────────────────── */
   function showToast(type, title, message, duration = 5000) {
@@ -3248,6 +2509,131 @@
       .replace(/"/g,'&quot;').replace(/'/g,'&#039;');
   }
 
+  /* ── Mobile Sidebar ────────────────────────────── */
+  function toggleSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebarBackdrop');
+    const toggle = document.getElementById('sidebarToggle');
+    const isOpen = sidebar.classList.toggle('mobile-open');
+    backdrop.classList.toggle('active', isOpen);
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    }
+  }
+
+  function closeSidebar() {
+    const sidebar = document.getElementById('sidebar');
+    const backdrop = document.getElementById('sidebarBackdrop');
+    const toggle = document.getElementById('sidebarToggle');
+    sidebar.classList.remove('mobile-open');
+    backdrop.classList.remove('active');
+    if (toggle) {
+      toggle.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  /* ── Onboarding Wizard ────────────────────────── */
+  function openOnboardingWizard(tabName = 'ebay') {
+    closeSidebar();
+    document.getElementById('onboardingModal').classList.add('open');
+    switchOnboardingTab(tabName);
+    
+    // Auto-populate current values from /api/history shop data or config state
+    fetch('/api/status')
+      .then(res => {
+        if (res.ok) return res.json();
+        return {};
+      })
+      .then(status => {
+        // If we want to pre-fill Shopify store name or WooCommerce url, we can fetch
+        // WooCommerce URL from config variables if returned in future status payloads.
+      }).catch(err => console.error(err));
+  }
+
+  function closeOnboardingModal() {
+    document.getElementById('onboardingModal').classList.remove('open');
+  }
+
+  function switchOnboardingTab(tabName) {
+    document.querySelectorAll('.onboarding-tab-content').forEach(el => el.style.display = 'none');
+    document.querySelectorAll('#onboardingModal .tab-pill').forEach(el => el.classList.remove('active'));
+    
+    const contentEl = document.getElementById('onbContent-' + tabName);
+    const tabEl = document.getElementById('onbTab-' + tabName);
+    if (contentEl) contentEl.style.display = 'block';
+    if (tabEl) tabEl.classList.add('active');
+  }
+
+  async function savePlatformCredentials(platform) {
+    let payload = {};
+    if (platform === 'ebay') {
+      payload = {
+        EBAY_CLIENT_ID: document.getElementById('onb-ebay-client-id').value.trim(),
+        EBAY_CLIENT_SECRET: document.getElementById('onb-ebay-client-secret').value.trim(),
+        EBAY_REFRESH_TOKEN: document.getElementById('onb-ebay-refresh-token').value.trim()
+      };
+    } else if (platform === 'shopify') {
+      payload = {
+        SHOPIFY_SHOP_NAME: document.getElementById('onb-shopify-shop-name').value.trim(),
+        SHOPIFY_ACCESS_TOKEN: document.getElementById('onb-shopify-access-token').value.trim()
+      };
+    } else if (platform === 'woocommerce') {
+      payload = {
+        WOOCOMMERCE_URL: document.getElementById('onb-woocommerce-url').value.trim(),
+        WOOCOMMERCE_KEY: document.getElementById('onb-woocommerce-key').value.trim(),
+        WOOCOMMERCE_SECRET: document.getElementById('onb-woocommerce-secret').value.trim()
+      };
+    } else if (platform === 'etsy') {
+      payload = {
+        ETSY_SHOP_ID: document.getElementById('onb-etsy-shop-id').value.trim(),
+        ETSY_ACCESS_TOKEN: document.getElementById('onb-etsy-access-token').value.trim(),
+        ETSY_CLIENT_ID: document.getElementById('onb-etsy-client-id').value.trim()
+      };
+    }
+
+    try {
+      const res = await fetch('/api/config/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save configuration');
+      
+      showToast('success', 'Credentials Saved', `${platform.toUpperCase()} credentials updated successfully.`, 3000);
+      updateSidebarStatusBadges();
+    } catch (err) {
+      showToast('error', 'Save Failed', err.message, 5000);
+    }
+  }
+
+  async function updateSidebarStatusBadges() {
+    try {
+      const res = await fetch('/api/status');
+      if (!res.ok) return;
+      const data = await res.json();
+      
+      const badgeMap = {
+        Ebay: data.ebayAuthenticated,
+        Shopify: data.shopifyConnected,
+        Etsy: data.etsyConnected,
+        WooCommerce: data.woocommerceConnected,
+        Poshmark: true,
+        Mercari: true
+      };
+
+      for (const [platform, connected] of Object.entries(badgeMap)) {
+        const badge = document.getElementById('statusBadge' + platform);
+        if (badge) {
+          badge.textContent = connected ? 'connected' : 'disconnected';
+          badge.className = 'nav-badge-status ' + (connected ? 'status--connected' : 'status--disconnected');
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to update status badges: " + e.message);
+    }
+  }
+
   /* ── Theme ─────────────────────────────────────── */
   function toggleTheme() {
     const html   = document.documentElement;
@@ -3258,6 +2644,7 @@
 
   /* ── View switching ───────────────────────────── */
   function switchView(view) {
+    closeSidebar();
     currentView = view;
     const titles = { create: 'New Listing', history: 'Listing History', dlq: 'Sync Queue' };
     document.getElementById('topbarTitle').textContent = titles[view] || view;
@@ -3316,14 +2703,62 @@
       showToast('warn', 'Gallery limit', `Only ${batch.length} of ${targetFiles.length} files were added (max ${MAX_GALLERY_IMAGES}).`, 5000);
     }
 
+    const autoSpruce = document.getElementById('autoSpruceToggle')?.checked || false;
+
     let loaded = 0;
     batch.forEach(file => {
       const reader = new FileReader();
-      reader.onload = ev => {
-        uploadedBase64Files.push(ev.target.result);
+      reader.onload = async ev => {
+        const base64Data = ev.target.result;
+        uploadedBase64Files.push(base64Data);
+        
+        if (autoSpruce) {
+          processingSet.add(base64Data);
+        }
+        
         loaded++;
         if (loaded === batch.length) {
           refreshThumbnails();
+          
+          if (uploadedBase64Files.length === 1 && !activeListingData) {
+            showToast('info', 'Auto AI Generator', 'Starting background AI Listing Generator on first photo…', 3000);
+            setTimeout(() => {
+              if (uploadedBase64Files.length === 1 && !activeListingData) {
+                runAnalysis();
+              }
+            }, 800);
+          }
+        }
+
+        if (autoSpruce) {
+          try {
+            const response = await fetch('/api/images/spruce', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                image: base64Data,
+                options: {
+                  bgRemove: true,
+                  colorCorrection: true,
+                  canvasSize: 1600
+                }
+              })
+            });
+            const result = await response.json();
+            if (response.ok && result.success) {
+              const idx = uploadedBase64Files.indexOf(base64Data);
+              if (idx !== -1) {
+                uploadedBase64Files[idx] = result.localUrl || result.uploadedUrl;
+              }
+            } else {
+              showToast('error', 'Auto-Spruce Failed', result.error || 'Optimization failed', 4000);
+            }
+          } catch (err) {
+            showToast('error', 'Auto-Spruce Error', err.message, 4000);
+          } finally {
+            processingSet.delete(base64Data);
+            refreshThumbnails();
+          }
         }
       };
       reader.onerror = () => {
@@ -3343,6 +2778,9 @@
   function addThumb(src, idx) {
     const wrap = document.createElement('div');
     wrap.className = 'preview-thumb';
+    if (processingSet.has(src)) {
+      wrap.classList.add('processing');
+    }
     wrap.setAttribute('role','listitem');
     wrap.setAttribute('draggable', 'true');
     wrap.dataset.index = idx;
@@ -3607,10 +3045,18 @@
 
     try {
       setUrlImportProgress(true, 25, 'Downloading and optimizing images…');
+      const autoSpruce = document.getElementById('autoSpruceToggle')?.checked || false;
       const response = await fetch('/api/images/import-urls', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ urls: urls.slice(0, slots) })
+        body: JSON.stringify({
+          urls: urls.slice(0, slots),
+          options: {
+            bgRemove: autoSpruce,
+            colorCorrection: autoSpruce,
+            canvasSize: 1600
+          }
+        })
       });
       const result = await response.json();
 
@@ -3695,9 +3141,11 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          images:  uploadedBase64Files,
-          notes:   document.getElementById('notesInput').value,
-          barcode: document.getElementById('upcInput').value
+          images:   uploadedBase64Files,
+          notes:    document.getElementById('notesInput').value,
+          barcode:  document.getElementById('upcInput').value,
+          persona:  document.getElementById('personaInput').value,
+          template: document.getElementById('templateInput').value
         })
       });
       const data = await res.json();
@@ -3766,6 +3214,29 @@
     document.getElementById('descEditTab').disabled = false;
     document.getElementById('descPreviewTab').disabled = false;
     document.querySelectorAll('.tab-pill').forEach(b => b.disabled = false);
+
+    // Enable template selectors
+    const tSel = document.getElementById('listingTemplateSelect');
+    if (tSel) tSel.disabled = false;
+    const saveT = document.getElementById('saveTemplateBtn');
+    if (saveT) saveT.disabled = false;
+
+    // Bind autosave trigger on all inputs
+    c.querySelectorAll('input:not([type=file]), textarea, select').forEach(el => {
+      if (!el.dataset.autosaveBound) {
+        el.dataset.autosaveBound = 'true';
+        el.addEventListener('input', () => {
+          triggerAutosave();
+          updateCompletenessIndicator();
+        });
+        el.addEventListener('change', () => {
+          triggerAutosave();
+          updateCompletenessIndicator();
+        });
+      }
+    });
+
+    updateCompletenessIndicator();
   }
 
   /* ── Populate form ────────────────────────────── */
@@ -3782,6 +3253,7 @@
     document.getElementById('dimW').value     = data.packageWidth  || 8;
     document.getElementById('dimH').value     = data.packageHeight || 6;
     document.getElementById('description').value = data.description || '';
+    document.getElementById('quantity').value = data.quantity || 1;
     updateTitleCharCount();
 
     const sel = document.getElementById('categoryId');
@@ -3791,13 +3263,31 @@
       const opt = document.createElement('option');
       opt.value = s.id;
       opt.textContent = `${s.path} (${s.id})`;
-      if (s.id === data.categoryId) opt.selected = true;
+      if (String(s.id) === String(data.categoryId)) opt.selected = true;
       sel.appendChild(opt);
     });
     const custom = document.createElement('option');
     custom.value = 'CUSTOM';
     custom.textContent = 'Enter custom ID…';
     sel.appendChild(custom);
+
+    // Sync visible type-ahead and badge
+    const topSuggestion = suggestions.find(s => String(s.id) === String(data.categoryId)) || suggestions[0];
+    if (topSuggestion) {
+      document.getElementById('categorySearchInput').value = `${topSuggestion.path} (${topSuggestion.id})`;
+      document.getElementById('categoryLabelBadge').textContent = `ID: ${topSuggestion.id}`;
+      sel.value = String(topSuggestion.id);
+    }
+
+    // Shipping type configuration
+    const shippingType = data.shippingType || 'CALCULATED';
+    document.getElementById('shippingType').value = shippingType;
+
+    // Load conditions & aspects for category
+    if (data.categoryId) {
+      fetchCategoryConditions(data.categoryId);
+      fetchCategoryAspects(data.categoryId);
+    }
 
     renderAspects(data.aspects || {});
   }
@@ -3839,6 +3329,8 @@
   document.addEventListener('DOMContentLoaded', () => {
     fetchVeroBrands();
     loadEbayPolicies();
+    updateSidebarStatusBadges();
+    setInterval(updateSidebarStatusBadges, 10000);
     const brandInput = document.getElementById('brand');
     if (brandInput) {
       brandInput.addEventListener('input', (e) => checkVeroWarning(e.target.value));
@@ -4036,13 +3528,89 @@
   function addAspectRow(key='', val='') {
     const c = document.getElementById('aspectsContainer');
     if (c.querySelector('p')) c.innerHTML = '';
+    
     const row = document.createElement('div');
     row.className = 'aspect-row';
+    row.style.display = 'flex';
+    row.style.gap = '8px';
+    row.style.alignItems = 'center';
+    row.style.marginBottom = '6px';
+    
+    const meta = categoryAspectsMetadata[key] || {};
+    const isRequired = meta.required === true;
+    const hasAllowed = Array.isArray(meta.allowedValues) && meta.allowedValues.length > 0;
+    
     const ki = document.createElement('input');
     ki.type = 'text'; ki.className = 'aspect-key'; ki.placeholder = 'Name'; ki.value = key;
-    const vi = document.createElement('input');
-    vi.type = 'text'; vi.className = 'aspect-val'; vi.placeholder = 'Value'; vi.value = val;
-    vi.style.flex = '1.5';
+    ki.style.width = '140px';
+    ki.style.flexShrink = '0';
+    if (isRequired) {
+      ki.style.borderColor = 'var(--amber-bright)';
+      ki.title = "Required Aspect";
+    }
+    
+    const labelWrap = document.createElement('div');
+    labelWrap.style.position = 'relative';
+    labelWrap.style.flex = '1.5';
+    labelWrap.style.display = 'flex';
+    labelWrap.style.alignItems = 'center';
+    
+    let vi;
+    if (hasAllowed) {
+      vi = document.createElement('select');
+      vi.className = 'aspect-val';
+      
+      const optEmpty = document.createElement('option');
+      optEmpty.value = '';
+      optEmpty.textContent = isRequired ? '-- Select Value (Required) * --' : '-- Select Value --';
+      vi.appendChild(optEmpty);
+      
+      meta.allowedValues.forEach(av => {
+        const opt = document.createElement('option');
+        opt.value = av;
+        opt.textContent = av;
+        if (av === val) opt.selected = true;
+        vi.appendChild(opt);
+      });
+      
+      if (val && !meta.allowedValues.includes(val)) {
+        const optCustom = document.createElement('option');
+        optCustom.value = val;
+        optCustom.textContent = val;
+        optCustom.selected = true;
+        vi.appendChild(optCustom);
+      }
+    } else {
+      vi = document.createElement('input');
+      vi.type = 'text'; vi.className = 'aspect-val';
+      vi.placeholder = isRequired ? 'Value (Required) *' : 'Value';
+      vi.value = val;
+    }
+    
+    const validateField = () => {
+      if (isRequired && !vi.value.trim()) {
+        vi.style.borderColor = 'var(--red)';
+        vi.style.boxShadow = '0 0 0 2px rgba(239, 68, 68, 0.2)';
+      } else {
+        vi.style.borderColor = '';
+        vi.style.boxShadow = '';
+      }
+    };
+    
+    vi.addEventListener('input', () => {
+      validateField();
+      triggerAutosave();
+      updateCompletenessIndicator();
+    });
+    vi.addEventListener('change', () => {
+      validateField();
+      triggerAutosave();
+      updateCompletenessIndicator();
+    });
+    setTimeout(validateField, 50);
+    
+    labelWrap.appendChild(vi);
+    
     const db = document.createElement('button');
     db.className = 'btn btn--danger btn--xs';
     db.textContent = '✕';
@@ -4051,9 +3619,449 @@
       row.remove();
       if (c.children.length === 0)
         c.innerHTML = '<p style="color:var(--text-dim);font-size:0.8rem;text-align:center;padding:12px 0;">No aspects. Click + Add to create.</p>';
+      triggerAutosave();
+      updateCompletenessIndicator();
     };
-    row.appendChild(ki); row.appendChild(vi); row.appendChild(db);
+    
+    row.appendChild(ki); row.appendChild(labelWrap); row.appendChild(db);
     c.appendChild(row);
+  }
+
+  /* ── Autosave and Local Backup ────────────────── */
+  function triggerAutosave() {
+    if (document.getElementById('publishBtn').disabled) return;
+    
+    let sku = document.getElementById('formContainer').dataset.editingSku;
+    if (!sku) {
+      sku = 'LP-SKU-' + Date.now();
+      document.getElementById('formContainer').dataset.editingSku = sku;
+      document.getElementById('draftSkuLabel').textContent = `(Draft SKU: ${sku})`;
+    }
+    
+    const aspects = collectAspects();
+    const categoryId = document.getElementById('categoryId').value;
+    const listing = buildListingPayload(categoryId, aspects);
+    const allImages = [...document.querySelectorAll('.stock-photo-checkbox:checked')].map(cb => cb.value).concat(activeImageUrls);
+    
+    const backupData = { sku, listing, imageUrls: allImages };
+    localStorage.setItem('lp-autosave-draft', JSON.stringify(backupData));
+    
+    if (autosaveTimer) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(async () => {
+      try {
+        const res = await fetch('/api/draft/autosave', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sku, listing, imageUrls: allImages })
+        });
+        if (res.ok) {
+          console.log("Draft autosaved to server securely.");
+        }
+      } catch (e) {
+        console.warn("Server autosave failed; local backup is safe.", e);
+      }
+    }, 1500);
+  }
+
+  /* ── Completeness Indicator ───────────────────── */
+  function updateCompletenessIndicator() {
+    const requiredFields = [
+      { id: 'title', label: 'Title' },
+      { id: 'price', label: 'Price' },
+      { id: 'condition', label: 'Condition' },
+      { id: 'brand', label: 'Brand' },
+      { id: 'weightLbs', label: 'Weight' },
+      { id: 'dimL', label: 'Dimensions' },
+      { id: 'description', label: 'Description' }
+    ];
+    
+    let filled = 0;
+    requiredFields.forEach(f => {
+      const el = document.getElementById(f.id);
+      if (el && el.value && String(el.value).trim() !== '') {
+        filled++;
+      }
+    });
+    
+    const categoryIdVal = document.getElementById('categoryId').value;
+    if (categoryIdVal && categoryIdVal !== 'CUSTOM') {
+      filled++;
+    }
+    
+    const hasPhotos = uploadedBase64Files.length > 0 || activeImageUrls.length > 0;
+    if (hasPhotos) {
+      filled++;
+    }
+    
+    const totalFields = requiredFields.length + 2;
+    const pct = Math.round((filled / totalFields) * 100);
+    
+    const fill = document.getElementById('completenessFill');
+    const label = document.getElementById('completenessLabel');
+    const container = document.getElementById('completenessContainer');
+    
+    if (container) container.style.display = 'block';
+    if (fill) fill.style.width = `${pct}%`;
+    if (label) label.textContent = `${filled} of ${totalFields} fields ready (${pct}%)`;
+  }
+
+  /* ── Category Type-Ahead ─────────────────────── */
+  let categorySearchTimer = null;
+  function debounceCategorySearch() {
+    if (categorySearchTimer) clearTimeout(categorySearchTimer);
+    categorySearchTimer = setTimeout(runCategorySearch, 400);
+  }
+  
+  async function runCategorySearch() {
+    const query = document.getElementById('categorySearchInput').value.trim();
+    const dropdown = document.getElementById('categorySearchResults');
+    if (!query) {
+      dropdown.innerHTML = '';
+      dropdown.style.display = 'none';
+      return;
+    }
+    
+    try {
+      const res = await fetch(`/api/categories/search?q=${encodeURIComponent(query)}`);
+      if (!res.ok) throw new Error("Search failed");
+      const suggestions = await res.json();
+      
+      dropdown.innerHTML = '';
+      if (!suggestions || suggestions.length === 0) {
+        dropdown.innerHTML = '<div style="padding: 10px; font-size: 0.8rem; color: var(--text-dim);">No matching categories found</div>';
+        dropdown.style.display = 'block';
+        return;
+      }
+      
+      suggestions.forEach(item => {
+        const row = document.createElement('div');
+        row.className = 'dropdown-item';
+        row.textContent = `${item.path} (${item.id})`;
+        row.onclick = () => selectCategory(item.id, item.path);
+        dropdown.appendChild(row);
+      });
+      dropdown.style.display = 'block';
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  function selectCategory(id, path) {
+    const sel = document.getElementById('categoryId');
+    let opt = [...sel.options].find(o => o.value === String(id));
+    if (!opt) {
+      opt = document.createElement('option');
+      opt.value = String(id);
+      opt.textContent = `${path} (${id})`;
+      sel.appendChild(opt);
+    }
+    sel.value = String(id);
+    
+    document.getElementById('categorySearchInput').value = `${path} (${id})`;
+    document.getElementById('categoryLabelBadge').textContent = `ID: ${id}`;
+    document.getElementById('categorySearchResults').style.display = 'none';
+    
+    fetchCategoryConditions(id);
+    fetchCategoryAspects(id);
+    
+    triggerAutosave();
+    updateCompletenessIndicator();
+  }
+
+  /* ── Dynamic Conditions and Aspects ───────────── */
+  async function fetchCategoryConditions(categoryId) {
+    try {
+      const res = await fetch(`/api/ebay/conditions?categoryId=${categoryId}`);
+      if (!res.ok) return;
+      const conditions = await res.json();
+      const conditionSelect = document.getElementById('condition');
+      if (conditionSelect && Array.isArray(conditions) && conditions.length > 0) {
+        conditionSelect.innerHTML = '';
+        conditions.forEach(c => {
+          const opt = document.createElement('option');
+          opt.value = c.conditionId;
+          opt.textContent = c.label || c.conditionId;
+          conditionSelect.appendChild(opt);
+        });
+      }
+    } catch (e) {
+      console.warn("Failed to load category conditions.", e);
+    }
+  }
+
+  async function fetchCategoryAspects(categoryId) {
+    if (!categoryId) return;
+    try {
+      const res = await fetch(`/api/ebay/aspects?categoryId=${categoryId}`);
+      if (!res.ok) return;
+      categoryAspectsMetadata = await res.json();
+      
+      const current = collectAspects();
+      for (const [key, meta] of Object.entries(categoryAspectsMetadata)) {
+        if (meta.required && !current[key]) {
+          current[key] = '';
+        }
+      }
+      renderAspects(current);
+    } catch (e) {
+      console.warn("Failed to load category aspects.", e);
+    }
+  }
+
+  function handleConditionChangeWarn() {
+    const cond = document.getElementById('condition').value;
+    if (cond && (cond.startsWith('USED') || cond === '3000')) {
+      showToast('info', 'Condition Check', 'For used items, describe defects or missing packaging/box in Notes for AI to document.', 6000);
+    }
+  }
+
+  function handleShippingTypeChange() {
+    const type = document.getElementById('shippingType').value;
+    const shippingSelect = document.getElementById('shippingOption');
+    if (type === 'FLAT') {
+      shippingSelect.value = 'FLAT_RATE_STANDARD';
+    } else {
+      shippingSelect.value = 'USPS_GROUND';
+    }
+    triggerAutosave();
+  }
+
+  /* ── Templates Preset Drawer ──────────────────── */
+  async function fetchTemplates() {
+    try {
+      const res = await fetch('/api/templates');
+      if (!res.ok) return;
+      const templates = await res.json();
+      const sel = document.getElementById('listingTemplateSelect');
+      if (sel) {
+        sel.innerHTML = '<option value="">-- Load Preset --</option>';
+        templates.forEach(t => {
+          const opt = document.createElement('option');
+          opt.value = t.name;
+          opt.textContent = t.name;
+          sel.appendChild(opt);
+        });
+      }
+    } catch (e) {
+      console.warn("Failed to fetch templates.", e);
+    }
+  }
+
+  async function loadTemplateSelected() {
+    const sel = document.getElementById('listingTemplateSelect');
+    if (!sel || !sel.value) return;
+    try {
+      const res = await fetch('/api/templates');
+      if (!res.ok) return;
+      const templates = await res.json();
+      const template = templates.find(t => t.name === sel.value);
+      if (template) {
+        if (template.shippingOption) document.getElementById('shippingOption').value = template.shippingOption;
+        if (template.returnOption) document.getElementById('returnOption').value = template.returnOption;
+        if (template.paymentOption) document.getElementById('paymentOption').value = template.paymentOption;
+        if (template.shippingType) document.getElementById('shippingType').value = template.shippingType;
+        if (template.bestOfferEnabled !== undefined) {
+          document.getElementById('bestOfferEnabled').checked = template.bestOfferEnabled;
+          toggleBestOfferFields();
+        }
+        if (template.promoteEnabled !== undefined) {
+          document.getElementById('promoteEnabled').checked = template.promoteEnabled;
+          togglePromoteFields();
+        }
+        if (template.bidPercentage) document.getElementById('bidPercentage').value = template.bidPercentage;
+        if (template.genericizeVero !== undefined) document.getElementById('genericizeVero').checked = template.genericizeVero;
+        
+        showToast('success', 'Preset Loaded', `Applied preset "${sel.value}" successfully.`, 3000);
+        triggerAutosave();
+        updateCompletenessIndicator();
+      }
+    } catch (e) {
+      showToast('error', 'Load Preset Failed', e.message, 4000);
+    }
+  }
+
+  async function saveAsTemplate() {
+    const name = prompt("Enter a name for this listing preset:");
+    if (!name) return;
+    
+    const payload = {
+      name,
+      shippingOption: document.getElementById('shippingOption').value,
+      returnOption: document.getElementById('returnOption').value,
+      paymentOption: document.getElementById('paymentOption').value,
+      shippingType: document.getElementById('shippingType').value,
+      bestOfferEnabled: document.getElementById('bestOfferEnabled').checked,
+      promoteEnabled: document.getElementById('promoteEnabled').checked,
+      bidPercentage: parseFloat(document.getElementById('bidPercentage').value) || 2.0,
+      genericizeVero: document.getElementById('genericizeVero').checked
+    };
+    
+    try {
+      const res = await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Failed to save preset');
+      }
+      showToast('success', 'Preset Saved', `Preset "${name}" saved successfully.`, 3000);
+      fetchTemplates();
+    } catch (e) {
+      showToast('error', 'Save Preset Failed', e.message, 4000);
+    }
+  }
+
+  /* ── Scrolling Anchor Navigation ──────────────── */
+  function scrollToAnchor(event, anchorId) {
+    event.preventDefault();
+    const target = document.getElementById(anchorId);
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      document.querySelectorAll('.anchor-link').forEach(link => {
+        link.classList.toggle('active', link.getAttribute('href') === `#${anchorId}`);
+      });
+    }
+  }
+
+  /* ── Relist Ended Item ────────────────────────── */
+  async function relistEndedItem(sku) {
+    if (!confirm("Are you sure you want to clone and relist this ended item as a new draft?")) return;
+    try {
+      const res = await fetch('/api/relist', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sku })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Relist failed');
+      
+      showToast('success', 'Relisted successfully', `New Draft SKU: ${data.sku}`, 4000);
+      loadHistory();
+      loadDraftIntoEditor(data.sku);
+    } catch (e) {
+      showToast('error', 'Relist failed', e.message, 0);
+    }
+  }
+
+  /* ── Sell Similar eBay Importer ───────────────── */
+  async function runEbayImport() {
+    const input = document.getElementById('ebayImportInput');
+    const btn = document.getElementById('ebayImportBtn');
+    if (!input || !btn) return;
+    
+    const val = input.value.trim();
+    if (!val) {
+      showToast('warn', 'Input Required', 'Please enter a valid eBay Item ID or product page URL.', 3000);
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Importing details...';
+
+    try {
+      const res = await fetch(`/api/ebay/import?itemIdOrUrl=${encodeURIComponent(val)}`);
+      const data = await res.json();
+      
+      if (!res.ok) {
+        throw new Error(data.error || 'Import failed');
+      }
+
+      // 1. Enable form fields
+      enableForm();
+      
+      // 2. Populate form fields
+      document.getElementById('title').value     = data.title || '';
+      document.getElementById('price').value     = data.suggestedPrice || '';
+      document.getElementById('condition').value = data.condition || 'USED_GOOD';
+      document.getElementById('brand').value     = data.brand || '';
+      document.getElementById('model').value     = data.model || '';
+      checkVeroWarning(data.brand);
+      
+      document.getElementById('weightLbs').value = data.weightMajor || 1;
+      document.getElementById('weightOz').value  = data.weightMinor || 0;
+      document.getElementById('dimL').value      = data.packageLength || 10;
+      document.getElementById('dimW').value      = data.packageWidth  || 8;
+      document.getElementById('dimH').value      = data.packageHeight || 6;
+      document.getElementById('description').value = data.description || '';
+      updateTitleCharCount();
+
+      // Populate category dropdown
+      const sel = document.getElementById('categoryId');
+      sel.innerHTML = '';
+      if (data.categoryId) {
+        const opt = document.createElement('option');
+        opt.value = data.categoryId;
+        opt.textContent = `Imported Category: ${data.categoryId}`;
+        opt.selected = true;
+        sel.appendChild(opt);
+      }
+      const customOpt = document.createElement('option');
+      customOpt.value = 'CUSTOM';
+      customOpt.textContent = '✏️ Enter Custom Category ID…';
+      sel.appendChild(customOpt);
+
+      // Populate aspects
+      const aspectContainer = document.getElementById('aspectsContainer') || document.querySelector('.aspects-grid');
+      if (aspectContainer) {
+        aspectContainer.innerHTML = '';
+        if (data.aspects) {
+          for (const [k, v] of Object.entries(data.aspects)) {
+            addAspectRow(k, v);
+          }
+        }
+      }
+
+      // Populate images in previewContainer
+      activeImageUrls = data.imageUrls || [];
+      const previewCont = document.getElementById('previewContainer');
+      previewCont.innerHTML = '';
+      activeImageUrls.forEach(url => {
+        const wrap = document.createElement('div');
+        wrap.className = 'preview-thumb';
+        const img = document.createElement('img');
+        img.src = url;
+        img.alt = 'Imported image';
+        img.onclick = () => openLightbox(url);
+        wrap.appendChild(img);
+        
+        // Add a delete button to allow removal of imported images
+        const delBtn = document.createElement('button');
+        delBtn.className = 'preview-thumb__delete';
+        delBtn.innerHTML = '×';
+        delBtn.style.position = 'absolute';
+        delBtn.style.top = '4px';
+        delBtn.style.right = '4px';
+        delBtn.style.background = 'rgba(0,0,0,0.6)';
+        delBtn.style.color = '#fff';
+        delBtn.style.border = 'none';
+        delBtn.style.borderRadius = '50%';
+        delBtn.style.width = '18px';
+        delBtn.style.height = '18px';
+        delBtn.style.cursor = 'pointer';
+        delBtn.style.display = 'flex';
+        delBtn.style.alignItems = 'center';
+        delBtn.style.justifyContent = 'center';
+        delBtn.style.fontSize = '12px';
+        delBtn.onclick = (e) => {
+          e.stopPropagation();
+          activeImageUrls = activeImageUrls.filter(u => u !== url);
+          wrap.remove();
+        };
+        wrap.appendChild(delBtn);
+        
+        previewCont.appendChild(wrap);
+      });
+
+      showToast('success', '🎉 Listing Details Imported!', 'The listing forms have been bootstrapped with competitor details. Edit as needed and publish!', 5000);
+      input.value = '';
+    } catch (err) {
+      showToast('error', 'Import Failed', err.message, 0);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '📥 Import Listing Details';
+    }
   }
 
   /* ── Price presets ────────────────────────────── */
@@ -4093,6 +4101,21 @@
     }
   }
 
+  /* ── Marketing Toggles ────────────────────────── */
+  function toggleBestOfferFields() {
+    const chk = document.getElementById('bestOfferEnabled');
+    const fields = document.getElementById('bestOfferFields');
+    if (!chk || !fields) return;
+    fields.style.display = chk.checked ? 'grid' : 'none';
+  }
+
+  function togglePromoteFields() {
+    const chk = document.getElementById('promoteEnabled');
+    const fields = document.getElementById('promoteFields');
+    if (!chk || !fields) return;
+    fields.style.display = chk.checked ? 'block' : 'none';
+  }
+
   /* ── Publish ──────────────────────────────────── */
   async function publishListing() {
     const btn = document.getElementById('publishBtn');
@@ -4123,7 +4146,13 @@
       immediatePayment: immediatePayVal,
       crossPostShopify: document.getElementById('crossPostShopify').checked,
       crossPostWooCommerce: document.getElementById('crossPostWooCommerce').checked,
-      crossPostEtsy: document.getElementById('crossPostEtsy').checked
+      crossPostEtsy: document.getElementById('crossPostEtsy').checked,
+      bestOfferEnabled: document.getElementById('bestOfferEnabled').checked,
+      autoAcceptPrice: document.getElementById('autoAcceptPrice').value,
+      autoDeclinePrice: document.getElementById('autoDeclinePrice').value,
+      promoteEnabled: document.getElementById('promoteEnabled').checked,
+      bidPercentage: parseFloat(document.getElementById('bidPercentage').value) || 2.0,
+      genericizeVero: document.getElementById('genericizeVero').checked
     };
 
     try {
@@ -4244,6 +4273,8 @@
       packageWidth:  parseInt(document.getElementById('dimW').value)||8,
       packageHeight: parseInt(document.getElementById('dimH').value)||6,
       description:   document.getElementById('description').value,
+      quantity:      parseInt(document.getElementById('quantity').value)||1,
+      shippingType:  document.getElementById('shippingType').value,
       aspects
     });
   }
@@ -4265,6 +4296,21 @@
     document.getElementById('analyzeBtnIcon').textContent  = '⚡';
     document.getElementById('analyzeBtnLabel').textContent = 'Run AI Listing Generator';
     [1,2,3,4,5].forEach(n => setStep(n,''));
+
+    // Reset and disable marketing inputs
+    document.getElementById('bestOfferEnabled').checked = false;
+    document.getElementById('bestOfferFields').style.display = 'none';
+    document.getElementById('autoAcceptPrice').value = '';
+    document.getElementById('autoDeclinePrice').value = '';
+    document.getElementById('promoteEnabled').checked = false;
+    document.getElementById('promoteFields').style.display = 'none';
+    document.getElementById('bidPercentage').value = '2.0';
+    document.getElementById('genericizeVero').checked = false;
+
+    document.getElementById('formContainer').querySelectorAll('input:not([type=file]), textarea, select').forEach(el => {
+      if (el.id !== 'historySearch') el.disabled = true;
+    });
+
     showToast('info','Form reset','Ready for a new listing.',2500);
   }
 
@@ -4283,8 +4329,62 @@
       filterHistoryTable();
       const badge = document.getElementById('historyCountBadge');
       if (badge) badge.textContent = allHistoryData.length;
+      
+      // Load eBay Promoted Listings marketing campaigns summary
+      loadMarketingCampaigns();
     } catch {
       cnt.innerHTML = '<div class="empty-state"><div class="empty-state__icon">❌</div>Failed to load history.</div>';
+    }
+  }
+
+  async function loadMarketingCampaigns() {
+    const card = document.getElementById('marketingCampaignsCard');
+    const tbody = document.getElementById('marketingCampaignsTableBody');
+    if (!card || !tbody) return;
+
+    try {
+      const res = await fetch('/api/ebay/marketing/summary');
+      if (!res.ok) throw new Error("Failed to fetch campaigns");
+      const data = await res.json();
+      
+      const campaigns = data.campaigns || [];
+      if (campaigns.length === 0) {
+        card.style.display = 'none';
+        return;
+      }
+
+      tbody.innerHTML = '';
+      campaigns.forEach(c => {
+        const row = document.createElement('tr');
+        row.style.borderBottom = '1px solid var(--border)';
+        row.style.color = 'var(--text)';
+        
+        let adRateStr = '—';
+        if (c.fundingModel === 'COST_PER_SALE' && c.adServices && c.adServices[0]?.adRateToUse) {
+          adRateStr = `${c.adServices[0].adRateToUse}%`;
+        } else if (c.fundingModel === 'COST_PER_CLICK' && c.adServices && c.adServices[0]?.bidPercentage) {
+          adRateStr = `${c.adServices[0].bidPercentage}%`;
+        }
+
+        const isRunning = c.campaignStatus === 'RUNNING';
+
+        row.innerHTML = `
+          <td style="padding: 10px; font-weight: bold; color: var(--text);">${c.campaignName || 'Unnamed'}</td>
+          <td style="padding: 10px; color: var(--text-dim);">${c.marketplaceId || 'EBAY_US'}</td>
+          <td style="padding: 10px; color: var(--blue); font-weight: bold;">${adRateStr}</td>
+          <td style="padding: 10px; color: var(--text-dim);">${c.fundingModel || '—'}</td>
+          <td style="padding: 10px; text-align: right;">
+            <span style="display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; background-color: ${isRunning ? 'rgba(16, 185, 129, 0.15)' : 'rgba(156, 163, 175, 0.15)'}; color: ${isRunning ? '#10b981' : '#9ca3af'};">
+              ${c.campaignStatus || 'UNKNOWN'}
+            </span>
+          </td>
+        `;
+        tbody.appendChild(row);
+      });
+      card.style.display = 'block';
+    } catch (err) {
+      console.warn("Failed to load eBay marketing campaigns dashboard card:", err.message);
+      card.style.display = 'none';
     }
   }
   function updateMetrics(data) {
@@ -4338,7 +4438,8 @@
                    <button class="btn btn--secondary btn--xs" onclick="sendOffersToWatchers('${escHtml(item.sku)}')">Offer</button>
                    ${repricerAction}`;
       } else {
-        actions = `<button class="btn btn--danger btn--xs" onclick="deleteHistoryItem('${escHtml(item.sku)}')">Delete</button>`;
+        actions = `<button class="btn btn--secondary btn--xs" onclick="relistEndedItem('${escHtml(item.sku)}')">Relist</button>
+                   <button class="btn btn--danger btn--xs" onclick="deleteHistoryItem('${escHtml(item.sku)}')">Delete</button>`;
       }
       const cross = !isEnded
         ? `<button class="btn btn--ghost btn--xs" onclick="exportListing('Mercari','${escHtml(item.sku)}')">Mercari</button>
@@ -4440,7 +4541,13 @@
       immediatePayment:     immediatePayVal,
       crossPostShopify:     document.getElementById('crossPostShopify').checked,
       crossPostWooCommerce: document.getElementById('crossPostWooCommerce').checked,
-      crossPostEtsy:        document.getElementById('crossPostEtsy').checked
+      crossPostEtsy:        document.getElementById('crossPostEtsy').checked,
+      bestOfferEnabled:     document.getElementById('bestOfferEnabled').checked,
+      autoAcceptPrice:      document.getElementById('autoAcceptPrice').value,
+      autoDeclinePrice:     document.getElementById('autoDeclinePrice').value,
+      promoteEnabled:       document.getElementById('promoteEnabled').checked,
+      bidPercentage:        parseFloat(document.getElementById('bidPercentage').value) || 2.0,
+      genericizeVero:       document.getElementById('genericizeVero').checked
     };
 
     try {
@@ -5052,6 +5159,88 @@
   pollApiStatus();
   loadDlqQueue(false);
   checkSession();
+  fetchTemplates();
+
+  // Mobile camera environmental capture file input bind
+  const fileInputCamera = document.getElementById('fileInputCamera');
+  if (fileInputCamera) {
+    fileInputCamera.addEventListener('change', e => handleFiles(e.target.files));
+  }
+
+  // Keyboard shortcuts (Ctrl+Enter to publish, Escape to close modals)
+  document.addEventListener('keydown', e => {
+    if (e.ctrlKey && e.key === 'Enter') {
+      e.preventDefault();
+      const publishBtn = document.getElementById('publishBtn');
+      if (publishBtn && !publishBtn.disabled) {
+        publishListing();
+      }
+    }
+    if (e.key === 'Escape') {
+      closeSpruceModal();
+      closeExportModal();
+      closeLightbox();
+      closeRepricerModal();
+      const onboardingModal = document.getElementById('onboardingModal');
+      if (onboardingModal) onboardingModal.classList.remove('open');
+    }
+  });
+
+  // Restore draft from local storage prompt
+  window.addEventListener('load', () => {
+    const rawBackup = localStorage.getItem('lp-autosave-draft');
+    if (rawBackup) {
+      try {
+        const backup = JSON.parse(rawBackup);
+        if (backup && backup.listing && backup.listing.title) {
+          if (confirm(`A previous unsaved draft for "${backup.listing.title}" was found. Would you like to restore it?`)) {
+            enableForm();
+            populateForm(backup.listing, []);
+            if (backup.imageUrls) {
+              activeImageUrls = backup.imageUrls;
+              const previewCont = document.getElementById('previewContainer');
+              previewCont.innerHTML = '';
+              activeImageUrls.forEach(url => {
+                const wrap = document.createElement('div');
+                wrap.className = 'preview-thumb';
+                const img = document.createElement('img');
+                img.src = url; img.alt = 'Draft image';
+                img.onclick = () => openLightbox(url);
+                wrap.appendChild(img);
+                previewCont.appendChild(wrap);
+              });
+            }
+            if (backup.sku) {
+              document.getElementById('formContainer').dataset.editingSku = backup.sku;
+              document.getElementById('draftSkuLabel').textContent = `[Restored: ${backup.sku}]`;
+            }
+            updateCompletenessIndicator();
+          } else {
+            localStorage.removeItem('lp-autosave-draft');
+          }
+        }
+      } catch (e) {
+        console.warn("Failed to restore draft from localStorage", e);
+      }
+    }
+  });
+
+  // Highlight missing fields on change/input
+  const requiredInputs = ['title', 'price', 'brand', 'description'];
+  requiredInputs.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) {
+      const validate = () => {
+        if (!el.value.trim()) {
+          el.style.borderColor = 'var(--red)';
+        } else {
+          el.style.borderColor = '';
+        }
+      };
+      el.addEventListener('input', validate);
+      el.addEventListener('change', validate);
+    }
+  });
 </script>
 
 <!-- ═══════════════════════════════════════════════════════════

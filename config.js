@@ -85,6 +85,8 @@ module.exports = {
   getEBAY_CLIENT_SECRET: () => process.env.EBAY_CLIENT_SECRET,
   /** @returns {string|undefined} */
   getEBAY_REFRESH_TOKEN: () => process.env.EBAY_REFRESH_TOKEN,
+  /** @returns {string|undefined} */
+  getEBAY_RUNAME: () => process.env.EBAY_RUNAME,
   /** @returns {string} */
   getEBAY_LOCATION_KEY: () => process.env.EBAY_LOCATION_KEY || "default",
   /** @returns {string|undefined} */

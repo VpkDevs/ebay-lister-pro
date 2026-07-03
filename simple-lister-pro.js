@@ -41,6 +41,11 @@ process.on('SIGINT', () => {
   utils.logAudit("WARN", "Process aborted (SIGINT).");
   process.exit(130);
 });
+process.on('SIGTERM', () => {
+  cleanupTempFiles();
+  utils.logAudit("WARN", "Process aborted (SIGTERM).");
+  process.exit(143);
+});
 process.on('uncaughtException', (err) => {
   console.error("\n💥 Critical Unhandled Exception:", err.message);
   utils.logAudit("FATAL", `Uncaught exception: ${err.message}`, { stack: err.stack });
@@ -276,11 +281,11 @@ async function runAutoListingPipeline(validPhotos, barcode = null, customNotes =
       finalListing.description += footer;
     }
 
-    const inventoryItem = {
+    let inventoryItem = {
       condition: finalListing.condition,
       availability: { shipToLocationAvailability: { quantity: 1 } },
       product: {
-        title: finalListing.title.slice(0, 80),
+        title: finalListing.title,
         description: finalListing.description,
         brand: finalListing.brand,
         mpn: finalListing.model || "Does Not Apply",
@@ -301,6 +306,11 @@ async function runAutoListingPipeline(validPhotos, barcode = null, customNotes =
         }
       }
     };
+
+    // Optimize and auto-enrich missing required aspects
+    inventoryItem = ebayClient.sanitizeAndOptimizeInventoryItem(inventoryItem);
+    inventoryItem = ebayClient.genericizeVeroBrandListing(inventoryItem, true);
+    await ebayClient.enrichRequiredAspects(inventoryItem, finalListing.categoryId);
     
     console.log(`Step 1/3: Creating inventory item for SKU: ${sku}...`);
     await ebayClient.ebayRequest(`/inventory_item/${encodeURIComponent(sku)}`, "PUT", inventoryItem);
@@ -327,6 +337,22 @@ async function runAutoListingPipeline(validPhotos, barcode = null, customNotes =
       }
     };
 
+    // Auto-configure Best Offer for watch daemon listings
+    const targetPrice = parseFloat(finalListing.suggestedPrice);
+    if (!isNaN(targetPrice) && targetPrice > 0) {
+      offerPayload.bestOfferTerms = {
+        bestOfferEnabled: true,
+        autoAcceptPrice: {
+          value: String((targetPrice * 0.85).toFixed(2)),
+          currency: "USD"
+        },
+        autoDeclinePrice: {
+          value: String((targetPrice * 0.70).toFixed(2)),
+          currency: "USD"
+        }
+      };
+    }
+
     console.log("Step 2/3: Creating offer...");
     const offerResponse = await ebayClient.ebayRequest("/offer", "POST", offerPayload);
     const offerId = offerResponse.offerId;
@@ -334,18 +360,46 @@ async function runAutoListingPipeline(validPhotos, barcode = null, customNotes =
     console.log(`Step 3/3: Publishing offer ${offerId}...`);
     const publishResponse = await ebayClient.ebayRequest(`/offer/${offerId}/publish`, "POST");
     
-    let shopifyId = null;
+    // Auto-promote listing standard at 2% campaign rate
+    if (publishResponse.listingId) {
+      ebayClient.promoteListingStandard(publishResponse.listingId, sku, 2.0);
+    }
+    
+    console.log("Cross-posting to active channels in parallel...");
+    const crossPostPromises = [];
+    const crossPostKeys = [];
+
     if (config.getSHOPIFY_SHOP_NAME() && config.getSHOPIFY_ACCESS_TOKEN()) {
-      shopifyId = await crossPostToShopify(finalListing, imageUrls, sku);
+      crossPostPromises.push(crossPostToShopify(finalListing, imageUrls, sku));
+      crossPostKeys.push('shopify');
     }
-    let woocommerceId = null;
     if (config.getWOOCOMMERCE_URL() && config.getWOOCOMMERCE_KEY() && config.getWOOCOMMERCE_SECRET()) {
-      woocommerceId = await crossPostToWooCommerce(finalListing, imageUrls, sku);
+      crossPostPromises.push(crossPostToWooCommerce(finalListing, imageUrls, sku));
+      crossPostKeys.push('woocommerce');
     }
-    let etsyId = null;
     if (config.getETSY_SHOP_ID() && config.getETSY_ACCESS_TOKEN()) {
-      etsyId = await crossPostToEtsy(finalListing, sku);
+      crossPostPromises.push(crossPostToEtsy(finalListing, sku));
+      crossPostKeys.push('etsy');
     }
+
+    const crossPostResults = await Promise.allSettled(crossPostPromises);
+    
+    let shopifyId = null;
+    let woocommerceId = null;
+    let etsyId = null;
+
+    crossPostResults.forEach((result, idx) => {
+      const platform = crossPostKeys[idx];
+      if (result.status === 'fulfilled' && result.value) {
+        if (platform === 'shopify') shopifyId = result.value;
+        else if (platform === 'woocommerce') woocommerceId = result.value;
+        else if (platform === 'etsy') etsyId = result.value;
+      } else {
+        const reason = result.status === 'rejected' ? result.reason.message : 'Publish failed or returned empty ID';
+        console.error(`[Watch] Cross-posting to ${platform} failed: ${reason}`);
+        utils.logAudit("ERROR", `Watch daemon cross-posting to ${platform} failed: ${reason}`);
+      }
+    });
 
     console.log(`\n🎉 SUCCESS! eBay Listing is live!`);
     console.log(`eBay Listing ID: ${publishResponse.listingId}`);
@@ -1106,11 +1160,11 @@ WATERMARK_TEXT=${watermark}
       const skuPrefix = config.getSKU_PREFIX();
       sku = `${skuPrefix}SKU-${Date.now()}`;
 
-      const inventoryItem = {
+      let inventoryItem = {
         condition: finalListing.condition,
         availability: { shipToLocationAvailability: { quantity: 1 } },
         product: {
-          title: finalListing.title.slice(0, 80),
+          title: finalListing.title,
           description: finalListing.description,
           brand: finalListing.brand,
           mpn: finalListing.model || "Does Not Apply",
@@ -1131,6 +1185,11 @@ WATERMARK_TEXT=${watermark}
           }
         }
       };
+
+      // Optimize and auto-enrich missing required aspects
+      inventoryItem = ebayClient.sanitizeAndOptimizeInventoryItem(inventoryItem);
+      inventoryItem = ebayClient.genericizeVeroBrandListing(inventoryItem, true);
+      await ebayClient.enrichRequiredAspects(inventoryItem, finalListing.categoryId);
       
       console.log(`\nStep 1/3: Creating inventory item for SKU: ${sku}...`);
       await ebayClient.ebayRequest(`/inventory_item/${encodeURIComponent(sku)}`, "PUT", inventoryItem);
@@ -1160,6 +1219,22 @@ WATERMARK_TEXT=${watermark}
         }
       };
 
+      // Auto-configure Best Offer for interactive listings
+      const targetPrice = parseFloat(finalListing.suggestedPrice);
+      if (!isNaN(targetPrice) && targetPrice > 0) {
+        offerPayload.bestOfferTerms = {
+          bestOfferEnabled: true,
+          autoAcceptPrice: {
+            value: String((targetPrice * 0.85).toFixed(2)),
+            currency: "USD"
+          },
+          autoDeclinePrice: {
+            value: String((targetPrice * 0.70).toFixed(2)),
+            currency: "USD"
+          }
+        };
+      }
+
       console.log("Step 2/3: Creating offer...");
       const offerResponse = await ebayClient.ebayRequest("/offer", "POST", offerPayload);
       offerId = offerResponse.offerId;
@@ -1169,18 +1244,46 @@ WATERMARK_TEXT=${watermark}
     console.log(`Step 3/3: Publishing offer ${offerId}...`);
     const publishResponse = await ebayClient.ebayRequest(`/offer/${offerId}/publish`, "POST");
     
-    let shopifyId = null;
+    // Auto-promote listing standard at 2% campaign rate
+    if (publishResponse.listingId) {
+      ebayClient.promoteListingStandard(publishResponse.listingId, sku, 2.0);
+    }
+    
+    console.log("Cross-posting to active channels in parallel...");
+    const crossPostPromises = [];
+    const crossPostKeys = [];
+
     if (config.getSHOPIFY_SHOP_NAME() && config.getSHOPIFY_ACCESS_TOKEN()) {
-      shopifyId = await crossPostToShopify(finalListing, imageUrls, sku);
+      crossPostPromises.push(crossPostToShopify(finalListing, imageUrls, sku));
+      crossPostKeys.push('shopify');
     }
-    let woocommerceId = null;
     if (config.getWOOCOMMERCE_URL() && config.getWOOCOMMERCE_KEY() && config.getWOOCOMMERCE_SECRET()) {
-      woocommerceId = await crossPostToWooCommerce(finalListing, imageUrls, sku);
+      crossPostPromises.push(crossPostToWooCommerce(finalListing, imageUrls, sku));
+      crossPostKeys.push('woocommerce');
     }
-    let etsyId = null;
     if (config.getETSY_SHOP_ID() && config.getETSY_ACCESS_TOKEN()) {
-      etsyId = await crossPostToEtsy(finalListing, sku);
+      crossPostPromises.push(crossPostToEtsy(finalListing, sku));
+      crossPostKeys.push('etsy');
     }
+
+    const crossPostResults = await Promise.allSettled(crossPostPromises);
+    
+    let shopifyId = null;
+    let woocommerceId = null;
+    let etsyId = null;
+
+    crossPostResults.forEach((result, idx) => {
+      const platform = crossPostKeys[idx];
+      if (result.status === 'fulfilled' && result.value) {
+        if (platform === 'shopify') shopifyId = result.value;
+        else if (platform === 'woocommerce') woocommerceId = result.value;
+        else if (platform === 'etsy') etsyId = result.value;
+      } else {
+        const reason = result.status === 'rejected' ? result.reason.message : 'Publish failed or returned empty ID';
+        console.error(`[Interactive] Cross-posting to ${platform} failed: ${reason}`);
+        utils.logAudit("ERROR", `Interactive cross-posting to ${platform} failed: ${reason}`);
+      }
+    });
 
     console.log(`\n🎉 SUCCESS! eBay Listing is live!`);
     console.log(`eBay Listing ID: ${publishResponse.listingId}`);

@@ -301,11 +301,14 @@ async function writeJsonFileSecureAsync(filePath, data) {
     try {
       const lockFh = await fs.promises.open(lockPath, 'wx');
       await lockFh.close();
+      if (attempts > 0) {
+        logAudit("INFO", `Async Database Lock acquired for ${resolved} after ${attempts} retries.`);
+      }
       break;
     } catch (lockErr) {
       attempts++;
       if (attempts >= maxAttempts) {
-        logAudit("ERROR", `Async Database Lock timeout for ${resolved}. Overwriting lock to avoid data loss...`);
+        logAudit("ERROR", `Async Database Lock timeout for ${resolved} after ${attempts} attempts. Overwriting lock to avoid data loss...`);
         try { await fs.promises.unlink(lockPath); } catch (e) {}
         break;
       }
@@ -689,6 +692,19 @@ function cleanOldTempFiles() {
   }
 }
 
+/**
+ * Strips script tags, iframe tags, and inline event handlers from an HTML description.
+ * @param {string} html - HTML string.
+ * @returns {string} Sanitized HTML.
+ */
+function stripScriptsAndIframes(html) {
+  if (typeof html !== 'string') return html;
+  return html
+    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+    .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '')
+    .replace(/on\w+\s*=\s*(['"])(.*?)\1/gi, '');
+}
+
 module.exports = {
   sanitizeLog,
   logAudit,
@@ -711,5 +727,6 @@ module.exports = {
   showHistory,
   optimizeImageNative,
   asyncLocalStorage,
-  cleanOldTempFiles
+  cleanOldTempFiles,
+  stripScriptsAndIframes
 };

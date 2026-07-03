@@ -1,3 +1,113 @@
+// Onboarding overlay injection
+(function() {
+  const url = window.location.href;
+  let steps = [];
+  let title = "";
+
+  if (url.includes("developer.ebay.com")) {
+    title = "eBay App Credentials Guide";
+    steps = [
+      "Sign in or register a developer account.",
+      "Navigate to 'Application Keys' dashboard.",
+      "Under 'Production', click 'Create a keyset'.",
+      "Copy the App ID (Client ID) and Cert ID (Client Secret).",
+      "Paste them into your Lister Pro Setup Wizard."
+    ];
+  } else if (url.includes("shopify.com/admin/settings/apps/development")) {
+    title = "Shopify Admin API Token Guide";
+    steps = [
+      "Click the 'Create an app' button in the top right.",
+      "Name it 'Lister Pro' and configure API scopes.",
+      "Check write_products, read_products, write_inventory, read_inventory.",
+      "Click 'Install app' and copy the token starting with 'shpat_'."
+    ];
+  } else if (url.includes("wp-admin/admin.php") && url.includes("wc-settings") && url.includes("keys")) {
+    title = "WooCommerce REST API Guide";
+    steps = [
+      "Click 'Add Key' button.",
+      "Enter Description (e.g. 'Lister Pro').",
+      "Set Permissions to 'Read/Write'.",
+      "Click 'Generate API Key'.",
+      "Copy Consumer Key (ck_...) and Consumer Secret (cs_...)."
+    ];
+  } else if (url.includes("etsy.com/developers")) {
+    title = "Etsy Developer App Guide";
+    steps = [
+      "Sign in and click 'Register a new application'.",
+      "Fill out the name and select 'Seller Integration'.",
+      "Copy the API Keystring (Client ID) and Shop ID."
+    ];
+  }
+
+  if (steps.length > 0) {
+    // Render visual guided popup box
+    const card = document.createElement("div");
+    card.id = "lister-pro-guide-overlay";
+    card.style.position = "fixed";
+    card.style.bottom = "20px";
+    card.style.right = "20px";
+    card.style.width = "320px";
+    card.style.backgroundColor = "#18181b";
+    card.style.color = "#f4f4f5";
+    card.style.border = "2px solid #fbbf24";
+    card.style.borderRadius = "8px";
+    card.style.padding = "16px";
+    card.style.boxShadow = "0 10px 15px -3px rgba(0, 0, 0, 0.5)";
+    card.style.zIndex = "999999";
+    card.style.fontFamily = "system-ui, -apple-system, sans-serif";
+    card.style.fontSize = "13px";
+
+    const header = document.createElement("div");
+    header.style.display = "flex";
+    header.style.justifyContent = "space-between";
+    header.style.alignItems = "center";
+    header.style.borderBottom = "1px solid #3f3f46";
+    header.style.paddingBottom = "8px";
+    header.style.marginBottom = "10px";
+
+    const titleSpan = document.createElement("span");
+    titleSpan.innerText = "⚡ " + title;
+    titleSpan.style.fontWeight = "bold";
+    titleSpan.style.color = "#fbbf24";
+
+    const closeBtn = document.createElement("button");
+    closeBtn.innerText = "×";
+    closeBtn.style.background = "none";
+    closeBtn.style.border = "none";
+    closeBtn.style.color = "#a1a1aa";
+    closeBtn.style.fontSize = "18px";
+    closeBtn.style.cursor = "pointer";
+    closeBtn.onclick = () => card.remove();
+
+    header.appendChild(titleSpan);
+    header.appendChild(closeBtn);
+    card.appendChild(header);
+
+    const list = document.createElement("ol");
+    list.style.margin = "0";
+    list.style.paddingLeft = "18px";
+    list.style.lineHeight = "1.6";
+
+    steps.forEach(stepText => {
+      const li = document.createElement("li");
+      li.innerText = stepText;
+      li.style.marginBottom = "6px";
+      list.appendChild(li);
+    });
+
+    card.appendChild(list);
+
+    const footer = document.createElement("div");
+    footer.style.marginTop = "12px";
+    footer.style.fontSize = "11px";
+    footer.style.color = "#a1a1aa";
+    footer.innerText = "Once keys are generated, paste them into Lister Pro.";
+    card.appendChild(footer);
+
+    document.body.appendChild(card);
+  }
+})();
+
 // Chrome Extension Content Script for scraping listing data
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "scrapeProduct") {
