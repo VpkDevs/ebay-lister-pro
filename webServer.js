@@ -1439,10 +1439,10 @@ function startWebGuiServer(port = 45900) {
       const targetInput = parsedUrl.searchParams.get('itemIdOrUrl') || "";
       
       // Parse item ID (e.g. extracts a 12-digit number from URL or raw input)
-      const match = targetInput.match(/(?:\/itm\/|active\/|item\/|v1\|)?(\d+)/i);
+      const match = targetInput.match(/(?:\/itm\/|active\/|item\/|v1\|)?(\d{11,13})/i);
       let itemId = match ? match[1] : targetInput.trim();
 
-      if (!itemId || !/^\d+$/.test(itemId)) {
+      if (!itemId || !/^\d{11,13}$/.test(itemId)) {
         if (!targetInput.trim()) {
           res.writeHead(400, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: "Please enter an eBay Item ID, URL, or product keywords." }));
