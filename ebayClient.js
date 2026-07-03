@@ -1586,6 +1586,38 @@ async function getItemFromBrowse(itemId) {
 }
 
 /**
+ * Searches eBay for the best matching item and returns its 12-digit Item ID.
+ * @param {string} keywords - Plain text keywords (e.g. title).
+ * @returns {Promise<string|null>} 12-digit eBay Item ID or null if not found.
+ */
+async function searchItemIdByKeywords(keywords) {
+  try {
+    await refreshEbayAccessToken();
+    utils.logAudit("INFO", `Searching eBay Browse API for keywords: "${keywords}"`);
+    const url = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(keywords)}&limit=1`;
+    const headers = {
+      "Accept": "application/json",
+      "Content-Type": "application/json"
+    };
+    const res = await ebayFetch(url, { headers });
+    if (!res.ok) {
+      throw new Error(`Browse API search returned status ${res.status}`);
+    }
+    const data = await res.json();
+    const items = data.itemSummaries || [];
+    if (items.length > 0 && items[0].itemId) {
+      const match = items[0].itemId.match(/(\d+)/);
+      return match ? match[1] : null;
+    }
+    return null;
+  } catch (err) {
+    utils.logAudit("ERROR", `Failed to search eBay Browse API for keywords "${keywords}": ${err.message}`);
+    throw err;
+  }
+}
+
+
+/**
  * Creates or updates an inventory location (merchant ship-from address).
  * @param {string} locationKey - Merchant location key.
  * @param {object} locationDetails - Location payload.
@@ -1634,6 +1666,7 @@ module.exports = {
   uploadImageToEPS,
   getMarketingSummary,
   getItemFromBrowse,
+  searchItemIdByKeywords,
   createInventoryLocation,
   getInventoryLocation,
   getItemConditionPolicies

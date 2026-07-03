@@ -1440,12 +1440,27 @@ function startWebGuiServer(port = 45900) {
       
       // Parse item ID (e.g. extracts a 12-digit number from URL or raw input)
       const match = targetInput.match(/(?:\/itm\/|active\/|item\/|v1\|)?(\d+)/i);
-      const itemId = match ? match[1] : targetInput.trim();
+      let itemId = match ? match[1] : targetInput.trim();
 
       if (!itemId || !/^\d+$/.test(itemId)) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: "Invalid eBay Item ID or URL. Make sure it contains a 12-digit numeric ID." }));
-        return;
+        if (!targetInput.trim()) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: "Please enter an eBay Item ID, URL, or product keywords." }));
+          return;
+        }
+        try {
+          const foundId = await ebayClient.searchItemIdByKeywords(targetInput.trim());
+          if (!foundId) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: `No matching items found on eBay for search query "${targetInput}"` }));
+            return;
+          }
+          itemId = foundId;
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: `Search failed: ${err.message}` }));
+          return;
+        }
       }
 
       try {

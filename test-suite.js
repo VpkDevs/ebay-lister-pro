@@ -2473,6 +2473,66 @@ test('Additional maximal coverage and edge cases', async (t) => {
     }
   });
 
+  await t.test('GET /api/ebay/import handles keyword query and searches Browse API', async () => {
+    const originalToken = ebayClient.getAccessToken();
+    ebayClient.setAccessToken("active-token");
+
+    const originalFetch = global.fetch;
+    global.fetch = async (url, opts) => {
+      const urlStr = String(url);
+      if (urlStr.includes('/identity/v1/oauth2/token')) {
+        const tokenBody = JSON.stringify({ access_token: "mocked-access-token" });
+        return { status: 200, ok: true, json: async () => JSON.parse(tokenBody), text: async () => tokenBody };
+      }
+      if (urlStr.includes('/buy/browse/v1/item_summary/search')) {
+        const searchBody = JSON.stringify({
+          itemSummaries: [
+            { itemId: "v1|987654321098|0" }
+          ]
+        });
+        return { status: 200, ok: true, json: async () => JSON.parse(searchBody), text: async () => searchBody };
+      }
+      if (urlStr.includes('/buy/browse/v1/item/')) {
+        const bodyText = JSON.stringify({
+          title: "Searched Keywords Product",
+          price: { value: "29.95", currency: "USD" },
+          categoryId: "54321",
+          brand: "Prevagen",
+          mpn: "PREV-60",
+          description: "Prevagen Extra Strength 60 Capsules",
+          localizedAspects: [
+            { name: "Quantity", value: "60 caps" }
+          ],
+          image: { imageUrl: "https://example.com/prevagen.jpg" }
+        });
+        return { status: 200, ok: true, json: async () => JSON.parse(bodyText), text: async () => bodyText };
+      }
+      return { status: 404, ok: false };
+    };
+
+    // Setup active server instance for testing
+    const serverPort = 49100 + Math.round(Math.random() * 500);
+    const testServer = webServer.startWebGuiServer(serverPort);
+
+    try {
+      const url = `http://127.0.0.1:${serverPort}/api/ebay/import?itemIdOrUrl=prevagen%20extra%20str%2060%20caps`;
+      const res = await REAL_FETCH(url);
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      
+      assert.strictEqual(data.title, "Searched Keywords Product");
+      assert.strictEqual(data.brand, "Prevagen");
+      assert.strictEqual(data.model, "PREV-60");
+      assert.strictEqual(data.suggestedPrice, 29.95);
+      assert.strictEqual(data.aspects.Quantity, "60 caps");
+      assert.deepEqual(data.imageUrls, ["https://example.com/prevagen.jpg"]);
+    } finally {
+      testServer.close();
+      ebayClient.setAccessToken(originalToken);
+      global.fetch = originalFetch;
+    }
+  });
+
   await t.test('Daily repricer UNDERCUT strategy sets price to $0.05 under min comp price', async () => {
     const testSku = "REPRICE-UNDERCUT";
     const history = [{
