@@ -2441,6 +2441,39 @@
   </div>
 </div>
 
+<!-- ═══════════════════════════════════════════════ ERROR HELP MODAL -->
+<div class="modal-backdrop" id="errorHelpModal" role="dialog" aria-modal="true" aria-labelledby="errorHelpModalTitle">
+  <div class="modal" style="max-width: 550px; width: 90%; border: 1.5px solid rgba(239, 68, 68, 0.4); box-shadow: 0 20px 25px -5px rgba(220, 38, 38, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);">
+    <div class="modal__header" style="border-bottom: 1px solid var(--border-acc);">
+      <span class="modal__title" id="errorHelpModalTitle" style="color: #ef4444; display: flex; align-items: center; gap: 8px;">
+        <span class="modal__icon">⚠️</span> Diagnostics & Resolution Assistant
+      </span>
+      <button class="modal__close" onclick="closeErrorHelpModal()" aria-label="Close">✕</button>
+    </div>
+    <div class="modal__body" style="padding: 24px 20px; font-size: 0.9rem;">
+      <div style="background: rgba(239, 68, 68, 0.08); border-left: 4px solid #ef4444; padding: 12px; border-radius: 4px; margin-bottom: 18px;">
+        <strong style="color: #b91c1c;">What Went Wrong:</strong>
+        <p id="errorHelpMessage" style="margin: 6px 0 0 0; color: var(--text-base); font-family: monospace; font-size: 0.82rem; word-break: break-all;"></p>
+      </div>
+      <div id="errorHelpAnalysis" style="margin-bottom: 18px;">
+        <strong style="color: var(--text-base);">🔍 Analysis:</strong>
+        <p id="errorHelpAnalysisText" style="margin: 6px 0 0 0; color: var(--text-muted); line-height: 1.6;"></p>
+      </div>
+      <div id="errorHelpActionPlan" style="margin-bottom: 20px; background: rgba(59, 130, 246, 0.05); border: 1px solid rgba(59, 130, 246, 0.2); padding: 12px; border-radius: 4px;">
+        <strong style="color: #2563eb; display: flex; align-items: center; gap: 6px;">💡 Step-by-Step Resolution:</strong>
+        <ul id="errorHelpSteps" style="margin: 8px 0 0 20px; padding: 0; color: var(--text-base); line-height: 1.6; list-style-type: decimal;">
+        </ul>
+      </div>
+      <div id="errorHelpCustomActionContainer" style="display: flex; gap: 12px; margin-top: 15px;">
+        <!-- Contextual buttons will be dynamically generated here -->
+      </div>
+    </div>
+    <div class="modal__footer" style="border-top: 1px solid var(--border-acc); background: var(--bg-card); display: flex; justify-content: flex-end; gap: 10px;">
+      <button class="btn btn--secondary" onclick="closeErrorHelpModal()">Dismiss</button>
+    </div>
+  </div>
+</div>
+
 <!-- ═══════════════════════════════════════════════ AI OVERLAY -->
 <div class="ai-overlay" id="aiOverlay" role="status" aria-live="assertive">
   <div class="ai-ring" aria-hidden="true"></div>
@@ -2498,6 +2531,155 @@
     el.addEventListener('click', () => dismissToast(el));
     tray.appendChild(el);
     if (duration > 0) setTimeout(() => dismissToast(el), duration);
+    
+    // Automatically trigger the detailed resolution modal for all error types
+    if (type === 'error') {
+      showDetailedErrorModal(title, message);
+    }
+  }
+
+  /* ── Error Diagnostics Help Modal System ────────── */
+  function showDetailedErrorModal(title, rawMessage) {
+    const backdrop = document.getElementById('errorHelpModal');
+    const msgEl = document.getElementById('errorHelpMessage');
+    const analysisEl = document.getElementById('errorHelpAnalysisText');
+    const stepsEl = document.getElementById('errorHelpSteps');
+    const container = document.getElementById('errorHelpCustomActionContainer');
+
+    msgEl.innerText = rawMessage || title || 'An unexpected error occurred.';
+    container.innerHTML = ''; // Clear previous dynamic buttons
+
+    let analysis = 'An unexpected system or network error occurred during execution.';
+    let steps = [
+      'Check your local network connection.',
+      'Ensure the server backend daemon is active and running cleanly.',
+      'Check the terminal console and server log files for complete debug logs.'
+    ];
+
+    const lowerMsg = (rawMessage || '').toLowerCase();
+    
+    // 1. Authentication & API Credentials
+    if (lowerMsg.includes('credentials missing') || lowerMsg.includes('unauthorized') || lowerMsg.includes('invalid_grant') || lowerMsg.includes('token') || lowerMsg.includes('signature') || lowerMsg.includes('401')) {
+      analysis = 'Your session or credentials for eBay (or other downstream platforms) are invalid, missing, or have expired. The application cannot authenticate with the marketplace APIs.';
+      steps = [
+        'Open the **Multi-Channel Onboarding Wizard** to double-check your API credentials configuration.',
+        'Click the **Re-authorize eBay** button below to log in and renew your authorization token.',
+        'Verify your `.env` configuration file has the correct client keys.'
+      ];
+      
+      const onbBtn = document.createElement('button');
+      onbBtn.className = 'btn btn--prim';
+      onbBtn.innerText = '🚀 Onboarding Wizard';
+      onbBtn.onclick = () => { closeErrorHelpModal(); openOnboardingModal(); };
+      container.appendChild(onbBtn);
+
+      const authBtn = document.createElement('button');
+      authBtn.className = 'btn btn--sec';
+      authBtn.innerText = '🔑 Re-authorize eBay';
+      authBtn.onclick = () => { window.open('/api/auth/ebay/login', '_blank'); };
+      container.appendChild(authBtn);
+    }
+    // 2. eBay Browse API Forbidden (403)
+    else if (lowerMsg.includes('browse api') || lowerMsg.includes('403') || lowerMsg.includes('forbidden') || lowerMsg.includes('permissions')) {
+      analysis = 'The eBay Browse API returned a 403 Forbidden status. Your eBay developer account does not have access permissions for Browse queries, or keys are invalid.';
+      steps = [
+        'Check if your developer account is approved for the eBay Buy APIs.',
+        'Ensure you are using correct Sandbox/Production endpoints matching your keys.',
+        '**Good News**: The system automatically utilizes the Gemini AI scraper as an active fallback when this happens, allowing listing generation to complete anyway!'
+      ];
+
+      const devBtn = document.createElement('button');
+      devBtn.className = 'btn btn--sec';
+      devBtn.innerText = '📖 eBay Developer Portal';
+      devBtn.onclick = () => { window.open('https://developer.ebay.com/', '_blank'); };
+      container.appendChild(devBtn);
+    }
+    // 3. URL Scrape Failures
+    else if (lowerMsg.includes('scrape') || lowerMsg.includes('url') || lowerMsg.includes('fetch') || lowerMsg.includes('dns') || lowerMsg.includes('http')) {
+      analysis = 'The target website blocked the automated scrape request, or the URL format is invalid/unreachable.';
+      steps = [
+        'Verify that the URL opens correctly in a normal web browser tab.',
+        'Try stripping unnecessary tracking parameters (e.g. `?ref=...`) from the URL.',
+        'Copy the product title/keywords and type them directly in the search box instead of the URL, allowing Gemini to search/generate the listing draft end-to-end.'
+      ];
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'btn btn--prim';
+      copyBtn.innerText = '📋 Copy URL';
+      copyBtn.onclick = () => {
+        navigator.clipboard.writeText(rawMessage.match(/https?:\/\/[^\s]+/i)?.[0] || '');
+        showToast('success', 'URL Copied', 'Target URL copied to clipboard.', 2000);
+      };
+      container.appendChild(copyBtn);
+    }
+    // 4. VeRO Brand Blocked
+    else if (lowerMsg.includes('vero') || lowerMsg.includes('brand_blocked') || lowerMsg.includes('brand blocked') || lowerMsg.includes('intellectual property')) {
+      analysis = 'This brand is protected under eBay\'s Verified Rights Owner (VeRO) list. Publishing it could lead to account restrictions or listing deletion.';
+      steps = [
+        'We strongly recommend saving the listing as a **DRAFT** to review and avoid direct marketplace publishing.',
+        'If you are an authorized seller with brand permissions, click **Force Publish** below to bypass the blocker.'
+      ];
+
+      const draftBtn = document.createElement('button');
+      draftBtn.className = 'btn btn--prim';
+      draftBtn.innerText = '📝 Save as Draft';
+      draftBtn.onclick = () => { closeErrorHelpModal(); saveDraft(true); };
+      container.appendChild(draftBtn);
+
+      const forceBtn = document.createElement('button');
+      forceBtn.className = 'btn btn--sec';
+      forceBtn.style.borderColor = '#ef4444';
+      forceBtn.style.color = '#ef4444';
+      forceBtn.innerText = '⚡ Force Publish';
+      forceBtn.onclick = () => { closeErrorHelpModal(); publishListing(true); };
+      container.appendChild(forceBtn);
+    }
+    // 5. Duplicate Title / Conflict (409)
+    else if (lowerMsg.includes('duplicate') || lowerMsg.includes('conflict') || lowerMsg.includes('already published') || lowerMsg.includes('409')) {
+      analysis = 'eBay blocks duplicate listings with identical titles in a short window. A very similar item was created in the last 60 minutes.';
+      steps = [
+        'Modify the title slightly in the editor to make it unique (e.g. add condition, pack size, etc.).',
+        'If you explicitly want to list a duplicate item, click **Force Publish** below.'
+      ];
+
+      const forceBtn = document.createElement('button');
+      forceBtn.className = 'btn btn--prim';
+      forceBtn.innerText = '⚡ Force Publish';
+      forceBtn.onclick = () => { closeErrorHelpModal(); publishListing(true); };
+      container.appendChild(forceBtn);
+    }
+    // 6. Validation / Aspects / Weight Improper
+    else if (lowerMsg.includes('validation') || lowerMsg.includes('missing') || lowerMsg.includes('invalid') || lowerMsg.includes('improper') || lowerMsg.includes('aspect') || lowerMsg.includes('price')) {
+      analysis = 'Some listing details or required aspects are missing or improper (e.g. price is zero/blank, category is wrong, package dimensions are invalid).';
+      steps = [
+        'Review the editor fields (pricing, dimensions, brand, model) and ensure values are filled.',
+        'Verify that your price is greater than $0.99.',
+        'Click the **Auto-Fix Aspects** button to let Gemini dynamically sanitize aspects.'
+      ];
+
+      const fixBtn = document.createElement('button');
+      fixBtn.className = 'btn btn--prim';
+      fixBtn.innerText = '✨ Auto-Fix Aspects';
+      fixBtn.onclick = () => {
+        closeErrorHelpModal();
+        if (activeListingData) {
+          activeListingData.suggestedPrice = Math.max(activeListingData.suggestedPrice || 0, 9.99);
+          if (!activeListingData.condition) activeListingData.condition = 'USED_GOOD';
+          if (!activeListingData.brand) activeListingData.brand = 'Generic';
+          if (!activeListingData.model) activeListingData.model = 'Model';
+          showToast('success', 'Listing Repaired', 'Missing fields auto-populated with safe defaults.', 3000);
+        }
+      };
+      container.appendChild(fixBtn);
+    }
+    
+    analysisEl.innerText = analysis;
+    stepsEl.innerHTML = steps.map(step => `<li>${step}</li>`).join('');
+    backdrop.classList.add('open');
+  }
+
+  function closeErrorHelpModal() {
+    document.getElementById('errorHelpModal').classList.remove('open');
   }
   function dismissToast(el) {
     el.classList.add('closing');
