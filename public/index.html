@@ -2325,7 +2325,7 @@
           <li>Create or log in to your <a href="https://developer.ebay.com" target="_blank" style="color: var(--amber-bright); text-decoration: underline;">eBay Developer Account</a>.</li>
           <li>Under <strong>Application Keys</strong>, generate <strong>Production</strong> keys.</li>
           <li>Copy the <strong>App ID (Client ID)</strong> and <strong>Cert ID (Client Secret)</strong> and paste them below.</li>
-          <li>Set your redirect URI to: <code style="background: rgba(255,255,255,0.05); padding: 2px 4px;">http://localhost:45911/api/auth/google/callback</code>.</li>
+          <li>Set your redirect URI (RuName OAuth Redirect URI) to: <code id="onb-ebay-redirect-uri" style="background: rgba(255,255,255,0.05); padding: 2px 4px;">http://localhost:45900/api/auth/ebay/callback</code>.</li>
         </ol>
         <div class="form-group">
           <label>eBay Client ID (App ID)</label>
@@ -2336,10 +2336,26 @@
           <input type="text" id="onb-ebay-client-secret" placeholder="Enter Client Secret..." style="width: 100%; margin-top: 4px;" />
         </div>
         <div class="form-group" style="margin-top:10px;">
-          <label>eBay User Refresh Token</label>
-          <textarea id="onb-ebay-refresh-token" rows="3" placeholder="Enter long refresh token..." style="width: 100%; margin-top: 4px;"></textarea>
+          <label>eBay RuName (Redirect URI Name)</label>
+          <input type="text" id="onb-ebay-runame" placeholder="Enter RuName..." style="width: 100%; margin-top: 4px;" />
         </div>
-        <button class="btn btn--primary" onclick="savePlatformCredentials('ebay')" style="margin-top:12px;">Save eBay Credentials</button>
+
+        <div style="margin-top: 16px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 16px;">
+          <h4 style="color: var(--text-bright); font-size: 0.9rem; margin-bottom: 8px;">Method 1: Connect via OAuth (Recommended)</h4>
+          <p style="font-size: 0.8rem; color: var(--text-dim); margin-bottom: 10px;">
+            Save your Client ID, Secret, and RuName first, then click below to authorize directly on eBay.
+          </p>
+          <button class="btn btn--primary" onclick="connectEbayOAuth()" style="width: 100%;">🔗 Connect eBay Account</button>
+        </div>
+
+        <div style="margin-top: 20px; border-top: 1px solid rgba(255,255,255,0.06); padding-top: 16px;">
+          <h4 style="color: var(--text-bright); font-size: 0.9rem; margin-bottom: 8px;">Method 2: Manual Refresh Token</h4>
+          <div class="form-group">
+            <label>eBay User Refresh Token</label>
+            <textarea id="onb-ebay-refresh-token" rows="3" placeholder="Enter long refresh token..." style="width: 100%; margin-top: 4px;"></textarea>
+          </div>
+          <button class="btn" onclick="savePlatformCredentials('ebay')" style="margin-top:12px; width: 100%; background: rgba(255,255,255,0.05); color: var(--text-bright);">Save Credentials Manually</button>
+        </div>
       </div>
 
       <!-- Tab Content: Shopify -->
@@ -2715,21 +2731,44 @@
   }
 
   /* ── Onboarding Wizard ────────────────────────── */
-  function openOnboardingWizard(tabName = 'ebay') {
+  async function openOnboardingWizard(tabName = 'ebay') {
     closeSidebar();
     document.getElementById('onboardingModal').classList.add('open');
     switchOnboardingTab(tabName);
     
-    // Auto-populate current values from /api/history shop data or config state
-    fetch('/api/status')
-      .then(res => {
-        if (res.ok) return res.json();
-        return {};
-      })
-      .then(status => {
-        // If we want to pre-fill Shopify store name or WooCommerce url, we can fetch
-        // WooCommerce URL from config variables if returned in future status payloads.
-      }).catch(err => console.error(err));
+    // Dynamically set instructions redirect URI
+    const redirEl = document.getElementById('onb-ebay-redirect-uri');
+    if (redirEl) {
+      redirEl.textContent = window.location.origin + '/api/auth/ebay/callback';
+    }
+
+    try {
+      const res = await fetch('/api/config');
+      if (!res.ok) return;
+      const config = await res.json();
+      
+      // Pre-fill eBay
+      document.getElementById('onb-ebay-client-id').value = config.EBAY_CLIENT_ID || '';
+      document.getElementById('onb-ebay-client-secret').value = config.EBAY_CLIENT_SECRET || '';
+      document.getElementById('onb-ebay-runame').value = config.EBAY_RUNAME || '';
+      document.getElementById('onb-ebay-refresh-token').value = config.EBAY_REFRESH_TOKEN || '';
+      
+      // Pre-fill Shopify
+      document.getElementById('onb-shopify-shop-name').value = config.SHOPIFY_SHOP_NAME || '';
+      document.getElementById('onb-shopify-access-token').value = config.SHOPIFY_ACCESS_TOKEN || '';
+      
+      // Pre-fill WooCommerce
+      document.getElementById('onb-woocommerce-url').value = config.WOOCOMMERCE_URL || '';
+      document.getElementById('onb-woocommerce-key').value = config.WOOCOMMERCE_KEY || '';
+      document.getElementById('onb-woocommerce-secret').value = config.WOOCOMMERCE_SECRET || '';
+      
+      // Pre-fill Etsy
+      document.getElementById('onb-etsy-shop-id').value = config.ETSY_SHOP_ID || '';
+      document.getElementById('onb-etsy-access-token').value = config.ETSY_ACCESS_TOKEN || '';
+      document.getElementById('onb-etsy-client-id').value = config.ETSY_CLIENT_ID || '';
+    } catch (err) {
+      console.warn("Failed to load platform credentials: " + err.message);
+    }
   }
 
   function closeOnboardingModal() {
@@ -2746,12 +2785,46 @@
     if (tabEl) tabEl.classList.add('active');
   }
 
+  async function connectEbayOAuth() {
+    const clientId = document.getElementById('onb-ebay-client-id').value.trim();
+    const clientSecret = document.getElementById('onb-ebay-client-secret').value.trim();
+    const ruName = document.getElementById('onb-ebay-runame').value.trim();
+
+    if (!clientId || !clientSecret || !ruName) {
+      showToast('error', 'Fields Required', 'eBay Client ID, Client Secret, and RuName are all required to authorize via OAuth.', 5000);
+      return;
+    }
+
+    try {
+      const saveRes = await fetch('/api/config/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          EBAY_CLIENT_ID: clientId,
+          EBAY_CLIENT_SECRET: clientSecret,
+          EBAY_RUNAME: ruName
+        })
+      });
+      const saveData = await saveRes.json();
+      if (!saveRes.ok) throw new Error(saveData.error || 'Failed to save configuration');
+
+      showToast('success', 'Config Saved', 'Config saved. Redirecting to eBay for authentication...', 2000);
+      
+      setTimeout(() => {
+        window.location.href = '/api/auth/ebay/login';
+      }, 1000);
+    } catch (err) {
+      showToast('error', 'OAuth Initiation Failed', err.message, 5000);
+    }
+  }
+
   async function savePlatformCredentials(platform) {
     let payload = {};
     if (platform === 'ebay') {
       payload = {
         EBAY_CLIENT_ID: document.getElementById('onb-ebay-client-id').value.trim(),
         EBAY_CLIENT_SECRET: document.getElementById('onb-ebay-client-secret').value.trim(),
+        EBAY_RUNAME: document.getElementById('onb-ebay-runame').value.trim(),
         EBAY_REFRESH_TOKEN: document.getElementById('onb-ebay-refresh-token').value.trim()
       };
     } else if (platform === 'shopify') {
@@ -2800,8 +2873,8 @@
         Shopify: data.shopifyConnected,
         Etsy: data.etsyConnected,
         WooCommerce: data.woocommerceConnected,
-        Poshmark: true,
-        Mercari: true
+        Poshmark: false,
+        Mercari: false
       };
 
       for (const [platform, connected] of Object.entries(badgeMap)) {
@@ -3517,6 +3590,23 @@
     if (brandInput) {
       brandInput.addEventListener('input', (e) => checkVeroWarning(e.target.value));
     }
+
+    // Handle OAuth Callback Notifications
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.has('ebay_auth')) {
+      const status = urlParams.get('ebay_auth');
+      if (status === 'success') {
+        showToast('success', 'eBay Connected', 'eBay account authorized and connected successfully!', 5000);
+      }
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+    if (urlParams.has('error')) {
+      const err = urlParams.get('error');
+      if (err === 'ebay_code_missing') {
+        showToast('error', 'Authentication Failed', 'eBay returned no authorization code. Please try again.', 5000);
+      }
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
   });
 
   /* ── eBay Business Policy Loader ─────────────── */
@@ -3888,7 +3978,7 @@
   }
 
   /* ── Category Type-Ahead ─────────────────────── */
-  let categorySearchTimer = null;
+  // categorySearchTimer is declared at the top of the file script block
   function debounceCategorySearch() {
     if (categorySearchTimer) clearTimeout(categorySearchTimer);
     categorySearchTimer = setTimeout(runCategorySearch, 400);

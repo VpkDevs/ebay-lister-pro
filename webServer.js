@@ -208,7 +208,15 @@ function isAllowedOrigin(origin) {
   if (!origin) return false;
   try {
     const url = new URL(origin);
-    return url.hostname === 'localhost' || url.hostname === '127.0.0.1' || url.protocol === 'chrome-extension:';
+    // Explicitly allow local loopback origins with standard ports or specific Chrome extension protocol
+    if (url.protocol === 'chrome-extension:') {
+      return true;
+    }
+    if (url.protocol === 'http:' || url.protocol === 'https:') {
+      const hostname = url.hostname.toLowerCase();
+      return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]';
+    }
+    return false;
   } catch (e) {
     return false;
   }
@@ -311,10 +319,45 @@ async function runDiagnosticsHealth() {
     }
   };
 
+  const checkFileIntegrity = (filePath) => {
+    if (!fs.existsSync(filePath)) return { status: "OK", message: "File does not exist yet (clean start)" };
+    try {
+      const content = fs.readFileSync(filePath, 'utf8');
+      if (content.trim()) JSON.parse(content);
+      return { status: "OK" };
+    } catch (e) {
+      return { status: "CORRUPTED", error: e.message };
+    }
+  };
+
+  const checkDbLocks = (filePath) => {
+    const lockPath = `${filePath}.lock`;
+    if (fs.existsSync(lockPath)) {
+      try {
+        const stats = fs.statSync(lockPath);
+        const ageMs = Date.now() - stats.mtimeMs;
+        if (ageMs > 60000) { // Lock older than 1 minute is probably hung
+          return { status: "STUCK_LOCK_DETECTED", ageMs };
+        }
+        return { status: "LOCKED_ACTIVE" };
+      } catch (e) {
+        return { status: "ERROR", error: e.message };
+      }
+    }
+    return { status: "OK" };
+  };
+
   reports.storage = {
     scratch: checkFolderWritable(path.join(process.cwd(), 'scratch')),
     uploads: checkFolderWritable(config.uploadTempDir),
     data: checkFolderWritable(path.join(process.cwd(), 'data'))
+  };
+
+  reports.database = {
+    historyIntegrity: checkFileIntegrity(config.historyPath),
+    historyLockStatus: checkDbLocks(config.historyPath),
+    dlqIntegrity: checkFileIntegrity(config.dlqPath),
+    dlqLockStatus: checkDbLocks(config.dlqPath)
   };
 
   const totalMem = os.totalmem();
@@ -337,7 +380,11 @@ async function runDiagnosticsHealth() {
 
   const isHealthy = reports.storage.scratch.status === "OK" &&
                     reports.storage.uploads.status === "OK" &&
-                    reports.storage.data.status === "OK";
+                    reports.storage.data.status === "OK" &&
+                    reports.database.historyIntegrity.status === "OK" &&
+                    reports.database.dlqIntegrity.status === "OK" &&
+                    reports.database.historyLockStatus.status !== "STUCK_LOCK_DETECTED" &&
+                    reports.database.dlqLockStatus.status !== "STUCK_LOCK_DETECTED";
                     
   return {
     status: isHealthy ? 'ok' : 'degraded',
@@ -429,6 +476,9 @@ function startWebGuiServer(port = 45900) {
         res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
         res.setHeader('X-XSS-Protection', '1; mode=block');
         res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+        res.setHeader('Permissions-Policy', 'geolocation=(), camera=(), microphone=(), payment=()');
+        res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+        res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
 
         if (req.method === 'OPTIONS') {
           res.writeHead(200);
@@ -936,7 +986,7 @@ function startWebGuiServer(port = 45900) {
         activeSessions.set(sessionId, { user: userObj, expiresAt: Date.now() + 86400000 });
         
         res.writeHead(302, {
-          'Set-Cookie': `sessionId=${sessionId}; Path=/; HttpOnly; SameSite=Lax`,
+          'Set-Cookie': `sessionId=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Secure`,
           'Location': '/'
         });
         res.end();
@@ -1001,7 +1051,7 @@ function startWebGuiServer(port = 45900) {
         activeSessions.set(sessionId, { user: userObj, expiresAt: Date.now() + 86400000 });
         
         res.writeHead(302, {
-          'Set-Cookie': `sessionId=${sessionId}; Path=/; HttpOnly; SameSite=Lax`,
+          'Set-Cookie': `sessionId=${sessionId}; Path=/; HttpOnly; SameSite=Lax; Secure`,
           'Location': '/'
         });
         res.end();
@@ -1965,6 +2015,46 @@ function startWebGuiServer(port = 45900) {
       return;
     }
 
+    // API: Get configuration keys
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/config') {
+      try {
+        const configData = {
+          EBAY_CLIENT_ID: config.getEBAY_CLIENT_ID() || "",
+          EBAY_CLIENT_SECRET: config.getEBAY_CLIENT_SECRET() || "",
+          EBAY_REFRESH_TOKEN: config.getEBAY_REFRESH_TOKEN() || "",
+          EBAY_RUNAME: config.getEBAY_RUNAME() || "",
+          EBAY_LOCATION_KEY: config.getEBAY_LOCATION_KEY() || "default",
+          EBAY_FULFILLMENT_POLICY_ID: config.getEBAY_FULFILLMENT_POLICY_ID() || "",
+          EBAY_PAYMENT_POLICY_ID: config.getEBAY_PAYMENT_POLICY_ID() || "",
+          EBAY_RETURN_POLICY_ID: config.getEBAY_RETURN_POLICY_ID() || "",
+          SHOPIFY_SHOP_NAME: config.getSHOPIFY_SHOP_NAME() || "",
+          SHOPIFY_ACCESS_TOKEN: config.getSHOPIFY_ACCESS_TOKEN() || "",
+          WOOCOMMERCE_URL: config.getWOOCOMMERCE_URL() || "",
+          WOOCOMMERCE_KEY: config.getWOOCOMMERCE_KEY() || "",
+          WOOCOMMERCE_SECRET: config.getWOOCOMMERCE_SECRET() || "",
+          ETSY_SHOP_ID: config.getETSY_SHOP_ID() || "",
+          ETSY_ACCESS_TOKEN: config.getETSY_ACCESS_TOKEN() || "",
+          ETSY_CLIENT_ID: config.getETSY_CLIENT_ID() || "",
+          API_KEY: config.getAPI_KEY() || "",
+          GEMINI_API_KEY: config.getGEMINI_API_KEY() || "",
+          WATERMARK_TEXT: config.getWATERMARK_TEXT() || "",
+          SKU_PREFIX: config.getSKU_PREFIX() || "AUTO-",
+          DEFAULT_PRICING_STRATEGY: config.getDEFAULT_PRICING_STRATEGY() || "MARKET",
+          DEFAULT_SHIPPING_OPTION: config.getDEFAULT_SHIPPING_OPTION() || "USPS_GROUND",
+          DEFAULT_RETURN_OPTION: config.getDEFAULT_RETURN_OPTION() || "NO_RETURNS",
+          DEFAULT_IMMEDIATE_PAYMENT: config.getDEFAULT_IMMEDIATE_PAYMENT(),
+          SELLER_SHIPPING_TERMS: config.getSELLER_SHIPPING_TERMS() || "",
+          SELLER_RETURN_TERMS: config.getSELLER_RETURN_TERMS() || ""
+        };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(configData));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
     // API: Save configuration keys
     if (req.method === 'POST' && parsedUrl.pathname === '/api/config/save') {
       let bodyData = '';
@@ -1983,7 +2073,7 @@ function startWebGuiServer(port = 45900) {
             'API_KEY', 'GEMINI_API_KEY', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
             'GOOGLE_REDIRECT_URI', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET',
             'EBAY_CLIENT_ID', 'EBAY_CLIENT_SECRET', 'EBAY_REFRESH_TOKEN', 'EBAY_LOCATION_KEY',
-            'EBAY_FULFILLMENT_POLICY_ID', 'EBAY_PAYMENT_POLICY_ID', 'EBAY_RETURN_POLICY_ID',
+            'EBAY_RUNAME', 'EBAY_FULFILLMENT_POLICY_ID', 'EBAY_PAYMENT_POLICY_ID', 'EBAY_RETURN_POLICY_ID',
             'SHOPIFY_SHOP_NAME', 'SHOPIFY_ACCESS_TOKEN',
             'WOOCOMMERCE_URL', 'WOOCOMMERCE_KEY', 'WOOCOMMERCE_SECRET',
             'ETSY_SHOP_ID', 'ETSY_ACCESS_TOKEN', 'ETSY_CLIENT_ID',
@@ -3176,6 +3266,17 @@ function startWebGuiServer(port = 45900) {
     process.on('SIGTERM', gracefulShutdown);
     shutdownRegistered = true;
   }
+
+  // Handle port-in-use and other listen errors gracefully
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`\n❌ FATAL: Port ${port} is already in use by another process.`);
+      console.error(`   Run: netstat -ano | findstr :${port}  to find and kill it, then restart.`);
+    } else {
+      console.error(`\n❌ FATAL: Server error — ${err.message}`);
+    }
+    process.exit(1);
+  });
 
   // Strictly bind only to localhost loopback '127.0.0.1' for security
   server.listen(port, '127.0.0.1', () => {

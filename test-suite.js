@@ -3953,6 +3953,27 @@ test('Autosave and parameter-validation routes', async (t) => {
       const res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/ebay/import?itemIdOrUrl=`);
       assert.strictEqual(res.status, 400);
     });
+
+    await t.test('GET /api/config returns configuration keys', async () => {
+      const res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/config`);
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.ok('EBAY_CLIENT_ID' in data);
+      assert.ok('EBAY_CLIENT_SECRET' in data);
+      assert.ok('EBAY_RUNAME' in data);
+    });
+
+    await t.test('POST /api/config/save updates EBAY_RUNAME', async () => {
+      const res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/config/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ EBAY_RUNAME: 'TEST_OAUTH_RUNAME' })
+      });
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.ok(data.success);
+      assert.strictEqual(process.env.EBAY_RUNAME, 'TEST_OAUTH_RUNAME');
+    });
   } finally {
     global.fetch = originalFetch;
     await new Promise((resolve) => server.close(resolve));

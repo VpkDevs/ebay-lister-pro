@@ -1,20 +1,41 @@
 {
   "name": "ebay-lister-pro",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Zero-dependency enterprise-grade Multi-Channel eBay Lister & Reseller Platform",
   "main": "start.js",
   "type": "commonjs",
   "scripts": {
     "bootstrap": "node bootstrap.js",
     "start": "node start.js",
-    "test": "node test-suite.js"
+    "dev": "node --watch start.js",
+    "server": "node webServer.js",
+    "test": "node test-suite.js",
+    "test:quiet": "node test-suite.js 2>&1 | tail -50",
+    "healthcheck": "node -e \"require('http').get('http://127.0.0.1:45900/health', r => { let d=''; r.on('data',c=>d+=c); r.on('end',()=>{ const j=JSON.parse(d); console.log('Health:', j.status); process.exit(j.status==='ok'?0:1); }); }).on('error',e=>{ console.error('Server unreachable:', e.message); process.exit(1); })\"",
+    "repurpose": "node scripts/repurpose.js",
+    "rollback": "bash scripts/rollback.sh",
+    "lint": "node --input-type=module -e \"import('./webServer.js').catch(e => { console.error(e.message); process.exit(1); })\" 2>&1 || node --check webServer.js && node --check ebayClient.js && node --check geminiClient.js && node --check utils.js && node --check config.js && echo '✔ All files pass syntax check'",
+    "check-syntax": "node --check webServer.js && node --check ebayClient.js && node --check geminiClient.js && node --check utils.js && node --check config.js && node --check crossPost.js && echo '✔ Syntax OK'"
   },
   "engines": {
     "node": ">=18.0.0"
   },
+  "keywords": [
+    "ebay",
+    "lister",
+    "reseller",
+    "multi-channel",
+    "shopify",
+    "woocommerce",
+    "etsy",
+    "gemini-ai",
+    "ecommerce"
+  ],
+  "license": "UNLICENSED",
   "private": true,
   "dependencies": {
     "axios": "^1.18.1",
     "sharp": "^0.35.2"
   }
 }
+

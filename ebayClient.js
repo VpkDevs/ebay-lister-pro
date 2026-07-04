@@ -1099,10 +1099,14 @@ function getFallbackPrices(condition, keywords = "") {
     base = parseFloat((base * 0.3).toFixed(2));
   }
 
+  const minPrice = Math.max(0.99, parseFloat((base * 0.7).toFixed(2)));
+  const maxPrice = Math.max(0.99, parseFloat((base * 1.3).toFixed(2)));
+  const avgPrice = Math.max(0.99, parseFloat(base.toFixed(2)));
+
   return {
-    minPrice: parseFloat((base * 0.7).toFixed(2)),
-    maxPrice: parseFloat((base * 1.3).toFixed(2)),
-    avgPrice: base,
+    minPrice,
+    maxPrice,
+    avgPrice,
     source: "Condition & Category Rule Engine Defaults"
   };
 }

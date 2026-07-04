@@ -117,7 +117,11 @@ async function runWizard() {
   const wcUrl = await askQuestion("8. Enter WooCommerce URL: ");
   let cleanWcUrl = wcUrl.trim();
   if (cleanWcUrl) {
-    cleanWcUrl = cleanWcUrl.replace(/\/$/, '');
+    cleanWcUrl = cleanWcUrl.replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(cleanWcUrl)) {
+      cleanWcUrl = 'https://' + cleanWcUrl;
+    }
+    console.log(`ℹ Auto-parsed WooCommerce URL: ${cleanWcUrl}`);
   }
   configValues['WOOCOMMERCE_URL'] = cleanWcUrl;
 

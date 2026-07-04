@@ -40,6 +40,17 @@ function sanitizeLog(message) {
       clean = clean.replace(new RegExp(escaped, 'g'), secret.label);
     }
   }
+
+  // Scrub Shopify tokens via pattern matching
+  clean = clean.replace(/shpat_[a-zA-Z0-9]{32}/g, '[REDACTED_SHOPIFY_TOKEN]');
+  // Scrub WooCommerce consumer credentials via pattern matching
+  clean = clean.replace(/ck_[a-zA-Z0-9]{40}/g, '[REDACTED_WOOCOMMERCE_KEY]');
+  clean = clean.replace(/cs_[a-zA-Z0-9]{40}/g, '[REDACTED_WOOCOMMERCE_SECRET]');
+  // Scrub Basic Auth headers
+  clean = clean.replace(/Basic\s+[a-zA-Z0-9+/=]+/gi, 'Basic [REDACTED_AUTH_HEADER]');
+  // Scrub Bearer tokens
+  clean = clean.replace(/Bearer\s+[a-zA-Z0-9\-._~+/=]+/gi, 'Bearer [REDACTED_BEARER_TOKEN]');
+
   return clean;
 }
 
