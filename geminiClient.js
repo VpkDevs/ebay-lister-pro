@@ -498,9 +498,24 @@ async function generateListingFromKeywords(keywords) {
       categoryId: { type: "STRING", description: "Estimated eBay leaf category ID matching this item, default to '111422'" },
       aspects: { 
         type: "OBJECT", 
-        description: "Key-value pairs of important product aspects like Brand, Model, Capacity, Color, Type, Size etc.",
-        properties: {},
-        additionalProperties: { type: "STRING" }
+        description: "Key-value pairs of important product aspects like Brand, Model, Capacity, Color, Type, Size, UPC, MPN, etc.",
+        properties: {
+          Brand:       { type: "STRING" },
+          Model:       { type: "STRING" },
+          Type:        { type: "STRING" },
+          Color:       { type: "STRING" },
+          Size:        { type: "STRING" },
+          Capacity:    { type: "STRING" },
+          Material:    { type: "STRING" },
+          UPC:         { type: "STRING" },
+          MPN:         { type: "STRING" },
+          "Country/Region of Manufacture": { type: "STRING" },
+          "Active Ingredients": { type: "STRING" },
+          Flavor:      { type: "STRING" },
+          Scent:       { type: "STRING" },
+          "Unit Count": { type: "STRING" },
+          "Item Form":  { type: "STRING" }
+        }
       }
     },
     required: ["title", "brand", "model", "suggestedPrice", "condition", "description", "categoryId", "aspects"]

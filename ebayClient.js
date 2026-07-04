@@ -476,8 +476,20 @@ async function getOrCreateListingPolicies(shippingOption = "USPS_GROUND", return
         returnId = createData.returnPolicyId;
       }
     } catch (err) {
-      utils.logAudit("ERROR", `Failed to resolve return policy: ${err.message}`);
-      throw err;
+      utils.logAudit("WARN", `Failed to create return policy: ${err.message}. Falling back to first available account policy.`);
+      try {
+        const fbRes = await ebayFetch("https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_US", { headers });
+        const fbData = await fbRes.json();
+        const firstPolicy = (fbData.returnPolicies || [])[0];
+        if (firstPolicy) {
+          returnId = firstPolicy.returnPolicyId;
+          utils.logAudit("INFO", `Using existing return policy as fallback: ${returnId} (${firstPolicy.name})`);
+        } else {
+          throw new Error("No return policies exist on this eBay account.");
+        }
+      } catch (fbErr) {
+        throw new Error(`Failed to resolve any return policy: ${fbErr.message}`);
+      }
     }
   }
 
@@ -516,12 +528,13 @@ async function getOrCreateListingPolicies(shippingOption = "USPS_GROUND", return
           handlingTime: { value: 1, unit: "DAY" },
           shipToLocations: { regionGroups: [{ regionGroupId: "DOMESTIC" }] },
           shippingOptions: [{
-            optionMode: "DOMESTIC",
+            optionType: "DOMESTIC",
             costType,
             shippingServices: [{
-              carrierType: carrier,
+              sortOrder: 1,
+              shippingCarrierCode: carrier,
               shippingServiceCode: serviceCode,
-              ...(costType === "FLAT" ? { shippingFee: { value: "5.00", currency: "USD" } } : {})
+              ...(costType === "FLAT" ? { shippingCost: { value: "5.00", currency: "USD" }, additionalShippingCost: { value: "0.00", currency: "USD" } } : {})
             }]
           }]
         };
@@ -535,8 +548,20 @@ async function getOrCreateListingPolicies(shippingOption = "USPS_GROUND", return
         fulfillmentId = createData.fulfillmentPolicyId;
       }
     } catch (err) {
-      utils.logAudit("ERROR", `Failed to resolve fulfillment policy: ${err.message}`);
-      throw err;
+      utils.logAudit("WARN", `Failed to create fulfillment policy: ${err.message}. Falling back to first available account policy.`);
+      try {
+        const fbRes = await ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers });
+        const fbData = await fbRes.json();
+        const firstPolicy = (fbData.fulfillmentPolicies || [])[0];
+        if (firstPolicy) {
+          fulfillmentId = firstPolicy.fulfillmentPolicyId;
+          utils.logAudit("INFO", `Using existing fulfillment policy as fallback: ${fulfillmentId} (${firstPolicy.name})`);
+        } else {
+          throw new Error("No fulfillment policies exist on this eBay account.");
+        }
+      } catch (fbErr) {
+        throw new Error(`Failed to resolve any fulfillment policy: ${fbErr.message}`);
+      }
     }
   }
 
@@ -570,8 +595,20 @@ async function getOrCreateListingPolicies(shippingOption = "USPS_GROUND", return
         paymentId = createData.paymentPolicyId;
       }
     } catch (err) {
-      utils.logAudit("ERROR", `Failed to resolve payment policy: ${err.message}`);
-      throw err;
+      utils.logAudit("WARN", `Failed to create payment policy: ${err.message}. Falling back to first available account policy.`);
+      try {
+        const fbRes = await ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US", { headers });
+        const fbData = await fbRes.json();
+        const firstPolicy = (fbData.paymentPolicies || [])[0];
+        if (firstPolicy) {
+          paymentId = firstPolicy.paymentPolicyId;
+          utils.logAudit("INFO", `Using existing payment policy as fallback: ${paymentId} (${firstPolicy.name})`);
+        } else {
+          throw new Error("No payment policies exist on this eBay account.");
+        }
+      } catch (fbErr) {
+        throw new Error(`Failed to resolve any payment policy: ${fbErr.message}`);
+      }
     }
   }
 
@@ -1608,11 +1645,16 @@ async function searchItemIdByKeywords(keywords) {
       "Content-Type": "application/json"
     };
     const res = await ebayFetch(url, { headers });
+    // 403/401 means the refresh token doesn't have buy.browse scope — cleanly return null
+    // so the caller falls through to Gemini AI generation without throwing
+    if (res.status === 403 || res.status === 401) {
+      utils.logAudit("INFO", `Browse API returned ${res.status} for keyword search (scope not granted). Will use Gemini AI fallback.`);
+      return null;
+    }
     if (!res.ok) {
       throw new Error(`Browse API search returned status ${res.status}`);
     }
     const data = await res.json();
-    utils.logAudit("INFO", `Browse API search response: ${JSON.stringify(data)}`);
     const items = data.itemSummaries || [];
     if (items.length > 0 && items[0].itemId) {
       const match = items[0].itemId.match(/(\d{11,13})/);
@@ -1620,8 +1662,8 @@ async function searchItemIdByKeywords(keywords) {
     }
     return null;
   } catch (err) {
-    utils.logAudit("ERROR", `Failed to search eBay Browse API for keywords "${keywords}": ${err.message}`);
-    throw err;
+    utils.logAudit("WARN", `Browse API keyword search failed for "${keywords}": ${err.message}. Gemini fallback will be used.`);
+    return null; // Always return null so caller falls back to Gemini cleanly
   }
 }
 
