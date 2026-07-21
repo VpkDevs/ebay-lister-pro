@@ -1,5 +1,5 @@
 // Chrome Extension Popup Script
-const API_URL = "http://127.0.0.1:45911";
+const API_URL = "http://127.0.0.1:45900";
 const API_KEY = "lister-secret-key-12345";
 
 let scrapedImages = [];
@@ -38,13 +38,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   // 2. Request data from content script
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (!tabs || tabs.length === 0) return;
-    
+
     chrome.tabs.sendMessage(tabs[0].id, { action: "scrapeProduct" }, (response) => {
       if (chrome.runtime.lastError) {
         showStatus("Could not scrap this tab. Reload page and try again.", "error");
         return;
       }
-      
+
       if (response && response.success) {
         const item = response.data;
         titleInput.value = item.title;

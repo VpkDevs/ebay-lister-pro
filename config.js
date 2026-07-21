@@ -6,6 +6,9 @@
 const path = require('path');
 const fs = require('fs');
 
+require('dotenv').config();
+const crypto = require('crypto');
+
 const envPath = path.resolve(process.cwd(), '.env');
 
 // Establish central data directory for persistence and volume mounting
@@ -24,26 +27,63 @@ if (!fs.existsSync(uploadTempDir)) {
   fs.mkdirSync(uploadTempDir, { recursive: true });
 }
 
-/**
- * Loads and parses environment variables from the local .env file.
- * @returns {void}
- */
-function loadEnv() {
-  if (fs.existsSync(envPath)) {
-    const lines = fs.readFileSync(envPath, 'utf8').split('\n');
-    for (const line of lines) {
-      const match = line.match(/^\s*([\w.-]+)\s*=\s*(.*)?\s*$/);
-      if (match) {
-        const key = match[1];
-        let value = match[2] || '';
-        if (value.startsWith('"') && value.endsWith('"')) value = value.slice(1, -1);
-        if (value.startsWith("'") && value.endsWith("'")) value = value.slice(1, -1);
-        process.env[key] = value.trim();
-      }
+// Auto-generate secure API_KEY if missing or weak
+if (!process.env.API_KEY || process.env.API_KEY === 'lister-secret-key-12345') {
+  const newKey = `lister_${crypto.randomBytes(16).toString('hex')}`;
+  process.env.API_KEY = newKey;
+  try {
+    let envContent = '';
+    if (fs.existsSync(envPath)) {
+      envContent = fs.readFileSync(envPath, 'utf8');
     }
+    if (envContent.includes('API_KEY=')) {
+      envContent = envContent.replace(/API_KEY\s*=\s*.*/g, `API_KEY=${newKey}`);
+    } else {
+      envContent += `\nAPI_KEY=${newKey}\n`;
+    }
+    fs.writeFileSync(envPath, envContent, 'utf8');
+    console.info(`⚡ Auto-generated a secure API_KEY and saved it to .env: ${newKey}`);
+  } catch (e) {
+    console.warn(`⚠️ Failed to persist auto-generated API_KEY to .env: ${e.message}`);
   }
 }
-loadEnv();
+
+// Environment validation schema
+const { z } = require('zod');
+const EnvSchema = z.object({
+  PORT: z.string().transform(val => parseInt(val, 10)).optional(),
+  API_KEY: z.string().min(10, "API_KEY must be at least 10 characters long"),
+  GEMINI_API_KEY: z.string().optional(),
+  EBAY_CLIENT_ID: z.string().optional(),
+  EBAY_CLIENT_SECRET: z.string().optional(),
+  EBAY_REFRESH_TOKEN: z.string().optional(),
+  EBAY_RUNAME: z.string().optional(),
+  STRIPE_SECRET_KEY: z.string().optional(),
+  STRIPE_WEBHOOK_SECRET: z.string().optional()
+}).passthrough();
+
+const parsedEnv = EnvSchema.safeParse(process.env);
+if (!parsedEnv.success) {
+  console.warn("⚠️ Environment validation warning:", parsedEnv.error.format());
+}
+
+/** Default local dashboard port (must match Dockerfile EXPOSE and Chrome extension host_permissions). */
+const DEFAULT_PORT = 45900;
+
+/**
+ * Resolves the web server listen port from PORT env or {@link DEFAULT_PORT}.
+ * @returns {number}
+ */
+function getPORT() {
+  const raw = process.env.PORT;
+  if (raw !== undefined && raw !== '') {
+    const parsed = parseInt(raw, 10);
+    if (!Number.isNaN(parsed) && parsed > 0 && parsed <= 65535) {
+      return parsed;
+    }
+  }
+  return DEFAULT_PORT;
+}
 
 /**
  * Runs basic pre-flight verification tests on environment settings.
@@ -69,6 +109,8 @@ function runDiagnostics() {
 }
 
 module.exports = {
+  DEFAULT_PORT,
+  getPORT,
   envPath,
   tempPath,
   recoveryPath,
@@ -118,7 +160,7 @@ module.exports = {
   /** @returns {string|undefined} */
   getGOOGLE_CLIENT_SECRET: () => process.env.GOOGLE_CLIENT_SECRET,
   /** @returns {string} */
-  getGOOGLE_REDIRECT_URI: () => process.env.GOOGLE_REDIRECT_URI || "http://localhost:45911/api/auth/google/callback",
+  getGOOGLE_REDIRECT_URI: () => process.env.GOOGLE_REDIRECT_URI || `http://localhost:${getPORT()}/api/auth/google/callback`,
   /** @returns {string|undefined} */
   getSTRIPE_SECRET_KEY: () => process.env.STRIPE_SECRET_KEY,
   /** @returns {string|undefined} */
@@ -144,9 +186,9 @@ module.exports = {
   getWATERMARK_TEXT: () => process.env.WATERMARK_TEXT,
   /** @returns {string[]} */
   getVERO_BRANDS: () => [
-    "rolex", "otterbox", "louis vuitton", "gucci", "chanel", "hermes", "prada", 
-    "tiffany", "coach", "michael kors", "nike", "adidas", "apple", "bose", 
-    "sony", "canon", "nikon", "fitbit", "gopro", "velcro", "zippo", "ugg", 
+    "rolex", "otterbox", "louis vuitton", "gucci", "chanel", "hermes", "prada",
+    "tiffany", "coach", "michael kors", "nike", "adidas", "apple", "bose",
+    "sony", "canon", "nikon", "fitbit", "gopro", "velcro", "zippo", "ugg",
     "patagonia", "north face", "lululemon", "dyson", "thermomix", "beachbody",
     "moncler", "canada goose", "oakley", "ray-ban"
   ]

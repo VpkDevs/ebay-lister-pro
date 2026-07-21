@@ -12,12 +12,14 @@ const crypto = require('crypto');
 const config = require('./config');
 
 // Configure test environment variables (assigned after config.js loads .env to prevent overrides)
+process.env.NODE_ENV = "test";
 process.env.GEMINI_API_KEY = "test-gemini-key";
 process.env.EBAY_CLIENT_ID = "test-client-id";
 process.env.EBAY_CLIENT_SECRET = "test-client-secret";
 process.env.EBAY_REFRESH_TOKEN = "test-refresh-token";
 
 const utils = require('./utils');
+const db = require('./lib/db');
 const ebayClient = require('./ebayClient');
 const geminiClient = require('./geminiClient');
 const webServer = require('./webServer');
@@ -534,6 +536,8 @@ test('Web Server local GUI routing', async (t) => {
     };
 
     try {
+      utils.writeJsonFileSecure(config.historyPath, []);
+
       const saveRes = await originalFetch(`http://127.0.0.1:${testPort}/api/save-draft`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1400,67 +1404,237 @@ test('Google OAuth login callback, Stripe Webhook, and WooCommerce/Etsy crosslis
     }
   });
 
-  await t.test('Stripe Webhook signature validation and premium status toggle', async () => {
+  await t.test('Mock checkout stores premium status in SQLite and updates session', async () => {
+    const testPort = 45942;
+    const server = webServer.startWebGuiServer(testPort);
+    const originalFetchImpl = global.fetch;
+    const originalStripeSecret = process.env.STRIPE_SECRET_KEY;
+    const originalGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+    const originalGoogleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const billingSnapshot = db.billing.get();
+    const billingJsonPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+    const hadBillingJson = fs.existsSync(billingJsonPath);
+    const email = "checkout-premium@test.com";
+
+    process.env.STRIPE_SECRET_KEY = "";
+    process.env.GOOGLE_CLIENT_ID = "mock-client-id";
+    process.env.GOOGLE_CLIENT_SECRET = "mock-client-secret";
+
+    const cleanBilling = db.billing.get();
+    delete cleanBilling[email];
+    db.billing.save(cleanBilling);
+
+    global.fetch = async (url, options) => {
+      const urlStr = String(url);
+      if (urlStr.includes('oauth2.googleapis.com/token')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({ access_token: "mock-google-token" })
+        };
+      }
+      if (urlStr.includes('googleapis.com/oauth2/v3/userinfo')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({ email, name: "Checkout Test User" })
+        };
+      }
+      return { status: 404, ok: false };
+    };
+
+    try {
+      const callbackRes = await originalFetch(`http://127.0.0.1:${testPort}/api/auth/google/callback?code=test-auth-code`, {
+        redirect: 'manual'
+      });
+      const cookieHeader = callbackRes.headers.get('set-cookie');
+      assert.ok(cookieHeader && cookieHeader.includes('sessionId='));
+
+      let sessionRes = await originalFetch(`http://127.0.0.1:${testPort}/api/auth/session`, {
+        headers: { 'Cookie': cookieHeader }
+      });
+      let sessionData = await sessionRes.json();
+      assert.strictEqual(sessionData.user.isPremium, false);
+
+      const checkoutRes = await originalFetch(`http://127.0.0.1:${testPort}/api/billing/create-checkout-session`, {
+        method: 'POST',
+        headers: { 'Cookie': cookieHeader }
+      });
+      assert.strictEqual(checkoutRes.status, 200);
+      const checkoutData = await checkoutRes.json();
+      assert.strictEqual(checkoutData.url, '/api/billing/mock-success');
+
+      const mockSuccessRes = await originalFetch(`http://127.0.0.1:${testPort}${checkoutData.url}`, {
+        headers: { 'Cookie': cookieHeader },
+        redirect: 'manual'
+      });
+      assert.strictEqual(mockSuccessRes.status, 302);
+
+      const billingHistory = db.billing.get();
+      assert.strictEqual(billingHistory[email]?.premium, true);
+      assert.strictEqual(billingHistory[email]?.subscriptionId, "mock-sub-12345");
+
+      sessionRes = await originalFetch(`http://127.0.0.1:${testPort}/api/auth/session`, {
+        headers: { 'Cookie': cookieHeader }
+      });
+      sessionData = await sessionRes.json();
+      assert.strictEqual(sessionData.user.isPremium, true);
+      if (!hadBillingJson) {
+        assert.strictEqual(fs.existsSync(billingJsonPath), false);
+      }
+    } finally {
+      if (originalStripeSecret === undefined) delete process.env.STRIPE_SECRET_KEY;
+      else process.env.STRIPE_SECRET_KEY = originalStripeSecret;
+      if (originalGoogleClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+      else process.env.GOOGLE_CLIENT_ID = originalGoogleClientId;
+      if (originalGoogleClientSecret === undefined) delete process.env.GOOGLE_CLIENT_SECRET;
+      else process.env.GOOGLE_CLIENT_SECRET = originalGoogleClientSecret;
+      global.fetch = originalFetchImpl;
+      db.billing.save(billingSnapshot);
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test('Stripe Webhook signature validation keeps DB and session premium state in sync', async () => {
     const testPort = 45915;
     const server = webServer.startWebGuiServer(testPort);
     const originalWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const originalFetchImpl = global.fetch;
+    const originalGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+    const originalGoogleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const billingSnapshot = db.billing.get();
+    const billingJsonPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+    const hadBillingJson = fs.existsSync(billingJsonPath);
+    const email = "stripe-premium@test.com";
+
     process.env.STRIPE_WEBHOOK_SECRET = "whsec_mocksecret";
+    process.env.GOOGLE_CLIENT_ID = "mock-client-id";
+    process.env.GOOGLE_CLIENT_SECRET = "mock-client-secret";
 
-    const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
-    if (fs.existsSync(billingDbPath)) {
-      try { fs.unlinkSync(billingDbPath); } catch (e) {}
-    }
+    const cleanBilling = db.billing.get();
+    delete cleanBilling[email];
+    db.billing.save(cleanBilling);
 
-    try {
-      const eventObj = {
-        id: "evt_mock",
-        type: "checkout.session.completed",
-        data: {
-          object: {
-            customer_email: "stripe-premium@test.com",
-            subscription: "sub_premium_123"
-          }
-        }
-      };
-      
+    global.fetch = async (url, options) => {
+      const urlStr = String(url);
+      if (urlStr.includes('oauth2.googleapis.com/token')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({ access_token: "mock-google-token" })
+        };
+      }
+      if (urlStr.includes('googleapis.com/oauth2/v3/userinfo')) {
+        return {
+          status: 200,
+          ok: true,
+          json: async () => ({ email, name: "Stripe Test User" })
+        };
+      }
+      return { status: 404, ok: false };
+    };
+
+    const postSignedStripeEvent = async (eventObj) => {
       const payloadStr = JSON.stringify(eventObj);
       const timestamp = Math.floor(Date.now() / 1000);
       const signedPayload = `${timestamp}.${payloadStr}`;
-      
       const signature = crypto
         .createHmac('sha256', "whsec_mocksecret")
         .update(signedPayload)
         .digest('hex');
-      
-      const signatureHeader = `t=${timestamp},v1=${signature}`;
 
-      const res = await originalFetch(`http://127.0.0.1:${testPort}/api/billing/webhook`, {
+      return originalFetch(`http://127.0.0.1:${testPort}/api/billing/webhook`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Stripe-Signature': signatureHeader
+          'Stripe-Signature': `t=${timestamp},v1=${signature}`
         },
         body: payloadStr
       });
+    };
 
+    try {
+      const callbackRes = await originalFetch(`http://127.0.0.1:${testPort}/api/auth/google/callback?code=test-auth-code`, {
+        redirect: 'manual'
+      });
+      const cookieHeader = callbackRes.headers.get('set-cookie');
+      assert.ok(cookieHeader && cookieHeader.includes('sessionId='));
+
+      let sessionRes = await originalFetch(`http://127.0.0.1:${testPort}/api/auth/session`, {
+        headers: { 'Cookie': cookieHeader }
+      });
+      let sessionData = await sessionRes.json();
+      assert.strictEqual(sessionData.user.isPremium, false);
+
+      const activationEvent = {
+        id: "evt_mock",
+        type: "checkout.session.completed",
+        data: {
+          object: {
+            customer_email: email,
+            subscription: "sub_premium_123"
+          }
+        }
+      };
+
+      let res = await postSignedStripeEvent(activationEvent);
       assert.strictEqual(res.status, 200);
-      const data = await res.json();
+      let data = await res.json();
       assert.strictEqual(data.received, true);
 
-      const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
-      assert.ok(billingHistory["stripe-premium@test.com"]);
-      assert.strictEqual(billingHistory["stripe-premium@test.com"].premium, true);
-      assert.strictEqual(billingHistory["stripe-premium@test.com"].subscriptionId, "sub_premium_123");
-    } finally {
-      process.env.STRIPE_WEBHOOK_SECRET = originalWebhookSecret;
-      if (fs.existsSync(billingDbPath)) {
-        try { fs.unlinkSync(billingDbPath); } catch (e) {}
+      let billingHistory = db.billing.get();
+      assert.ok(billingHistory[email]);
+      assert.strictEqual(billingHistory[email].premium, true);
+      assert.strictEqual(billingHistory[email].subscriptionId, "sub_premium_123");
+
+      sessionRes = await originalFetch(`http://127.0.0.1:${testPort}/api/auth/session`, {
+        headers: { 'Cookie': cookieHeader }
+      });
+      sessionData = await sessionRes.json();
+      assert.strictEqual(sessionData.user.isPremium, true);
+
+      const cancellationEvent = {
+        id: "evt_mock_cancel",
+        type: "customer.subscription.deleted",
+        data: {
+          object: {
+            id: "sub_premium_123"
+          }
+        }
+      };
+
+      res = await postSignedStripeEvent(cancellationEvent);
+      assert.strictEqual(res.status, 200);
+      data = await res.json();
+      assert.strictEqual(data.received, true);
+
+      billingHistory = db.billing.get();
+      assert.strictEqual(billingHistory[email].premium, false);
+      assert.strictEqual(billingHistory[email].subscriptionId, "sub_premium_123");
+
+      sessionRes = await originalFetch(`http://127.0.0.1:${testPort}/api/auth/session`, {
+        headers: { 'Cookie': cookieHeader }
+      });
+      sessionData = await sessionRes.json();
+      assert.strictEqual(sessionData.user.isPremium, false);
+      if (!hadBillingJson) {
+        assert.strictEqual(fs.existsSync(billingJsonPath), false);
       }
+    } finally {
+      if (originalWebhookSecret === undefined) delete process.env.STRIPE_WEBHOOK_SECRET;
+      else process.env.STRIPE_WEBHOOK_SECRET = originalWebhookSecret;
+      if (originalGoogleClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+      else process.env.GOOGLE_CLIENT_ID = originalGoogleClientId;
+      if (originalGoogleClientSecret === undefined) delete process.env.GOOGLE_CLIENT_SECRET;
+      else process.env.GOOGLE_CLIENT_SECRET = originalGoogleClientSecret;
+      global.fetch = originalFetchImpl;
+      db.billing.save(billingSnapshot);
       await new Promise((resolve) => server.close(resolve));
     }
   });
 
   await t.test('WooCommerce and Etsy publish REST endpoints', async () => {
+    ebayClient.resetCircuitBreaker('all');
     const testPort = 45916;
     const server = webServer.startWebGuiServer(testPort);
     
@@ -1576,13 +1750,16 @@ test('Google OAuth login callback, Stripe Webhook, and WooCommerce/Etsy crosslis
     const server = webServer.startWebGuiServer(testPort);
     const originalGoogleClientId = process.env.GOOGLE_CLIENT_ID;
     const originalGoogleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const originalFetchImpl = global.fetch;
+    const billingSnapshot = db.billing.get();
+    const billingJsonPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+    const hadBillingJson = fs.existsSync(billingJsonPath);
     process.env.GOOGLE_CLIENT_ID = "mock-client-id";
     process.env.GOOGLE_CLIENT_SECRET = "mock-client-secret";
 
-    const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
-    const billingHistory = {};
+    const billingHistory = db.billing.get();
     billingHistory["google-user@test.com"] = { premium: true, subscriptionId: "sub_delete_123" };
-    utils.writeJsonFileSecure(billingDbPath, billingHistory);
+    db.billing.save(billingHistory);
 
     global.fetch = async (url, options) => {
       const urlStr = String(url);
@@ -1612,7 +1789,7 @@ test('Google OAuth login callback, Stripe Webhook, and WooCommerce/Etsy crosslis
       assert.ok(cookieHeader && cookieHeader.includes('sessionId='));
 
       // 2. Confirm user is premium in database
-      let dbState = utils.readJsonFileSecure(billingDbPath, {});
+      let dbState = db.billing.get();
       assert.strictEqual(dbState["google-user@test.com"]?.premium, true);
 
       // 3. Call DELETE to erase the account
@@ -1627,15 +1804,26 @@ test('Google OAuth login callback, Stripe Webhook, and WooCommerce/Etsy crosslis
       assert.strictEqual(deleteData.success, true);
 
       // 4. Confirm data is deleted in database
-      dbState = utils.readJsonFileSecure(billingDbPath, {});
+      dbState = db.billing.get();
       assert.strictEqual(dbState["google-user@test.com"], undefined);
 
-    } finally {
-      process.env.GOOGLE_CLIENT_ID = originalGoogleClientId;
-      process.env.GOOGLE_CLIENT_SECRET = originalGoogleClientSecret;
-      if (fs.existsSync(billingDbPath)) {
-        try { fs.unlinkSync(billingDbPath); } catch (e) {}
+      const sessionRes = await originalFetch(`http://127.0.0.1:${testPort}/api/auth/session`, {
+        headers: {
+          'Cookie': cookieHeader
+        }
+      });
+      assert.strictEqual(sessionRes.status, 401);
+      if (!hadBillingJson) {
+        assert.strictEqual(fs.existsSync(billingJsonPath), false);
       }
+
+    } finally {
+      if (originalGoogleClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+      else process.env.GOOGLE_CLIENT_ID = originalGoogleClientId;
+      if (originalGoogleClientSecret === undefined) delete process.env.GOOGLE_CLIENT_SECRET;
+      else process.env.GOOGLE_CLIENT_SECRET = originalGoogleClientSecret;
+      global.fetch = originalFetchImpl;
+      db.billing.save(billingSnapshot);
       await new Promise((resolve) => server.close(resolve));
     }
   });
@@ -2890,12 +3078,14 @@ test('Additional maximal coverage and edge cases', async (t) => {
 
   await t.test('POST /api/publish concurrently cross-posts to Shopify, WooCommerce, and Etsy', async () => {
     webServer.resetRateLimits();
+    ebayClient.resetCircuitBreaker('all');
     const testPort = 45922;
     const server = webServer.startWebGuiServer(testPort);
     const config = require('./config');
 
     const originalEtsyShopId = config.getETSY_SHOP_ID();
     const originalEtsyAccessToken = config.getETSY_ACCESS_TOKEN();
+    const originalEtsyClientId = process.env.ETSY_CLIENT_ID;
     const originalShopifyName = config.getSHOPIFY_SHOP_NAME();
     const originalShopifyToken = config.getSHOPIFY_ACCESS_TOKEN();
     const originalWcUrl = config.getWOOCOMMERCE_URL();
@@ -2905,6 +3095,7 @@ test('Additional maximal coverage and edge cases', async (t) => {
     // Enable all integrations in environment
     process.env.ETSY_SHOP_ID = "shop123";
     process.env.ETSY_ACCESS_TOKEN = "token123";
+    process.env.ETSY_CLIENT_ID = "etsy-client-123";
     process.env.SHOPIFY_SHOP_NAME = "shopname";
     process.env.SHOPIFY_ACCESS_TOKEN = "shpat_token";
     process.env.WOOCOMMERCE_URL = "http://woo.local";
@@ -3031,6 +3222,7 @@ test('Additional maximal coverage and edge cases', async (t) => {
 
       process.env.ETSY_SHOP_ID = originalEtsyShopId || "";
       process.env.ETSY_ACCESS_TOKEN = originalEtsyAccessToken || "";
+      process.env.ETSY_CLIENT_ID = originalEtsyClientId || "";
       process.env.SHOPIFY_SHOP_NAME = originalShopifyName || "";
       process.env.SHOPIFY_ACCESS_TOKEN = originalShopifyToken || "";
       process.env.WOOCOMMERCE_URL = originalWcUrl || "";
@@ -3484,6 +3676,72 @@ test('DLQ rejects invalid listing payloads', async () => {
   );
 });
 
+test('crossPost.js — extra coverage boost for DLQ and Direct methods', async () => {
+  const crossPost = require('./crossPost');
+  try { fs.writeFileSync(config.dlqPath, '[]', 'utf8'); } catch (e) {}
+
+  await assert.rejects(
+    () => crossPost.addToDlq('shopify', 'SKU', null, [], 'msg'),
+    /Invalid listing payload/
+  );
+
+  await assert.rejects(
+    () => crossPost.addToDlq('shopify', '', { title: 'Test', suggestedPrice: 10 }, [], 'msg'),
+    /Invalid SKU/
+  );
+
+  const testJobs = [
+    {
+      sku: 'SKU-BACKOFF',
+      platform: 'shopify',
+      listing: { title: 'Backoff item', suggestedPrice: 10 },
+      imageUrls: [],
+      error: 'backoff error',
+      attempts: 2,
+      timestamp: new Date().toISOString()
+    },
+    {
+      sku: 'SKU-EXHAUSTED',
+      platform: 'shopify',
+      listing: { title: 'Exhausted item', suggestedPrice: 10 },
+      imageUrls: [],
+      error: 'exhausted error',
+      attempts: 10,
+      timestamp: new Date().toISOString()
+    }
+  ];
+  utils.writeJsonFileSecure(config.dlqPath, testJobs);
+
+  const summary = await crossPost.getDlqSummary();
+  assert.strictEqual(summary.backingOff, 1);
+  assert.strictEqual(summary.exhausted, 1);
+
+  const originalShopifyName = config.getSHOPIFY_SHOP_NAME();
+  const originalShopifyToken = config.getSHOPIFY_ACCESS_TOKEN();
+  const originalWcUrl = config.getWOOCOMMERCE_URL();
+  const originalEtsyShop = config.getETSY_SHOP_ID();
+  
+  process.env.SHOPIFY_SHOP_NAME = "";
+  process.env.SHOPIFY_ACCESS_TOKEN = "";
+  process.env.WOOCOMMERCE_URL = "";
+  process.env.ETSY_SHOP_ID = "";
+
+  const shopifyRes = await crossPost.crossPostToShopify({ title: 'Test', suggestedPrice: 10 }, [], 'SKU-1');
+  assert.strictEqual(shopifyRes, null);
+
+  const wcRes = await crossPost.crossPostToWooCommerce({ title: 'Test', suggestedPrice: 10 }, [], 'SKU-1');
+  assert.strictEqual(wcRes, null);
+
+  const etsyRes = await crossPost.crossPostToEtsy({ title: 'Test', suggestedPrice: 10 }, 'SKU-1');
+  assert.strictEqual(etsyRes, null);
+
+  process.env.SHOPIFY_SHOP_NAME = originalShopifyName || "";
+  process.env.SHOPIFY_ACCESS_TOKEN = originalShopifyToken || "";
+  process.env.WOOCOMMERCE_URL = originalWcUrl || "";
+  process.env.ETSY_SHOP_ID = originalEtsyShop || "";
+});
+
+
 // ═══════════════════════════════════════════════════════════════
 // COVERAGE BOOST: errors.js — all classes + toJSON variants
 // ═══════════════════════════════════════════════════════════════
@@ -3727,6 +3985,120 @@ test('geminiClient.js — parseSafeJsonString handles null/undefined gracefully'
   assert.strictEqual(geminiClient.parseSafeJsonString(null, 'x'), 'x');
   assert.strictEqual(geminiClient.parseSafeJsonString(undefined, 'y'), 'y');
 });
+
+test('geminiClient.js — runAIOrchestration and generateListingFromKeywords coverage', async () => {
+  const originalFetch = REAL_FETCH;
+  const originalKey = process.env.GEMINI_API_KEY;
+  process.env.GEMINI_API_KEY = "mock-key";
+
+  const originalGetAspects = ebayClient.getRequiredCategoryAspects;
+  const originalGetMetadata = ebayClient.getItemAspectsMetadata;
+  const originalSearchComps = ebayClient.searchEbayComps;
+  
+  ebayClient.getRequiredCategoryAspects = async () => [];
+  ebayClient.getItemAspectsMetadata = async () => ({});
+  ebayClient.searchEbayComps = async () => ({ minPrice: 10, maxPrice: 50, avgPrice: 30 });
+
+  let callCount = 0;
+  global.fetch = async (url, options) => {
+    callCount++;
+    const urlStr = String(url);
+    if (urlStr.includes('gemini-2.5-flash:generateContent')) {
+      const mockResult = {
+        candidates: [{
+          content: {
+            parts: [{
+              text: JSON.stringify({
+                title: "Mock AI Generated Title",
+                suggestedPrice: 35.99,
+                condition: "USED_EXCELLENT",
+                brand: "Mock Brand",
+                model: "Mock Model",
+                categoryId: "111422",
+                description: "Mock AI description",
+                aspects: { Color: "Black" },
+                detectedUPC: "123456789012",
+                detectedDefects: ["minor scratch"]
+              })
+            }]
+          }
+        }]
+      };
+      return {
+        status: 200, ok: true,
+        json: async () => mockResult
+      };
+    }
+    return { status: 404, ok: false };
+  };
+
+  try {
+    const kwResult = await geminiClient.generateListingFromKeywords("vintage watch");
+    assert.strictEqual(kwResult.title, "Mock AI Generated Title");
+
+    utils.writeJsonFileSecure(config.historyPath, [
+      { sku: 'HIST-SKU-1', title: 'vintage watch', suggestedPrice: 25, status: 'ACTIVE', aspects: { Color: "Black" }, description: "cool vintage watch", timestamp: new Date().toISOString() }
+    ]);
+
+    const photoBuffers = [Buffer.from("fake-image-data")];
+    const filenames = ["watch.jpg"];
+    
+    const orchResult = await geminiClient.runAIOrchestration(
+      photoBuffers,
+      filenames,
+      "123456789012",
+      "custom instruction notes",
+      { title: "Catalog Title", brand: "Catalog Brand", mpn: "123" },
+      { persona: "luxury", template: "sleek_grid" }
+    );
+    assert.strictEqual(orchResult.title, "Mock AI Generated Title");
+
+    const orchResult2 = await geminiClient.runAIOrchestration(
+      photoBuffers,
+      filenames,
+      null,
+      null,
+      null,
+      { persona: "friendly", template: "vintage_accordion" }
+    );
+
+    const orchResult3 = await geminiClient.runAIOrchestration(
+      photoBuffers,
+      filenames,
+      null,
+      null,
+      null,
+      { persona: "vintage", template: "minimalist" }
+    );
+
+    const orchResult4 = await geminiClient.runAIOrchestration(
+      photoBuffers,
+      filenames,
+      null,
+      null,
+      null,
+      { persona: "discount", template: "tech_dark" }
+    );
+
+    await assert.rejects(async () => {
+      await geminiClient.runAIOrchestration([], []);
+    });
+    await assert.rejects(async () => {
+      await geminiClient.runAIOrchestration([{}], ["image.jpg"]);
+    });
+    await assert.rejects(async () => {
+      await geminiClient.runAIOrchestration(photoBuffers, ["1.jpg", "2.jpg"]);
+    });
+
+  } finally {
+    global.fetch = originalFetch;
+    process.env.GEMINI_API_KEY = originalKey;
+    ebayClient.getRequiredCategoryAspects = originalGetAspects;
+    ebayClient.getItemAspectsMetadata = originalGetMetadata;
+    ebayClient.searchEbayComps = originalSearchComps;
+  }
+});
+
 
 // ═══════════════════════════════════════════════════════════════
 // COVERAGE BOOST: webServer.js routes — history, vero, status, metrics
@@ -3973,6 +4345,38 @@ test('Autosave and parameter-validation routes', async (t) => {
       const data = await res.json();
       assert.ok(data.success);
       assert.strictEqual(process.env.EBAY_RUNAME, 'TEST_OAUTH_RUNAME');
+    });
+
+    await t.test('POST /api/circuit-breaker/reset resets domain', async () => {
+      const res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/circuit-breaker/reset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: 'api.ebay.com' })
+      });
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.ok(data.success);
+    });
+
+    await t.test('POST /api/history/bulk-action delete handles multiple skus', async () => {
+      const history = utils.readJsonFileSecure(config.historyPath, []);
+      history.push({ sku: 'BULK-TEST-1', title: 'Bulk Item 1', price: '10.00', status: 'DRAFT', timestamp: new Date().toISOString() });
+      history.push({ sku: 'BULK-TEST-2', title: 'Bulk Item 2', price: '20.00', status: 'DRAFT', timestamp: new Date().toISOString() });
+      utils.writeJsonFileSecure(config.historyPath, history);
+
+      const res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/history/bulk-action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', skus: ['BULK-TEST-1', 'BULK-TEST-2'] })
+      });
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.ok(data.success);
+      assert.strictEqual(data.count, 2);
+
+      const updatedHistory = utils.readJsonFileSecure(config.historyPath, []);
+      assert.ok(!updatedHistory.some(h => h.sku === 'BULK-TEST-1'));
+      assert.ok(!updatedHistory.some(h => h.sku === 'BULK-TEST-2'));
     });
   } finally {
     global.fetch = originalFetch;

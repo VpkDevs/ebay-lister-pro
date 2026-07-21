@@ -902,6 +902,16 @@ async function syncListingsFromEbay() {
         utils.logAudit("WARN", `Failed to fetch offer for SKU ${sku}: ${err.message}`);
       }
     }
+    const activeEbaySkus = new Set(items.map(i => i.sku));
+
+    // Double-selling protection: mark local ACTIVE items not found on eBay as ENDED
+    for (const entry of history) {
+      if (entry.status === "ACTIVE" && !activeEbaySkus.has(entry.sku)) {
+        entry.status = "ENDED";
+        entry.timestamp = new Date().toISOString();
+        utils.logAudit("WARN", `Double-Selling Protection: SKU ${entry.sku} not found on eBay. Marked as ENDED.`);
+      }
+    }
     
     utils.writeJsonFileSecure(config.historyPath, history);
     console.log(`Successfully synced ${syncCount} active listing(s) to local history database!`);

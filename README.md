@@ -52,7 +52,7 @@ Start the concurrent process runner to boot both the Web UI server and the backg
 node start.js
 ```
 The lister is now running!
-- **Dashboard Interface**: [http://127.0.0.1:45911](http://127.0.0.1:45911)
+- **Dashboard Interface**: [http://127.0.0.1:45900](http://127.0.0.1:45900)
 - **Watcher Daemon Scanner**: Watching the working directory for newly placed images.
 
 ---

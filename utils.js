@@ -9,6 +9,8 @@ const { exec, execSync } = require('child_process');
 const config = require('./config');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const asyncLocalStorage = new AsyncLocalStorage();
+const logger = require('./lib/logger');
+const db = require('./lib/db');
 
 function escapeRegExp(string) {
   return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -63,19 +65,17 @@ function sanitizeLog(message) {
  */
 function logAudit(level, message, data = null, traceId = null) {
   try {
-    const timestamp = new Date().toISOString();
     const store = asyncLocalStorage.getStore();
     const activeTraceId = traceId || (store ? store.traceId : null);
+    const cleanLevel = String(level || 'INFO').toUpperCase();
     
-    const logEntry = {
-      timestamp,
-      level,
-      message: sanitizeLog(message),
-      traceId: activeTraceId || null,
-      data: data ? JSON.parse(sanitizeLog(JSON.stringify(data))) : null
-    };
-    
-    fs.appendFileSync(config.logPath, JSON.stringify(logEntry) + '\n', 'utf8');
+    let pinoMethod = 'info';
+    if (cleanLevel === 'WARN') pinoMethod = 'warn';
+    else if (cleanLevel === 'ERROR') pinoMethod = 'error';
+    else if (cleanLevel === 'FATAL') pinoMethod = 'fatal';
+    else if (cleanLevel === 'DEBUG') pinoMethod = 'debug';
+
+    logger[pinoMethod]({ traceId: activeTraceId, data }, message);
   } catch (e) {}
 }
 
@@ -186,6 +186,8 @@ function resolveUploadsPath(uploadUrlPath) {
  */
 function writeJsonFileSecure(filePath, data) {
   const resolved = safeResolvePath(filePath);
+
+  // 1. Write to actual file on disk with locks/backups (keeps filesystem compatibility for tests)
   const tempWritePath = `${resolved}.tmp`;
   const backupPath = `${resolved}.bak`;
   const lockPath = `${resolved}.lock`;
@@ -231,10 +233,41 @@ function writeJsonFileSecure(filePath, data) {
       }
     } catch (e) {}
   }
+
+  // 2. Synchronize to SQLite Database for production-grade speed and reliability
+  if (resolved === safeResolvePath(config.dlqPath)) {
+    db.db.transaction(() => {
+      db.dlq.clear();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.dlq.save(entry);
+        }
+      }
+    })();
+  } else if (resolved === safeResolvePath(config.historyPath)) {
+    db.db.transaction(() => {
+      db.listings.clear();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.listings.save(entry);
+        }
+      }
+    })();
+  } else if (resolved === safeResolvePath(path.join(process.cwd(), 'data', 'templates.json'))) {
+    db.db.transaction(() => {
+      db.db.prepare('DELETE FROM templates').run();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.templates.save(entry);
+        }
+      }
+    })();
+  }
 }
 
 /**
  * Reads a JSON file, checking lock state and falling back to backup if primary is corrupted.
+ * Synchronizes SQLite database state to match.
  * @param {string} filePath - Path to file.
  * @param {any} [defaultData] - Default value if both file and backup fail.
  * @returns {any} JS parsed data.
@@ -253,54 +286,107 @@ function readJsonFileSecure(filePath, defaultData = []) {
     while (Date.now() < end) {}
   }
 
+  let fileContent = null;
+  let hasParsed = false;
+  let data = defaultData;
+
   try {
     if (fs.existsSync(resolved)) {
       try {
-        return JSON.parse(fs.readFileSync(resolved, 'utf8'));
+        fileContent = fs.readFileSync(resolved, 'utf8');
+        data = JSON.parse(fileContent);
+        hasParsed = true;
       } catch (parseErr) {
         logAudit("WARN", `Primary database file corrupt: ${parseErr.message}. Recovering from backup: ${backupPath}`);
         if (fs.existsSync(backupPath)) {
-          const data = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+          fileContent = fs.readFileSync(backupPath, 'utf8');
+          data = JSON.parse(fileContent);
           fs.copyFileSync(backupPath, resolved);
-          return data;
+          hasParsed = true;
+        } else {
+          throw parseErr;
         }
-        throw parseErr;
       }
-    }
-    if (fs.existsSync(backupPath)) {
+    } else if (fs.existsSync(backupPath)) {
       logAudit("WARN", `Primary database file missing. Recovering from backup: ${backupPath}`);
-      const data = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+      fileContent = fs.readFileSync(backupPath, 'utf8');
+      data = JSON.parse(fileContent);
       fs.copyFileSync(backupPath, resolved);
-      return data;
+      hasParsed = true;
     }
   } catch (err) {
     logAudit("ERROR", `Secure JSON Read failed for ${resolved}: ${err.message}. Triggering self-healing...`);
     if (fs.existsSync(backupPath)) {
       try {
-        const data = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+        fileContent = fs.readFileSync(backupPath, 'utf8');
+        data = JSON.parse(fileContent);
         try { fs.copyFileSync(backupPath, resolved); } catch (e) {}
-        return data;
+        hasParsed = true;
       } catch (e) {}
     }
-    try {
-      logAudit("WARN", `Both primary and backup database corrupted for ${resolved}. Re-initializing with default structure.`);
-      fs.writeFileSync(resolved, JSON.stringify(defaultData, null, 2), 'utf8');
-      fs.writeFileSync(backupPath, JSON.stringify(defaultData, null, 2), 'utf8');
-    } catch (e) {
-      logAudit("ERROR", `Failed to self-heal database file ${resolved}: ${e.message}`);
+    if (!hasParsed) {
+      try {
+        logAudit("WARN", `Both primary and backup database corrupted for ${resolved}. Re-initializing with default structure.`);
+        fs.writeFileSync(resolved, JSON.stringify(defaultData, null, 2), 'utf8');
+        fs.writeFileSync(backupPath, JSON.stringify(defaultData, null, 2), 'utf8');
+      } catch (e) {
+        logAudit("ERROR", `Failed to self-heal database file ${resolved}: ${e.message}`);
+      }
     }
   }
-  return defaultData;
+
+  // Sync database with the loaded/recovered data (maintains SQLite storage consistency)
+  // Return disk-parsed data to preserve exact object shape (no DB default columns added).
+  if (resolved === safeResolvePath(config.dlqPath)) {
+    db.db.transaction(() => {
+      db.dlq.clear();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.dlq.save(entry);
+        }
+      }
+    })();
+    return data;
+  }
+
+  if (resolved === safeResolvePath(config.historyPath)) {
+    db.db.transaction(() => {
+      db.listings.clear();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.listings.save(entry);
+        }
+      }
+    })();
+    return data;
+  }
+
+  if (resolved === safeResolvePath(path.join(process.cwd(), 'data', 'templates.json'))) {
+    db.db.transaction(() => {
+      db.templates.clear();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.templates.save(entry);
+        }
+      }
+    })();
+    return data;
+  }
+
+  return data;
 }
 
 /**
  * Asynchronously writes data atomically to a JSON file with non-blocking lockfile concurrency control.
+ * Synchronizes SQLite database state to match.
  * @param {string} filePath - Absolute path to file.
  * @param {any} data - JS payload.
  * @returns {Promise<void>}
  */
 async function writeJsonFileSecureAsync(filePath, data) {
   const resolved = safeResolvePath(filePath);
+
+  // 1. Async write to disk
   const tempWritePath = `${resolved}.tmp`;
   const backupPath = `${resolved}.bak`;
   const lockPath = `${resolved}.lock`;
@@ -329,13 +415,11 @@ async function writeJsonFileSecureAsync(filePath, data) {
 
   try {
     await fs.promises.writeFile(tempWritePath, JSON.stringify(data, null, 2), 'utf8');
-    
     try {
       await fs.promises.access(resolved);
       try { await fs.promises.unlink(backupPath); } catch (e) {}
       await fs.promises.rename(resolved, backupPath);
     } catch (e) {}
-    
     await fs.promises.rename(tempWritePath, resolved);
     try { await fs.promises.unlink(backupPath); } catch (e) {}
   } catch (err) {
@@ -345,10 +429,41 @@ async function writeJsonFileSecureAsync(filePath, data) {
   } finally {
     try { await fs.promises.unlink(lockPath); } catch (e) {}
   }
+
+  // 2. Sync to SQLite
+  if (resolved === safeResolvePath(config.dlqPath)) {
+    db.db.transaction(() => {
+      db.dlq.clear();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.dlq.save(entry);
+        }
+      }
+    })();
+  } else if (resolved === safeResolvePath(config.historyPath)) {
+    db.db.transaction(() => {
+      db.listings.clear();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.listings.save(entry);
+        }
+      }
+    })();
+  } else if (resolved === safeResolvePath(path.join(process.cwd(), 'data', 'templates.json'))) {
+    db.db.transaction(() => {
+      db.db.prepare('DELETE FROM templates').run();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.templates.save(entry);
+        }
+      }
+    })();
+  }
 }
 
 /**
  * Asynchronously reads a JSON file, checking lock state non-blockingly and falling back to backup.
+ * Synchronizes SQLite database state to match.
  * @param {string} filePath - Path to file.
  * @param {any} [defaultData] - Default value.
  * @returns {Promise<any>} JS parsed data.
@@ -371,52 +486,101 @@ async function readJsonFileSecureAsync(filePath, defaultData = []) {
     }
   }
 
+  let fileContent = null;
+  let hasParsed = false;
+  let data = defaultData;
+
   try {
     let hasPrimary = true;
     try { await fs.promises.access(resolved); } catch (e) { hasPrimary = false; }
 
     if (hasPrimary) {
       try {
-        const content = await fs.promises.readFile(resolved, 'utf8');
-        return JSON.parse(content);
+        fileContent = await fs.promises.readFile(resolved, 'utf8');
+        data = JSON.parse(fileContent);
+        hasParsed = true;
       } catch (parseErr) {
         logAudit("WARN", `Primary database file corrupt: ${parseErr.message}. Recovering from backup: ${backupPath}`);
         try {
           await fs.promises.access(backupPath);
-          const data = JSON.parse(await fs.promises.readFile(backupPath, 'utf8'));
+          fileContent = await fs.promises.readFile(backupPath, 'utf8');
+          data = JSON.parse(fileContent);
           await fs.promises.copyFile(backupPath, resolved);
-          return data;
+          hasParsed = true;
         } catch (e) {
           throw parseErr;
         }
       }
+    } else {
+      try {
+        await fs.promises.access(backupPath);
+        logAudit("WARN", `Primary database file missing. Recovering from backup: ${backupPath}`);
+        fileContent = await fs.promises.readFile(backupPath, 'utf8');
+        data = JSON.parse(fileContent);
+        await fs.promises.copyFile(backupPath, resolved);
+        hasParsed = true;
+      } catch (e) {}
     }
-    
-    try {
-      await fs.promises.access(backupPath);
-      logAudit("WARN", `Primary database file missing. Recovering from backup: ${backupPath}`);
-      const data = JSON.parse(await fs.promises.readFile(backupPath, 'utf8'));
-      await fs.promises.copyFile(backupPath, resolved);
-      return data;
-    } catch (e) {}
   } catch (err) {
     logAudit("ERROR", `Secure Async JSON Read failed for ${resolved}: ${err.message}. Triggering self-healing...`);
     try {
       await fs.promises.access(backupPath);
-      const data = JSON.parse(await fs.promises.readFile(backupPath, 'utf8'));
+      fileContent = await fs.promises.readFile(backupPath, 'utf8');
+      data = JSON.parse(fileContent);
       try { await fs.promises.copyFile(backupPath, resolved); } catch (e) {}
-      return data;
+      hasParsed = true;
     } catch (e) {}
     
-    try {
-      logAudit("WARN", `Both primary and backup database corrupted for ${resolved}. Re-initializing with default structure.`);
-      await fs.promises.writeFile(resolved, JSON.stringify(defaultData, null, 2), 'utf8');
-      await fs.promises.writeFile(backupPath, JSON.stringify(defaultData, null, 2), 'utf8');
-    } catch (e) {
-      logAudit("ERROR", `Failed to self-heal database file ${resolved}: ${e.message}`);
+    if (!hasParsed) {
+      try {
+        logAudit("WARN", `Both primary and backup database corrupted for ${resolved}. Re-initializing with default structure.`);
+        await fs.promises.writeFile(resolved, JSON.stringify(defaultData, null, 2), 'utf8');
+        await fs.promises.writeFile(backupPath, JSON.stringify(defaultData, null, 2), 'utf8');
+      } catch (e) {
+        logAudit("ERROR", `Failed to self-heal database file ${resolved}: ${e.message}`);
+      }
     }
   }
-  return defaultData;
+
+  // Sync to database (SQLite is shadow index, disk is canonical)
+  // Return disk-parsed data to preserve exact object shape.
+  if (resolved === safeResolvePath(config.dlqPath)) {
+    db.db.transaction(() => {
+      db.dlq.clear();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.dlq.save(entry);
+        }
+      }
+    })();
+    return data;
+  }
+
+  if (resolved === safeResolvePath(config.historyPath)) {
+    db.db.transaction(() => {
+      db.listings.clear();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.listings.save(entry);
+        }
+      }
+    })();
+    return data;
+  }
+
+  if (resolved === safeResolvePath(path.join(process.cwd(), 'data', 'templates.json'))) {
+    db.db.transaction(() => {
+      db.templates.clear();
+      if (Array.isArray(data)) {
+        for (const entry of data) {
+          db.templates.save(entry);
+        }
+      }
+    })();
+    return data;
+  }
+
+  return data;
 }
 
 /**
@@ -576,7 +740,92 @@ function printAsciiTable(data) {
 }
 
 /**
+ * Flushes the current SQLite listings state to the disk JSON file.
+ * Called after any direct db.listings.save() to keep disk in sync.
+ * @returns {void}
+ */
+function _flushListingsToDisk() {
+  try {
+    const allListings = db.listings.findAll();
+    const resolved = safeResolvePath(config.historyPath);
+    fs.writeFileSync(resolved, JSON.stringify(allListings, null, 2), 'utf8');
+  } catch (err) {
+    logAudit("ERROR", `Failed to flush listings to disk: ${err.message}`);
+  }
+}
+
+/**
+ * Flushes the current SQLite DLQ state to the disk JSON file.
+ * Called after any direct db.dlq.save() to keep disk in sync.
+ * @returns {void}
+ */
+function _flushDlqToDisk() {
+  try {
+    const allDlq = db.dlq.findAll();
+    const resolved = safeResolvePath(config.dlqPath);
+    fs.writeFileSync(resolved, JSON.stringify(allDlq, null, 2), 'utf8');
+  } catch (err) {
+    logAudit("ERROR", `Failed to flush DLQ to disk: ${err.message}`);
+  }
+}
+
+/**
+ * Saves a listing entry to SQLite AND flushes to disk.
+ * Use this from routes instead of raw db.listings.save().
+ * @param {Object} entry - Listing object with at least a `sku` field.
+ * @returns {void}
+ */
+function persistListing(entry) {
+  db.listings.save(entry);
+  _flushListingsToDisk();
+}
+
+/**
+ * Removes a listing entry from SQLite AND flushes to disk.
+ * Use this from routes instead of raw db.listings.delete().
+ * @param {string} sku - SKU to delete.
+ * @returns {boolean} True if a row was deleted.
+ */
+function removeListing(sku) {
+  const result = db.listings.delete(sku);
+  _flushListingsToDisk();
+  return result;
+}
+
+/**
+ * Saves a DLQ entry to SQLite AND flushes to disk.
+ * @param {Object} entry - DLQ entry.
+ * @returns {void}
+ */
+function persistDlqEntry(entry) {
+  db.dlq.save(entry);
+  _flushDlqToDisk();
+}
+
+/**
+ * Removes a DLQ entry from SQLite AND flushes to disk.
+ * @param {string} sku
+ * @param {string} platform
+ * @returns {boolean}
+ */
+function removeDlqEntry(sku, platform) {
+  const result = db.dlq.delete(sku, platform);
+  _flushDlqToDisk();
+  return result;
+}
+
+/**
+ * Saves billing data to SQLite.
+ * @param {Object} data - Full billing state object.
+ * @returns {void}
+ */
+function persistBilling(data) {
+  db.billing.save(data);
+}
+
+/**
  * Appends a newly published listing to the history database.
+ * Writes to SQLite AND flushes to disk file.
  * @param {string} sku - Product SKU.
  * @param {string} listingId - eBay Listing ID.
  * @param {string} title - Product Title.
@@ -588,36 +837,28 @@ function printAsciiTable(data) {
  */
 function saveListingToHistory(sku, listingId, title, price, categoryId, offerId, shopifyId, status = "ACTIVE", listingDetails = null, woocommerceId = null, etsyId = null) {
   try {
-    const history = readJsonFileSecure(config.historyPath, []);
-    const existingIndex = history.findIndex(item => item.sku === sku);
-    const existingEntry = existingIndex !== -1 ? history[existingIndex] : {};
-    
+    const existing = db.listings.findBySku(sku) || {};
     const entry = {
       timestamp: new Date().toISOString(),
       sku,
-      listingId: listingId || existingEntry.listingId || null,
+      listingId: listingId || existing.listingId || null,
       title,
       price: parseFloat(price),
       categoryId,
-      offerId: offerId || existingEntry.offerId || null,
-      shopifyId: shopifyId || existingEntry.shopifyId || null,
-      woocommerceId: woocommerceId || existingEntry.woocommerceId || null,
-      etsyId: etsyId || existingEntry.etsyId || null,
+      offerId: offerId || existing.offerId || null,
+      shopifyId: shopifyId || existing.shopifyId || null,
+      woocommerceId: woocommerceId || existing.woocommerceId || null,
+      etsyId: etsyId || existing.etsyId || null,
       status,
-      brand: listingDetails ? (listingDetails.brand || "Generic") : (existingEntry.brand || "Generic"),
-      veroWarning: listingDetails ? (!!listingDetails.veroWarning) : (!!existingEntry.veroWarning),
-      priceFloor: existingEntry.priceFloor !== undefined ? existingEntry.priceFloor : null,
-      priceCap: existingEntry.priceCap !== undefined ? existingEntry.priceCap : null,
-      priceLocked: existingEntry.priceLocked !== undefined ? existingEntry.priceLocked : false,
-      listingDetails: listingDetails || existingEntry.listingDetails || null
+      brand: listingDetails ? (listingDetails.brand || "Generic") : (existing.brand || "Generic"),
+      veroWarning: listingDetails ? (!!listingDetails.veroWarning) : (!!existing.veroWarning),
+      priceFloor: existing.priceFloor !== undefined ? existing.priceFloor : null,
+      priceCap: existing.priceCap !== undefined ? existing.priceCap : null,
+      priceLocked: existing.priceLocked !== undefined ? existing.priceLocked : false,
+      listingDetails: listingDetails || existing.listingDetails || null
     };
-    if (existingIndex !== -1) {
-      history[existingIndex] = entry;
-    } else {
-      history.push(entry);
-    }
-    writeJsonFileSecure(config.historyPath, history);
-    logAudit("INFO", `Saved listing to history. SKU: ${sku}, Status: ${status}, Listing ID: ${listingId}`);
+    persistListing(entry);
+    logAudit("INFO", `Saved listing to history via SQLite. SKU: ${sku}, Status: ${status}, Listing ID: ${listingId}`);
   } catch (err) {
     logAudit("ERROR", `Failed to save listing to history: ${err.message}`);
   }
@@ -628,7 +869,7 @@ function saveListingToHistory(sku, listingId, title, price, categoryId, offerId,
  * @returns {void}
  */
 function showHistory() {
-  const history = readJsonFileSecure(config.historyPath, []);
+  const history = db.listings.findAll();
   if (history.length === 0) {
     console.log("No listing history found.");
     return;
@@ -739,5 +980,10 @@ module.exports = {
   optimizeImageNative,
   asyncLocalStorage,
   cleanOldTempFiles,
-  stripScriptsAndIframes
+  stripScriptsAndIframes,
+  persistListing,
+  removeListing,
+  persistDlqEntry,
+  removeDlqEntry,
+  persistBilling
 };

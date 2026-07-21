@@ -1406,6 +1406,10 @@
       Sync Queue
       <span class="nav-badge" id="dlqCountBadge" style="display:none;">0</span>
     </button>
+    <button class="nav-item" id="nav-analytics" onclick="switchView('analytics')">
+      <span class="nav-icon" aria-hidden="true">📈</span>
+      Analytics & Status
+    </button>
 
     <span class="nav-section-label" style="margin-top:8px;">Channels</span>
     <button class="nav-item" onclick="openOnboardingWizard('ebay')">
@@ -1752,17 +1756,8 @@
 
         <!-- Section 3: Shipping -->
         <div id="sec-shipping" class="form-section">
-          <!-- Weight + Dimensions -->
-          <div class="grid-2">
             <div class="form-group">
-              <div class="field-label"><label>Weight</label></div>
-              <div style="display:flex;gap:8px;">
-                <input type="number" id="weightLbs" placeholder="lbs" min="0" disabled oninput="updateCompletenessIndicator()" />
-                <input type="number" id="weightOz" placeholder="oz" min="0" max="15" disabled oninput="updateCompletenessIndicator()" />
-              </div>
-            </div>
-            <div class="form-group">
-              <div class="field-label"><label>Dimensions (in)</label></div>
+              <div class="field-label"><label for="dimH">Dimensions (in)</label></div>
               <div style="display:flex;gap:6px;">
                 <input type="number" id="dimL" placeholder="L" min="1" disabled oninput="updateCompletenessIndicator()" />
                 <input type="number" id="dimW" placeholder="W" min="1" disabled oninput="updateCompletenessIndicator()" />
@@ -1814,6 +1809,8 @@
           <!-- Marketing & Compliance Optimization -->
           <div class="form-group">
             <div class="field-label"><label>Marketing &amp; Compliance</label></div>
+
+            <!-- Aspects -->
             <div class="platform-toggles" style="grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 8px;">
               <label class="platform-toggle" style="justify-content: flex-start; gap: 8px;">
                 <input type="checkbox" id="bestOfferEnabled" onchange="toggleBestOfferFields()" disabled /> 🏷️ Best Offer
@@ -1867,10 +1864,79 @@
 
         <!-- Section 4: Item Specifics -->
         <div id="sec-aspects" class="form-section">
-          <!-- Stock photos -->
+                          <input type="checkbox" id="genericizeVero" disabled /> 🛡️ Safe VeRO Clean
+              </label>
+            </div>
+            
+            <div id="bestOfferFields" style="display: none; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 10px; margin-bottom: 10px; transition: all 0.3s ease;">
+              <div class="form-group" style="margin-bottom: 0;">
+                <div class="field-label" style="font-size: 0.75rem;"><label for="autoAcceptPrice">Auto-Accept Price ($)</label></div>
+                <input type="number" id="autoAcceptPrice" placeholder="Min to accept" step="0.01" style="font-size: 0.8rem; padding: 6px;" />
+              </div>
+              <div class="form-group" style="margin-bottom: 0;">
+                <div class="field-label" style="font-size: 0.75rem;"><label for="autoDeclinePrice">Auto-Decline Price ($)</label></div>
+                <input type="number" id="autoDeclinePrice" placeholder="Min to decline" step="0.01" style="font-size: 0.8rem; padding: 6px;" />
+              </div>
+            </div>
+
+            <div id="promoteFields" style="display: none; margin-top: 10px; margin-bottom: 10px; transition: all 0.3s ease;">
+              <div class="form-group" style="margin-bottom: 0;">
+                <div class="field-label" style="font-size: 0.75rem;"><label for="bidPercentage">Ad Campaign Bid Rate (%)</label></div>
+                <input type="number" id="bidPercentage" placeholder="Ad Rate % (default 2.0)" step="0.1" min="1.0" max="100.0" value="2.0" style="font-size: 0.8rem; padding: 6px; width: 100%;" />
+              </div>
+            </div>
+          </div>
+
+          <!-- Cross-post toggles -->
+          <div class="form-group">
+            <div class="field-label"><label>Publish To</label></div>
+            <div class="platform-toggles" role="group" aria-label="Cross-posting platforms">
+              <label class="platform-toggle">
+                <input type="checkbox" id="immediatePayment" checked disabled /> 💳 Immediate Payment
+              </label>
+              <label class="platform-toggle">
+                <input type="checkbox" id="crossPostShopify" disabled /> 🟢 Shopify
+              </label>
+              <label class="platform-toggle">
+                <input type="checkbox" id="crossPostWooCommerce" disabled /> 🟣 WooCommerce
+              </label>
+              <label class="platform-toggle">
+                <input type="checkbox" id="crossPostEtsy" disabled /> 🧡 Etsy
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Section 4: Item Specifics -->
+        <div id="sec-aspects" class="form-section">
+          <!-- Auto-Source Photos Panel -->
           <div class="form-group" id="stockPhotosGroup" style="display:none;">
-            <div class="field-label"><label>Catalog Stock Photos</label></div>
-            <div class="stock-grid" id="stockPhotosContainer"></div>
+            <div class="field-label" style="justify-content:space-between;align-items:center;">
+              <label style="display:flex;align-items:center;gap:8px;">
+                <span style="font-size:1.1em;">&#128248;</span> Auto-Sourced Photos
+                <span id="autoSourceBadge" class="badge badge--success" style="display:none;"></span>
+              </label>
+              <button id="autoSourceBtn" class="btn btn--primary btn--sm" onclick="autoSourcePhotos()"
+                style="display:flex;align-items:center;gap:6px;font-size:0.8rem;padding:6px 14px;">
+                <span id="autoSourceIcon">&#128269;</span>
+                <span id="autoSourceLabel">Re-Source Photos</span>
+              </button>
+            </div>
+            <div id="autoSourceStatus" style="display:none;margin:10px 0 6px;">
+              <div style="display:flex;align-items:center;gap:10px;font-size:0.82rem;color:var(--text-dim);">
+                <div class="spinner" style="width:14px;height:14px;border-width:2px;"></div>
+                <span id="autoSourceStatusText">Searching photo databases&hellip;</span>
+              </div>
+              <div style="margin-top:6px;background:var(--surface-2);border-radius:8px;overflow:hidden;height:4px;">
+                <div id="autoSourceProgress" style="height:100%;width:0%;background:linear-gradient(90deg,var(--primary),var(--primary-light,#6af));border-radius:8px;transition:width 0.5s ease;"></div>
+              </div>
+            </div>
+            <div class="stock-grid" id="stockPhotosContainer" style="margin-top:10px;"></div>
+            <div id="autoSourceEmpty" style="display:none;padding:20px;text-align:center;color:var(--text-dim);font-size:0.83rem;">
+              <div style="font-size:2rem;margin-bottom:8px;">&#128269;</div>
+              <div>No photos found. Try adding a UPC/barcode or refining the product title.</div>
+              <div style="margin-top:8px;font-size:0.77rem;opacity:0.7;">Sources: eBay Catalog &middot; UPCItemDB &middot; Open Food Facts &middot; DuckDuckGo</div>
+            </div>
           </div>
 
           <!-- Aspects -->
@@ -2008,14 +2074,39 @@
 
     <!-- Table card -->
     <div class="card">
-      <div class="filter-bar">
-        <input type="text" id="historySearch" placeholder="Search by SKU, title, listing ID…" oninput="filterHistoryTable()" aria-label="Search listings" />
-        <select id="historyStatusFilter" onchange="filterHistoryTable()" aria-label="Filter by status">
+      <div class="filter-bar" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+        <input type="text" id="historySearch" placeholder="Search by SKU, title, listing ID…" oninput="filterHistoryTable()" aria-label="Search listings" style="flex:1; min-width:200px;" />
+        <select id="historyStatusFilter" onchange="filterHistoryTable()" aria-label="Filter by status" style="width:auto; min-width:140px;">
           <option value="ALL">All Statuses</option>
           <option value="ACTIVE">Active</option>
           <option value="DRAFT">Drafts</option>
           <option value="ENDED">Ended</option>
         </select>
+        <select id="historyCategoryFilter" onchange="filterHistoryTable()" aria-label="Filter by category" style="width:auto; min-width:160px;">
+          <option value="ALL">All Brands</option>
+        </select>
+        <div style="display:flex; align-items:center; gap:6px;">
+          <input type="number" id="historyMinPrice" placeholder="Min $" oninput="filterHistoryTable()" style="width:80px; padding:6px;" />
+          <span style="color:var(--text-muted);">to</span>
+          <input type="number" id="historyMaxPrice" placeholder="Max $" oninput="filterHistoryTable()" style="width:80px; padding:6px;" />
+        </div>
+      </div>
+
+      <!-- Bulk Actions Bar -->
+      <div id="bulkActionsBar" style="display:none; align-items:center; justify-content:space-between; padding:12px; background:var(--void); border:1px solid var(--border-acc); border-radius:6px; margin:10px; animation: fadeIn 0.3s ease;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-weight:600; font-size:0.9rem;" id="bulkSelectedCount">0 items selected</span>
+          <button class="btn btn--danger btn--xs" onclick="executeBulkAction('delete')">🗑️ Bulk Delete</button>
+          <button class="btn btn--secondary btn--xs" onclick="executeBulkAction('end')">🛑 Bulk End</button>
+        </div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <select id="bulkCrosspostPlatform" style="padding:4px; font-size:0.8rem; width:auto; background:var(--slate); color:var(--text); border:1px solid var(--border);">
+            <option value="shopify">Shopify</option>
+            <option value="woocommerce">WooCommerce</option>
+            <option value="etsy">Etsy</option>
+          </select>
+          <button class="btn btn--primary btn--xs" onclick="executeBulkAction('crosspost')">🚀 Bulk Cross-post</button>
+        </div>
       </div>
       <div class="table-wrap" id="historyTableContainer">
         <div class="empty-state">
@@ -2078,6 +2169,130 @@
         <div class="empty-state">
           <div class="empty-state__icon">✅</div>
           No failed syncs — all channels are healthy.
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ── ANALYTICS VIEW ─────────────────────────── -->
+  <main class="content" id="analytics-view" style="display:none;" aria-label="Analytics and system diagnostics">
+
+    <div class="section-header">
+      <div class="section-header__left">
+        <h1 class="section-title">Analytics & Diagnostics</h1>
+        <p class="section-subtitle">Real-time system health, circuit breakers, and listings analysis</p>
+      </div>
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn btn--secondary btn--sm" onclick="loadAnalytics()">
+          🔄 Refresh Metrics
+        </button>
+      </div>
+    </div>
+
+    <!-- Metrics Row -->
+    <div class="metrics-grid" role="list" style="margin-bottom:24px;">
+      <div class="metric-card" role="listitem">
+        <span class="metric-label">System Uptime</span>
+        <span class="metric-value" id="sysUptime">0s</span>
+        <span class="metric-sub">seconds active</span>
+      </div>
+      <div class="metric-card" role="listitem">
+        <span class="metric-label">Total Requests</span>
+        <span class="metric-value metric-value--blue" id="sysRequests">0</span>
+        <span class="metric-sub">since startup</span>
+      </div>
+      <div class="metric-card" role="listitem">
+        <span class="metric-label">Failed Requests</span>
+        <span class="metric-value metric-value--red" id="sysErrors">0</span>
+        <span class="metric-sub">failures logged</span>
+      </div>
+      <div class="metric-card" role="listitem">
+        <span class="metric-label">Active Sockets</span>
+        <span class="metric-value metric-value--green" id="sysSockets">0</span>
+        <span class="metric-sub">live connections</span>
+      </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap:24px; margin-bottom:24px;">
+      <div class="card">
+        <div class="card__title">
+          <span class="card__title-dot" style="background-color: var(--amber);"></span>
+          Inventory Channel Distribution
+        </div>
+        <div style="display:flex; align-items:center; justify-content:center; min-height:220px; position:relative;">
+          <div id="channelDistributionChartContainer" style="width:100%; max-width:320px;">
+            <!-- Dynamic SVG Donut Chart -->
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__title">
+          <span class="card__title-dot" style="background-color: var(--blue);"></span>
+          Listing Price Range Histogram
+        </div>
+        <div style="display:flex; align-items:flex-end; justify-content:space-around; min-height:220px; padding:20px 10px 10px; position:relative;" id="priceRangeChartContainer">
+          <!-- Dynamic SVG/CSS Bar Chart -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Diagnostics and Circuit Breakers Grid -->
+    <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap:24px; margin-bottom:24px;">
+      <!-- System Diagnostics Card -->
+      <div class="card">
+        <div class="card__title">
+          <span class="card__title-dot" style="background-color: var(--signal-green);"></span>
+          Server Performance &amp; Storage
+        </div>
+        <div style="display:flex; flex-direction:column; gap:16px; padding:10px 0;">
+          <div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:4px;">
+              <span>Memory Heap Usage</span>
+              <span id="memHeapPercentage" style="font-weight:600;">0%</span>
+            </div>
+            <div style="width:100%; height:8px; background:var(--ash); border-radius:4px; overflow:hidden;">
+              <div id="memHeapBar" style="width:0%; height:100%; background:var(--signal-green); transition: width 0.4s ease;"></div>
+            </div>
+            <div style="font-size:0.72rem; color:var(--text-muted); margin-top:2px;" id="memHeapRaw">Used: 0MB / Total: 0MB</div>
+          </div>
+
+          <div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:4px;">
+              <span>Physical RAM (RSS)</span>
+              <span id="memRssValue" style="font-weight:600;">0 MB</span>
+            </div>
+            <div style="width:100%; height:8px; background:var(--ash); border-radius:4px; overflow:hidden;">
+              <div id="memRssBar" style="width:0%; height:100%; background:var(--signal-blue); transition: width 0.4s ease;"></div>
+            </div>
+          </div>
+
+          <div style="border-top:1px solid var(--border); padding-top:12px; display:flex; flex-direction:column; gap:8px;">
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem;">
+              <span>Uploads Directory Status</span>
+              <span class="status-badge status-badge--success" id="statusUploads" style="background-color:var(--signal-green); color:#000; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600;">Writable</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem;">
+              <span>Database Locks</span>
+              <span class="status-badge status-badge--success" id="statusDbLocks" style="background-color:var(--signal-green); color:#000; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600;">Healthy</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem;">
+              <span>Database File Integrity</span>
+              <span class="status-badge status-badge--success" id="statusDbIntegrity" style="background-color:var(--signal-green); color:#000; padding:2px 8px; border-radius:4px; font-size:0.75rem; font-weight:600;">Healthy</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Circuit Breakers Card -->
+      <div class="card">
+        <div class="card__title">
+          <span class="card__title-dot" style="background-color: var(--signal-red);"></span>
+          Integration Circuit Breakers
+        </div>
+        <div style="display:flex; flex-direction:column; gap:12px;" id="circuitBreakersContainer">
+          <!-- Dynamic Breaker List -->
         </div>
       </div>
     </div>
@@ -2846,6 +3061,18 @@
       };
     }
 
+    const requiredKeys = {
+      ebay: ['EBAY_CLIENT_ID', 'EBAY_CLIENT_SECRET', 'EBAY_RUNAME', 'EBAY_REFRESH_TOKEN'],
+      shopify: ['SHOPIFY_SHOP_NAME', 'SHOPIFY_ACCESS_TOKEN'],
+      woocommerce: ['WOOCOMMERCE_URL', 'WOOCOMMERCE_KEY', 'WOOCOMMERCE_SECRET'],
+      etsy: ['ETSY_SHOP_ID', 'ETSY_ACCESS_TOKEN', 'ETSY_CLIENT_ID']
+    };
+    const missing = (requiredKeys[platform] || []).filter(key => !payload[key]);
+    if (missing.length) {
+      showToast('error', 'Missing Credentials', `Fill all required ${platform.toUpperCase()} fields before saving.`, 5000);
+      return;
+    }
+
     try {
       const res = await fetch('/api/config/save', {
         method: 'POST',
@@ -2901,12 +3128,13 @@
   function switchView(view) {
     closeSidebar();
     currentView = view;
-    const titles = { create: 'New Listing', history: 'Listing History', dlq: 'Sync Queue' };
+    const titles = { create: 'New Listing', history: 'Listing History', dlq: 'Sync Queue', analytics: 'Analytics & Diagnostics' };
     document.getElementById('topbarTitle').textContent = titles[view] || view;
 
     document.getElementById('create-view').style.display  = view === 'create'  ? 'block' : 'none';
     document.getElementById('history-view').style.display = view === 'history' ? 'block' : 'none';
     document.getElementById('dlq-view').style.display      = view === 'dlq'     ? 'block' : 'none';
+    document.getElementById('analytics-view').style.display = view === 'analytics' ? 'block' : 'none';
 
     document.querySelectorAll('.nav-item').forEach(b => {
       b.classList.remove('active');
@@ -2917,6 +3145,7 @@
 
     if (view === 'history') loadHistory();
     if (view === 'dlq') loadDlqQueue(true);
+    if (view === 'analytics') loadAnalytics();
   }
 
   /* ── File uploads ─────────────────────────────── */
@@ -3420,7 +3649,10 @@
       enableForm();
       populateForm(data.listing, data.categorySuggestions || []);
       handleComps(data.comps);
-      renderStockPhotos(data.stockPhotos);
+      // Auto-trigger autonomous photo sourcing — hunts, downloads, spruces, and uploads
+      // product photos from eBay Catalog, UPCItemDB, Open Food Facts, Bing, Google CSE,
+      // and DuckDuckGo. Fires 800ms after form populates so activeListingData is ready.
+      setTimeout(() => autoSourcePhotos(), 800);
 
       showToast('success', 'AI listing ready', `"${data.listing.title.slice(0,55)}…" — $${data.listing.suggestedPrice}`, 7000);
 
@@ -3765,25 +3997,119 @@
   }
 
   /* ── Stock photos ─────────────────────────────── */
-  function renderStockPhotos(photos) {
+  // Kept for backward compat — the auto-source pipeline now owns the panel.
+  function renderStockPhotos(legacy) { /* no-op: autoSourcePhotos handles this now */ }
+
+  function renderSourcedPhotos(photos) {
     const grp = document.getElementById('stockPhotosGroup');
     const cnt = document.getElementById('stockPhotosContainer');
+    const emptyState = document.getElementById('autoSourceEmpty');
+    const badge = document.getElementById('autoSourceBadge');
     cnt.innerHTML = '';
-    if (!photos || photos.length === 0) { grp.style.display = 'none'; return; }
-    grp.style.display = 'block';
-    photos.forEach((url, i) => {
+    if (!photos || photos.length === 0) {
+      if (emptyState) emptyState.style.display = 'block';
+      if (badge) badge.style.display = 'none';
+      return;
+    }
+    if (emptyState) emptyState.style.display = 'none';
+    if (badge) { badge.textContent = photos.length + ' found'; badge.style.display = 'inline-flex'; }
+    const SRC = {
+      ebay_upc: '&#127991;&#65039; eBay UPC', upcitemdb: '&#128230; UPCItemDB',
+      open_food_facts: '&#129382; Open Food', ebay_catalog: '&#128722; eBay',
+      bing_images: '&#128055; Bing', google_cse: '&#128269; Google', duckduckgo: '&#129414; DDG'
+    };
+    photos.forEach((photo, i) => {
+      const url = photo.uploadedUrl || photo.localUrl || photo.originalUrl;
+      const lbl = SRC[photo.source] || photo.source;
       const wrap = document.createElement('label');
       wrap.className = 'stock-thumb';
+      wrap.title = 'Source: ' + lbl + '\n' + (photo.originalUrl || '');
+      wrap.style.position = 'relative';
       const img = document.createElement('img');
-      img.src = url; img.alt = `Stock photo ${i+1}`;
+      img.src = url; img.alt = 'Sourced photo ' + (i + 1); img.loading = 'lazy';
+      img.onerror = () => { wrap.style.display = 'none'; };
       img.onclick = e => { e.preventDefault(); openLightbox(url); };
-      const cb  = document.createElement('input');
-      cb.type   = 'checkbox';
-      cb.className = 'stock-photo-checkbox';
-      cb.value  = url; cb.checked = true;
-      wrap.appendChild(cb); wrap.appendChild(img);
+      const cb = document.createElement('input');
+      cb.type = 'checkbox'; cb.className = 'stock-photo-checkbox';
+      cb.value = url; cb.checked = true;
+      const chip = document.createElement('span');
+      chip.innerHTML = lbl;
+      chip.style.cssText = 'position:absolute;bottom:6px;left:50%;transform:translateX(-50%);' +
+        'background:rgba(0,0,0,0.65);color:#fff;font-size:0.6rem;padding:2px 6px;border-radius:4px;' +
+        'white-space:nowrap;pointer-events:none;backdrop-filter:blur(4px)';
+      if (photo.metadata) {
+        const q = document.createElement('span');
+        q.textContent = photo.metadata.width + '\u00d7' + photo.metadata.height;
+        q.style.cssText = 'position:absolute;top:6px;right:6px;background:rgba(16,185,129,0.85);' +
+          'color:#fff;font-size:0.58rem;padding:2px 5px;border-radius:4px;pointer-events:none;font-weight:600';
+        wrap.appendChild(q);
+      }
+      wrap.appendChild(cb); wrap.appendChild(img); wrap.appendChild(chip);
       cnt.appendChild(wrap);
     });
+  }
+
+  async function autoSourcePhotos() {
+    if (!activeListingData) return;
+    const grp = document.getElementById('stockPhotosGroup');
+    const statusEl = document.getElementById('autoSourceStatus');
+    const statusText = document.getElementById('autoSourceStatusText');
+    const progressBar = document.getElementById('autoSourceProgress');
+    const btn = document.getElementById('autoSourceBtn');
+    const icon = document.getElementById('autoSourceIcon');
+    const lbl = document.getElementById('autoSourceLabel');
+    const emptyState = document.getElementById('autoSourceEmpty');
+    grp.style.display = 'block';
+    statusEl.style.display = 'block';
+    if (emptyState) emptyState.style.display = 'none';
+    document.getElementById('stockPhotosContainer').innerHTML = '';
+    document.getElementById('autoSourceBadge').style.display = 'none';
+    btn.disabled = true; icon.textContent = '\u23f3'; lbl.textContent = 'Sourcing\u2026';
+    const msgs = [
+      'Searching eBay Catalog\u2026','Querying UPCItemDB\u2026','Checking Open Food Facts\u2026',
+      'Searching Bing & DuckDuckGo\u2026','Downloading candidates\u2026',
+      'Removing backgrounds\u2026','Color correction\u2026','Uploading photos\u2026'
+    ];
+    let mi = 0, pct = 5;
+    statusText.textContent = msgs[0]; progressBar.style.width = '5%';
+    const timer = setInterval(() => {
+      mi = Math.min(mi + 1, msgs.length - 1);
+      statusText.textContent = msgs[mi];
+      pct = Math.min(pct + Math.floor(Math.random() * 15) + 8, 90);
+      progressBar.style.width = pct + '%';
+    }, 1800);
+    try {
+      const upc = (activeListingData.upc || '').replace(/\D/g, '') || null;
+      const res = await fetch('/api/photos/auto-source', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: activeListingData.title || '', brand: activeListingData.brand || null,
+          model: activeListingData.model || null, upc, maxPhotos: 8,
+          spruceOpts: { bgRemove: true, bgStyle: 'white', colorCorrection: true, canvasSize: 1600, watermark: true }
+        })
+      });
+      clearInterval(timer);
+      progressBar.style.width = '100%';
+      statusText.textContent = 'Done!';
+      if (!res.ok) { const e = await res.json().catch(() => ({})); throw new Error(e.message || 'Server error ' + res.status); }
+      const data = await res.json();
+      setTimeout(() => { statusEl.style.display = 'none'; }, 600);
+      renderSourcedPhotos(data.photos || []);
+      const spruced = (data.photos || []).map(p => p.uploadedUrl || p.localUrl).filter(Boolean);
+      if (spruced.length > 0) { activeImageUrls = [...spruced, ...activeImageUrls]; }
+      if (data.photos && data.photos.length > 0) {
+        showToast('success', data.photos.length + ' photos sourced & spruced',
+          'From: ' + Object.keys(data.sources || {}).join(', '), 6000);
+      } else {
+        showToast('warn', 'No photos found', data.message || 'Try adding a UPC.', 5000);
+      }
+    } catch (err) {
+      clearInterval(timer); statusEl.style.display = 'none';
+      showToast('error', 'Photo sourcing failed', err.message, 0);
+    } finally {
+      btn.disabled = false; icon.textContent = '\ud83d\udd0d'; lbl.textContent = 'Re-Source Photos';
+    }
   }
 
   /* ── Aspects ───────────────────────────────────── */
@@ -4460,8 +4786,10 @@
         for (const [platform, result] of Object.entries(data.crossPostResults)) {
           if (result.success) {
             showToast('success', `${labels[platform]} synced`, `Product ID: ${result.id}`, 6000);
-          } else {
+          } else if (result.queued !== false) {
             showToast('warn', `${labels[platform]} cross-post queued`, `${result.error || 'Connection failed'}. Retrying via Sync Queue — open sidebar to manage.`, 8000);
+          } else {
+            showToast('error', `${labels[platform]} cross-post failed`, result.error || 'Connection failed before it could be queued.', 0);
           }
         }
       }
@@ -4598,6 +4926,7 @@
       woocommerceUrl  = data.woocommerceUrl || null;
       etsyShopId      = data.etsyShopId || null;
       updateMetrics(allHistoryData);
+      populateCategoryFilterDropdown(allHistoryData);
       filterHistoryTable();
       const badge = document.getElementById('historyCountBadge');
       if (badge) badge.textContent = allHistoryData.length;
@@ -4669,11 +4998,23 @@
   function filterHistoryTable() {
     const term   = document.getElementById('historySearch').value.toLowerCase();
     const status = document.getElementById('historyStatusFilter').value;
+    const brandFilter = document.getElementById('historyCategoryFilter').value;
+    
+    const minPriceInput = document.getElementById('historyMinPrice').value;
+    const maxPriceInput = document.getElementById('historyMaxPrice').value;
+    const minPrice = minPriceInput !== '' ? parseFloat(minPriceInput) : -Infinity;
+    const maxPrice = maxPriceInput !== '' ? parseFloat(maxPriceInput) : Infinity;
+
     const cnt    = document.getElementById('historyTableContainer');
     const filtered = allHistoryData.filter(item => {
       const ms = [item.sku,item.title,item.listingId].some(v=>String(v||'').toLowerCase().includes(term));
       const st = status==='ALL' || (item.status||'ACTIVE')===status;
-      return ms && st;
+      const categoryMatch = brandFilter==='ALL' || (item.brand || '').trim()===brandFilter;
+      
+      const price = parseFloat(item.price || item.suggestedPrice || 0);
+      const priceMatch = price >= minPrice && price <= maxPrice;
+
+      return ms && st && categoryMatch && priceMatch;
     });
     if (filtered.length === 0) {
       cnt.innerHTML = '<div class="empty-state"><div class="empty-state__icon">🔍</div>No matching listings found.</div>';
@@ -4734,10 +5075,11 @@
       }
 
       return `<tr>
+        <td style="width: 30px;"><input type="checkbox" class="history-select-checkbox" data-sku="${escHtml(item.sku)}" onchange="updateBulkActionsBarState()" /></td>
         <td style="color:var(--text-muted);white-space:nowrap;">${date}</td>
         <td><span class="sku-mono">${escHtml(item.sku)}</span></td>
         <td><span class="sku-mono">${lid}</span></td>
-        <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(item.title)}">${titleDisplay}</td>
+        <td style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escHtml(item.title)}">${titleDisplay}</td>
         <td class="price-cell">$${parseFloat(item.price).toFixed(2)}${repricerDisplay}</td>
         <td><span class="pill pill--${pill}"><span class="dot" aria-hidden="true"></span>${pillTxt}</span></td>
         <td><div class="action-group">${viewBtn}${shopBtn}${wcBtn}${etsyBtn}${actions}${cross}</div></td>
@@ -4745,6 +5087,7 @@
     }).join('');
     cnt.innerHTML = `<table role="table">
       <thead><tr>
+        <th style="width: 30px;"><input type="checkbox" id="selectAllHistory" onclick="toggleSelectAllHistory(this)" /></th>
         <th scope="col">Date</th><th scope="col">SKU</th><th scope="col">Listing ID</th>
         <th scope="col">Title</th><th scope="col">Price</th>
         <th scope="col">Status</th><th scope="col">Actions</th>
@@ -4853,8 +5196,10 @@
         for (const [platform, result] of Object.entries(data.crossPostResults)) {
           if (result.success) {
             showToast('success', `${labels[platform]} synced`, `Product ID: ${result.id}`, 6000);
-          } else {
+          } else if (result.queued !== false) {
             showToast('warn', `${labels[platform]} cross-post queued`, `${result.error || 'Connection failed'}. Retrying via Sync Queue — open sidebar to manage.`, 8000);
+          } else {
+            showToast('error', `${labels[platform]} cross-post failed`, result.error || 'Connection failed before it could be queued.', 0);
           }
         }
       }
@@ -5811,6 +6156,332 @@
 
     document.querySelectorAll('[data-counter], .metric-value').forEach(el => {
       io.observe(el);
+    });
+  }
+
+  /* ── Analytics & Diagnostics ──────────────────── */
+  async function loadAnalytics() {
+    try {
+      const metricsRes = await fetch('/api/metrics');
+      const metrics = await metricsRes.json();
+      const statusRes = await fetch('/api/status');
+      const statusData = await statusRes.json();
+
+      // Ensure we have history data loaded
+      if (!allHistoryData || allHistoryData.length === 0) {
+        const historyRes = await fetch('/api/history');
+        const historyJson = await historyRes.json();
+        allHistoryData = historyJson.listings || [];
+      }
+
+      // Format Uptime
+      const uptimeSec = metrics.uptime || 0;
+      const hrs = Math.floor(uptimeSec / 3600);
+      const mins = Math.floor((uptimeSec % 3600) / 60);
+      const secs = uptimeSec % 60;
+      document.getElementById('sysUptime').textContent = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m ${secs}s`;
+
+      // Request counts & Sockets
+      document.getElementById('sysRequests').textContent = metrics.totalRequests || 0;
+      document.getElementById('sysSockets').textContent = metrics.activeSockets || 0;
+
+      // Sum up endpoint errors
+      let errSum = 0;
+      if (metrics.endpointErrors) {
+        for (const val of Object.values(metrics.endpointErrors)) {
+          errSum += val;
+        }
+      }
+      document.getElementById('sysErrors').textContent = errSum;
+
+      // Server diagnostics (Memory progress bars)
+      if (metrics.memoryUsage) {
+        const heapUsed = parseInt(metrics.memoryUsage.heapUsed) || 0;
+        const heapTotal = parseInt(metrics.memoryUsage.heapTotal) || 0;
+        const rss = parseInt(metrics.memoryUsage.rss) || 0;
+        const heapPercentage = heapTotal > 0 ? Math.round((heapUsed / heapTotal) * 100) : 0;
+        document.getElementById('memHeapPercentage').textContent = `${heapPercentage}%`;
+        document.getElementById('memHeapBar').style.width = `${heapPercentage}%`;
+        document.getElementById('memHeapRaw').textContent = `Used: ${heapUsed}MB / Total: ${heapTotal}MB`;
+        document.getElementById('memRssValue').textContent = `${rss} MB`;
+        // Scale RSS bar assuming 1024MB is a standard threshold
+        const rssPercentage = Math.min(100, Math.round((rss / 1024) * 100));
+        document.getElementById('memRssBar').style.width = `${rssPercentage}%`;
+      }
+
+      // Storage and integrity statuses (Diagnostics)
+      const healthRes = await fetch('/health');
+      if (healthRes.ok) {
+        const health = await healthRes.json();
+        const details = health.details || {};
+        
+        // Uploads writable status
+        const upStatus = details.storage?.uploads?.status === 'OK' ? 'Writable' : 'Error';
+        const uploadsBadge = document.getElementById('statusUploads');
+        uploadsBadge.textContent = upStatus;
+        uploadsBadge.style.backgroundColor = upStatus === 'Writable' ? 'var(--signal-green)' : 'var(--signal-red)';
+        
+        // DB Locks
+        const locksOk = details.database?.historyLockStatus?.status === 'OK' && details.database?.dlqLockStatus?.status === 'OK';
+        const locksBadge = document.getElementById('statusDbLocks');
+        locksBadge.textContent = locksOk ? 'Healthy' : 'Stuck Lock';
+        locksBadge.style.backgroundColor = locksOk ? 'var(--signal-green)' : 'var(--signal-red)';
+        
+        // DB Integrity
+        const integOk = details.database?.historyIntegrity?.status === 'OK' && details.database?.dlqIntegrity?.status === 'OK';
+        const integrityBadge = document.getElementById('statusDbIntegrity');
+        integrityBadge.textContent = integOk ? 'Healthy' : 'Corrupted';
+        integrityBadge.style.backgroundColor = integOk ? 'var(--signal-green)' : 'var(--signal-red)';
+      }
+
+      // Circuit Breakers
+      renderCircuitBreakers(statusData.circuitBreaker || {});
+
+      // Donut Chart - Channel Distribution
+      renderChannelDistributionChart();
+
+      // Histogram - Price Ranges
+      renderPriceRangeHistogram();
+
+    } catch (e) {
+      console.warn("Failed to load analytics details: " + e.message);
+    }
+  }
+
+  function renderCircuitBreakers(cb) {
+    const container = document.getElementById('circuitBreakersContainer');
+    if (!container) return;
+
+    const domains = cb.domains || {};
+    const domainKeys = Object.keys(domains);
+    
+    if (domainKeys.length === 0) {
+      container.innerHTML = '<div style="font-size:0.85rem; color:var(--text-muted); text-align:center; padding:20px;">No active circuit breakers monitored.</div>';
+      return;
+    }
+
+    container.innerHTML = domainKeys.map(dom => {
+      const info = domains[dom];
+      const isTripped = info.active;
+      const color = isTripped ? 'var(--signal-red)' : 'var(--signal-green)';
+      const pillText = isTripped ? 'Tripped' : 'Closed (Healthy)';
+      
+      const resetBtn = isTripped
+        ? `<button class="btn btn--secondary btn--xs" onclick="resetBreaker('${dom}')">Reset Breaker</button>`
+        : `<button class="btn btn--ghost btn--xs" onclick="resetBreaker('${dom}')">Reset</button>`;
+
+      return `
+        <div style="display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid var(--border); padding:8px 0; font-size:0.85rem;">
+          <div style="flex:1;">
+            <div style="font-weight:600; color:var(--text);">${dom}</div>
+            <div style="font-size:0.75rem; color:var(--text-muted);">Failures: ${info.consecutiveFailures || 0} ${info.cooldownRemainingSeconds > 0 ? `| Cooldown: ${info.cooldownRemainingSeconds}s` : ''}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <span style="font-size:0.75rem; font-weight:600; color:${color}; padding:2px 8px; border:1px solid ${color}; border-radius:4px;">${pillText}</span>
+            ${resetBtn}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  window.resetBreaker = async function(domain) {
+    try {
+      const res = await fetch('/api/circuit-breaker/reset', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain })
+      });
+      if (res.ok) {
+        showToast('success', 'Circuit Breaker Reset', `Successfully cleared breaker state for ${domain}.`, 3000);
+        loadAnalytics();
+      } else {
+        throw new Error();
+      }
+    } catch {
+      showToast('error', 'Reset Failed', `Could not reset circuit breaker for ${domain}.`, 4000);
+    }
+  }
+
+  function renderChannelDistributionChart() {
+    const container = document.getElementById('channelDistributionChartContainer');
+    if (!container) return;
+
+    let counts = { ebay: 0, shopify: 0, etsy: 0, woocommerce: 0 };
+    allHistoryData.forEach(item => {
+      if (item.status === 'ACTIVE') {
+        counts.ebay++;
+        if (item.shopifyId) counts.shopify++;
+        if (item.etsyId) counts.etsy++;
+        if (item.woocommerceId) counts.woocommerce++;
+      }
+    });
+
+    const total = counts.ebay + counts.shopify + counts.etsy + counts.woocommerce;
+    if (total === 0) {
+      container.innerHTML = '<div style="font-size:0.85rem; color:var(--text-muted); text-align:center; padding:40px 0;">No active listings to show channel distribution.</div>';
+      return;
+    }
+
+    const r = 50;
+    const circ = 2 * Math.PI * r;
+    const slices = [
+      { key: 'eBay', val: counts.ebay, color: 'var(--amber)' },
+      { key: 'Shopify', val: 'var(--signal-green)' }, // Map standard values
+      { key: 'Shopify', val: counts.shopify, color: 'var(--signal-green)' },
+      { key: 'Etsy', val: counts.etsy, color: '#f97316' },
+      { key: 'WooCommerce', val: counts.woocommerce, color: '#a855f7' }
+    ].filter(s => s.val > 0 && typeof s.val === 'number');
+
+    let currentOffset = 0;
+    const svgPaths = slices.map(slice => {
+      const percentage = slice.val / total;
+      const strokeDash = circ * percentage;
+      const strokeOffset = circ - currentOffset;
+      currentOffset += strokeDash;
+
+      return `<circle cx="100" cy="100" r="${r}" fill="transparent" stroke="${slice.color}" stroke-width="20" stroke-dasharray="${strokeDash} ${circ - strokeDash}" stroke-dashoffset="${strokeOffset}" transform="rotate(-90 100 100)" />`;
+    }).join('');
+
+    const legend = slices.map(s => `
+      <div style="display:flex; align-items:center; gap:6px; font-size:0.78rem;">
+        <span style="display:inline-block; width:10px; height:10px; background:${s.color}; border-radius:2px;"></span>
+        <span style="font-weight:600;">${s.key}:</span>
+        <span style="color:var(--text-muted);">${s.val} (${Math.round((s.val / total) * 100)}%)</span>
+      </div>
+    `).join('');
+
+    container.innerHTML = `
+      <div style="display:flex; align-items:center; gap:20px; flex-wrap:wrap; justify-content:center;">
+        <svg width="150" height="150" viewBox="0 0 200 200" style="flex-shrink:0;">
+          <circle cx="100" cy="100" r="${r}" fill="transparent" stroke="var(--border)" stroke-width="20" />
+          ${svgPaths}
+          <text x="100" y="105" text-anchor="middle" fill="var(--text)" font-size="16" font-weight="bold">${total}</text>
+          <text x="100" y="122" text-anchor="middle" fill="var(--text-muted)" font-size="10">TOTAL</text>
+        </svg>
+        <div style="display:flex; flex-direction:column; gap:6px;">
+          ${legend}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderPriceRangeHistogram() {
+    const container = document.getElementById('priceRangeChartContainer');
+    if (!container) return;
+
+    let buckets = [
+      { label: '< $25', min: 0, max: 25, count: 0 },
+      { label: '$25-$50', min: 25, max: 50, count: 0 },
+      { label: '$50-$100', min: 50, max: 100, count: 0 },
+      { label: '$100-$250', min: 100, max: 250, count: 0 },
+      { label: '$250+', min: 250, max: Infinity, count: 0 }
+    ];
+
+    allHistoryData.forEach(item => {
+      const price = parseFloat(item.price || item.suggestedPrice || 0);
+      for (const bucket of buckets) {
+        if (price >= bucket.min && price < bucket.max) {
+          bucket.count++;
+          break;
+        }
+      }
+    });
+
+    const maxCount = Math.max(...buckets.map(b => b.count), 1);
+
+    container.innerHTML = buckets.map(b => {
+      const pct = (b.count / maxCount) * 100;
+      return `
+        <div style="display:flex; flex-direction:column; align-items:center; gap:8px; height:100%; justify-content:flex-end; width:16%; min-height:160px;">
+          <div style="height: ${Math.max(4, Math.round(pct * 1.2))}px; background: linear-gradient(to top, var(--signal-blue), #60a5fa); width: 100%; border-radius: 4px 4px 0 0; min-height: 4px; box-shadow: 0 0 10px rgba(96,165,250,0.15);"></div>
+          <span style="font-size:0.75rem; font-weight:600; color:var(--text);">${b.count}</span>
+          <span style="font-size:0.68rem; color:var(--text-muted); white-space:nowrap;">${b.label}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  /* ── Bulk Actions & Advanced Filtering ────────── */
+  window.updateBulkActionsBarState = function() {
+    const checkboxes = document.querySelectorAll('.history-select-checkbox');
+    const checked = Array.from(checkboxes).filter(cb => cb.checked);
+    const bar = document.getElementById('bulkActionsBar');
+    const countLabel = document.getElementById('bulkSelectedCount');
+    if (bar && countLabel) {
+      if (checked.length > 0) {
+        bar.style.display = 'flex';
+        countLabel.textContent = `${checked.length} items selected`;
+      } else {
+        bar.style.display = 'none';
+      }
+    }
+  }
+
+  window.toggleSelectAllHistory = function(masterCb) {
+    document.querySelectorAll('.history-select-checkbox').forEach(cb => {
+      cb.checked = masterCb.checked;
+    });
+    updateBulkActionsBarState();
+  }
+
+  window.executeBulkAction = async function(action) {
+    const checkboxes = document.querySelectorAll('.history-select-checkbox');
+    const skus = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.getAttribute('data-sku'));
+    
+    if (skus.length === 0) return;
+
+    if (action === 'delete') {
+      if (!confirm(`Are you sure you want to delete the ${skus.length} selected listings from history?`)) return;
+    } else if (action === 'end') {
+      if (!confirm(`Are you sure you want to end the ${skus.length} selected listings on eBay?`)) return;
+    }
+
+    const payload = { action, skus };
+    if (action === 'crosspost') {
+      const platform = document.getElementById('bulkCrosspostPlatform').value;
+      payload.platforms = [platform];
+    }
+
+    try {
+      showToast('info', 'Bulk Action', `Starting bulk ${action} action...`, 3000);
+      const res = await fetch('/api/history/bulk-action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      if (!res.ok) throw new Error();
+      const result = await res.json();
+      
+      showToast('success', 'Bulk Action Completed', `Successfully executed bulk ${action}.`, 4000);
+      loadHistory();
+      
+      const masterCb = document.getElementById('selectAllHistory');
+      if (masterCb) masterCb.checked = false;
+      updateBulkActionsBarState();
+
+    } catch (err) {
+      showToast('error', 'Bulk Action Failed', `Error executing bulk action: ${err.message || 'unknown'}`, 5000);
+    }
+  }
+
+  function populateCategoryFilterDropdown(listings) {
+    const filter = document.getElementById('historyCategoryFilter');
+    if (!filter) return;
+
+    filter.innerHTML = '<option value="ALL">All Brands</option>';
+    
+    const brands = new Set();
+    listings.forEach(item => {
+      if (item.brand) brands.add(item.brand.trim());
+    });
+
+    Array.from(brands).sort().forEach(brand => {
+      const opt = document.createElement('option');
+      opt.value = brand;
+      opt.textContent = brand;
+      filter.appendChild(opt);
     });
   }
 
