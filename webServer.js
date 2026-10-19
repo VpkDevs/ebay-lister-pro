@@ -121,6 +121,103 @@ async function runInventoryCrossSync() {
 }
 
 const crypto = require('crypto');
+
+// [WAVE1-B] Allowed statuses for bulk updates (subset of statuses used in history).
+const BULK_ALLOWED_STATUSES = ["ACTIVE", "DRAFT", "ENDED", "SOLD"];
+
+/**
+ * [WAVE1-B] Escapes a single value for CSV output (RFC 4180).
+ * Wraps in double quotes when the value contains a comma, quote, or newline,
+ * and doubles any embedded quotes.
+ * @param {*} value - Raw cell value.
+ * @returns {string} CSV-safe cell text.
+ */
+function csvEscape(value) {
+  const str = value === null || value === undefined ? "" : String(value);
+  if (/[",\r\n]/.test(str)) {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+}
+
+/**
+ * [WAVE1-B] Builds the full CSV export of listings history.
+ * Includes Wave-1 fields (keywords, msrp, costOfGoods, internalNotes) when present;
+ * fields added by other waves are read defensively and export as empty columns
+ * when absent. Export is local-only, so internalNotes are safe to include.
+ * @param {Array<object>} history - Listings history rows.
+ * @returns {string} CSV document text.
+ */
+function buildListingsCsv(history) {
+  const headers = [
+    "sku", "title", "price", "msrp", "keywords", "costOfGoods", "internalNotes",
+    "status", "categoryId", "createdAt",
+    "ebayListingId", "shopifyId", "woocommerceId", "etsyId"
+  ];
+  const lines = [headers.join(",")];
+  for (const item of history) {
+    const details = item.listingDetails || {};
+    // Wave-1 fields may live top-level (A-wave) or inside listingDetails; check both.
+    const keywords = item.keywords ?? details.keywords ?? "";
+    const msrp = item.msrp ?? details.msrp ?? "";
+    const costOfGoods = item.costOfGoods ?? details.costOfGoods ?? "";
+    const internalNotes = item.internalNotes ?? details.internalNotes ?? "";
+    const row = [
+      item.sku,
+      item.title,
+      item.price,
+      msrp,
+      Array.isArray(keywords) ? keywords.join("; ") : keywords,
+      costOfGoods,
+      internalNotes,
+      item.status || "ACTIVE",
+      item.categoryId,
+      item.timestamp,
+      item.listingId,
+      item.shopifyId,
+      item.woocommerceId,
+      item.etsyId
+    ];
+    lines.push(row.map(csvEscape).join(","));
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
+/**
+ * [WAVE1-B] Bulk-updates listing statuses through the same read/mutate/write path
+ * as the inventory cross-sync (no parallel store). Reports per-SKU success/failure.
+ * @param {string[]} skus - SKUs to update.
+ * @param {string} status - New status (one of BULK_ALLOWED_STATUSES).
+ * @returns {{updated:number, results:Array<{sku:string,ok:boolean,error:string|null}>}}
+ * @throws {Error} When status is invalid.
+ */
+function bulkUpdateListingStatus(skus, status) {
+  if (!BULK_ALLOWED_STATUSES.includes(status)) {
+    throw new Error(`Invalid status "${status}". Allowed: ${BULK_ALLOWED_STATUSES.join(", ")}`);
+  }
+  const history = utils.readJsonFileSecure(config.historyPath, []);
+  const results = [];
+  let updated = 0;
+  for (const sku of skus) {
+    try {
+      const item = history.find(i => i.sku === sku);
+      if (!item) {
+        results.push({ sku, ok: false, error: "SKU not found" });
+        continue;
+      }
+      item.status = status;
+      updated++;
+      results.push({ sku, ok: true, error: null });
+    } catch (err) {
+      results.push({ sku, ok: false, error: err.message });
+    }
+  }
+  if (updated > 0) {
+    utils.writeJsonFileSecure(config.historyPath, history);
+  }
+  utils.logAudit("INFO", `Bulk status update to "${status}": ${updated}/${skus.length} updated.`);
+  return { updated, results };
+}
 const activeSessions = new Map();
 
 // Metrics tracking structure
@@ -1003,6 +1100,105 @@ function startWebGuiServer(port = 45900) {
       return;
     }
 
+    // [WAVE1-B] API: Export all listings as CSV (local download).
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/listings/export.csv') {
+      try {
+        const history = utils.readJsonFileSecure(config.historyPath, []);
+        const csv = buildListingsCsv(history);
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="listai-pro-listings-${stamp}.csv"`
+        });
+        res.end(csv, 'utf8');
+      } catch (err) {
+        utils.logAudit("ERROR", `CSV export failed: ${err.message}`);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // [WAVE1-B] API: Bulk mark listings sold / listed (or any allowed status).
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/listings/bulk-status') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(bodyData);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+          const skus = payload.skus;
+          const status = payload.status;
+          if (!Array.isArray(skus) || skus.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Payload must include a non-empty skus array." }));
+            return;
+          }
+          const result = bulkUpdateListingStatus(skus.map(String), String(status));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, updated: result.updated, total: skus.length, results: result.results }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-B] API: List background-task error notifications (unread = all queued).
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/notifications') {
+      try {
+        const notifications = utils.getNotifications();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ unread: notifications.length, notifications }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // [WAVE1-B] API: Dismiss a notification by id.
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/notifications/dismiss') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(bodyData);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+          if (!payload || !payload.id) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Payload must include an id." }));
+            return;
+          }
+          const dismissed = utils.dismissNotification(String(payload.id));
+          if (!dismissed) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Notification not found." }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
 
     // API: Sync Listings from eBay
     if (req.method === 'POST' && parsedUrl.pathname === '/api/sync') {
@@ -1694,15 +1890,26 @@ function startWebGuiServer(port = 45900) {
     // Clean old files on startup
     utils.cleanOldTempFiles();
     
+    // [WAVE1-B] Background task runner: each task gets its own try/catch so one
+    // failure does not abort the others, and failures surface as user-visible notifications.
+    async function runBackgroundTask(task, fn) {
+      try {
+        await fn();
+      } catch (err) {
+        utils.logAudit("ERROR", `Background task [${task}] failed: ${err.message}`);
+        utils.appendNotification(task, err.message);
+      }
+    }
+
     // Start automated background inventory cross-sync check every 5 minutes
     const syncInterval = setInterval(async () => {
+      await runBackgroundTask("ebay-sync", () => ebayClient.syncListingsFromEbay());
+      await runBackgroundTask("inventory-cross-sync", () => runInventoryCrossSync());
+      await runBackgroundTask("dlq-processing", () => crossPost.processPendingSyncsDlq());
       try {
-        await ebayClient.syncListingsFromEbay();
-        await runInventoryCrossSync();
-        await crossPost.processPendingSyncsDlq();
         utils.cleanOldTempFiles();
       } catch (err) {
-        utils.logAudit("ERROR", `Background inventory sync failed: ${err.message}`);
+        utils.logAudit("ERROR", `Background temp cleanup failed: ${err.message}`);
       }
     }, 5 * 60 * 1000);
     if (syncInterval && typeof syncInterval.unref === 'function') {
@@ -1712,9 +1919,11 @@ function startWebGuiServer(port = 45900) {
     // Run once on startup asynchronously
     runInventoryCrossSync().catch(err => {
       utils.logAudit("ERROR", `Initial startup inventory sync failed: ${err.message}`);
+      utils.appendNotification("inventory-cross-sync", `Startup sync failed: ${err.message}`); // [WAVE1-B]
     });
     crossPost.processPendingSyncsDlq().catch(err => {
       utils.logAudit("ERROR", `Initial startup DLQ processing failed: ${err.message}`);
+      utils.appendNotification("dlq-processing", `Startup DLQ processing failed: ${err.message}`); // [WAVE1-B]
     });
 
     const command = process.platform === 'win32' ? 'start' : (process.platform === 'darwin' ? 'open' : 'xdg-open');
@@ -1882,7 +2091,12 @@ function resetRateLimits() {
 module.exports = {
   startWebGuiServer,
   crossPostToShopify,
-  resetRateLimits
+  resetRateLimits,
+  // [WAVE1-B] Wave-1 bulk/notifications helpers (exported for tests)
+  csvEscape,
+  buildListingsCsv,
+  bulkUpdateListingStatus,
+  BULK_ALLOWED_STATUSES
 };
 
 if (require.main === module) {

@@ -33,6 +33,7 @@ config.tempPath = path.join(testDir, 'test-temp-listing.json');
 config.recoveryPath = path.join(testDir, 'test-lister-recovery.json');
 config.logPath = path.join(testDir, 'test-lister-audit.log');
 config.uploadTempDir = testDir;
+config.notificationsPath = path.join(testDir, 'test-notifications.json'); // [WAVE1-B]
 
 // Cleanup helper
 function cleanupSandbox() {
@@ -46,6 +47,9 @@ function cleanupSandbox() {
     config.tempPath,
     config.recoveryPath,
     config.logPath,
+    config.notificationsPath, // [WAVE1-B]
+    `${config.notificationsPath}.tmp`, // [WAVE1-B]
+    `${config.notificationsPath}.bak`, // [WAVE1-B]
     path.join(testDir, 'mock-image.png'),
     path.join(testDir, 'mock-image.jpg')
   ];
@@ -2359,3 +2363,224 @@ test('Additional maximal coverage and edge cases', async (t) => {
 
 
 
+
+// ==========================================
+// [WAVE1-B] CSV export, bulk status, notifications
+// ==========================================
+test('Wave 1B: CSV export, bulk mark sold/listed, task error notifications', async (t) => {
+  // Back up sandbox state left by earlier suites so these tests are hermetic.
+  const historyBackup = fs.existsSync(config.historyPath)
+    ? fs.readFileSync(config.historyPath, 'utf8') : null;
+  const notifBackup = fs.existsSync(config.notificationsPath)
+    ? fs.readFileSync(config.notificationsPath, 'utf8') : null;
+
+  // [WAVE1-B] Earlier suites set a mock GOOGLE_CLIENT_ID (and restore it as the
+  // string "undefined"); clear it so the auth middleware does not 401 these HTTP tests.
+  const originalGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+  delete process.env.GOOGLE_CLIENT_ID;
+
+  function resetHistory(rows) {
+    utils.writeJsonFileSecure(config.historyPath, rows);
+  }
+  function resetNotifications() {
+    utils.writeJsonFileSecure(config.notificationsPath, []);
+  }
+
+  await t.test('csvEscape handles plain, comma, quote, newline and null values', () => {
+    assert.strictEqual(webServer.csvEscape('plain'), 'plain');
+    assert.strictEqual(webServer.csvEscape('a,b'), '"a,b"');
+    assert.strictEqual(webServer.csvEscape('say "hi"'), '"say ""hi"""');
+    assert.strictEqual(webServer.csvEscape('line1\nline2'), '"line1\nline2"');
+    assert.strictEqual(webServer.csvEscape(null), '');
+    assert.strictEqual(webServer.csvEscape(undefined), '');
+    assert.strictEqual(webServer.csvEscape(12.5), '12.5');
+  });
+
+  await t.test('buildListingsCsv emits header + escaped rows with wave-1 and marketplace columns', () => {
+    const rows = [
+      {
+        sku: 'W1B-A',
+        title: 'Vintage "Rare", Camera\n(boxed)',
+        price: 149.99,
+        categoryId: '31388',
+        status: 'ACTIVE',
+        timestamp: '2026-10-18T00:00:00.000Z',
+        listingId: 'eBay123',
+        shopifyId: 'shop9',
+        woocommerceId: null,
+        etsyId: 'etsy7',
+        keywords: ['vintage', 'film, camera'],
+        msrp: 299.99,
+        costOfGoods: 40,
+        internalNotes: 'shelf "B", needs cleaning',
+        listingDetails: { brand: 'Canon' }
+      },
+      { sku: 'W1B-B', title: 'Plain Widget', price: 9.5 } // missing fields export as empty
+    ];
+    const csv = webServer.buildListingsCsv(rows);
+    const lines = csv.split('\r\n').filter(l => l.length > 0);
+    assert.strictEqual(lines[0],
+      'sku,title,price,msrp,keywords,costOfGoods,internalNotes,status,categoryId,createdAt,ebayListingId,shopifyId,woocommerceId,etsyId');
+    assert.ok(lines[1].includes('"Vintage ""Rare"", Camera\n(boxed)"'), 'title escaping');
+    assert.ok(lines[1].includes('"vintage; film, camera"'), 'keywords join');
+    assert.ok(lines[1].includes('299.99') && lines[1].includes('40'), 'wave-1 numeric fields');
+    assert.ok(lines[1].includes('"shelf ""B"", needs cleaning"'), 'internal notes escaping');
+    assert.ok(lines[1].includes('eBay123,shop9,,etsy7'), 'marketplace ids');
+    assert.strictEqual(lines[2], 'W1B-B,Plain Widget,9.5,,,,,ACTIVE,,,,,,');
+  });
+
+  await t.test('bulkUpdateListingStatus updates via the history store and reports partial failures', () => {
+    resetHistory([
+      { sku: 'BULK-1', title: 'One', price: 10, status: 'ACTIVE' },
+      { sku: 'BULK-2', title: 'Two', price: 20, status: 'DRAFT' }
+    ]);
+    const res = webServer.bulkUpdateListingStatus(['BULK-1', 'BULK-2', 'BULK-MISSING'], 'SOLD');
+    assert.strictEqual(res.updated, 2);
+    assert.strictEqual(res.results.length, 3);
+    assert.deepStrictEqual(res.results[0], { sku: 'BULK-1', ok: true, error: null });
+    assert.deepStrictEqual(res.results[1], { sku: 'BULK-2', ok: true, error: null });
+    assert.strictEqual(res.results[2].ok, false);
+    assert.ok(res.results[2].error.includes('not found'));
+    const history = utils.readJsonFileSecure(config.historyPath, []);
+    assert.strictEqual(history.find(i => i.sku === 'BULK-1').status, 'SOLD');
+    assert.strictEqual(history.find(i => i.sku === 'BULK-2').status, 'SOLD');
+    assert.strictEqual(history.length, 2, 'no rows added or removed');
+    const res2 = webServer.bulkUpdateListingStatus(['BULK-1'], 'ACTIVE');
+    assert.strictEqual(res2.updated, 1);
+    assert.strictEqual(
+      utils.readJsonFileSecure(config.historyPath, []).find(i => i.sku === 'BULK-1').status, 'ACTIVE');
+  });
+
+  await t.test('bulkUpdateListingStatus rejects invalid statuses', () => {
+    assert.throws(() => webServer.bulkUpdateListingStatus(['BULK-1'], 'BOGUS'), /Invalid status/);
+    const history = utils.readJsonFileSecure(config.historyPath, []);
+    assert.strictEqual(history.find(i => i.sku === 'BULK-1').status, 'ACTIVE', 'history untouched by the throw');
+  });
+
+  await t.test('appendNotification stores newest-first, dedupes rapid repeats, dismisses by id', () => {
+    resetNotifications();
+    const n1 = utils.appendNotification('ebay-sync', 'boom');
+    assert.ok(n1 && n1.id && n1.ts && n1.task === 'ebay-sync' && n1.message === 'boom');
+    const n2 = utils.appendNotification('dlq-processing', 'kaput');
+    const list = utils.getNotifications();
+    assert.strictEqual(list.length, 2);
+    assert.strictEqual(list[0].id, n2.id, 'newest first');
+    const dup = utils.appendNotification('dlq-processing', 'kaput');
+    assert.strictEqual(dup, null, 'rapid duplicate suppressed');
+    assert.strictEqual(utils.getNotifications().length, 2);
+    const n3 = utils.appendNotification('dlq-processing', 'kaput-again');
+    assert.ok(n3, 'different message still appends');
+    assert.strictEqual(utils.getNotifications().length, 3);
+    assert.strictEqual(utils.dismissNotification(n2.id), true);
+    assert.strictEqual(utils.getNotifications().length, 2);
+    assert.strictEqual(utils.dismissNotification('nope-not-real'), false);
+    resetNotifications();
+  });
+
+  await t.test('appendNotification caps the list at 100 entries', () => {
+    resetNotifications();
+    for (let i = 0; i < 105; i++) {
+      utils.appendNotification('cap-test', `msg-${i}`);
+    }
+    const list = utils.getNotifications();
+    assert.strictEqual(list.length, utils.NOTIFICATIONS_MAX);
+    assert.strictEqual(list[0].message, 'msg-104', 'newest first after cap');
+    resetNotifications();
+  });
+
+  await t.test('HTTP: GET /api/listings/export.csv downloads escaped CSV', async () => {
+    resetHistory([
+      { sku: 'CSV-1', title: 'Gizmo, "Deluxe"\nEdition', price: 42, status: 'ACTIVE',
+        categoryId: '1', timestamp: '2026-10-18T00:00:00.000Z', listingId: 'eb1' }
+    ]);
+    const server = webServer.startWebGuiServer(0);
+    await new Promise(resolve => server.on('listening', resolve));
+    const port = server.address().port;
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/listings/export.csv`);
+      assert.strictEqual(res.status, 200);
+      assert.ok(res.headers.get('content-type').includes('text/csv'));
+      assert.ok(res.headers.get('content-disposition').includes('attachment'));
+      const text = await res.text();
+      assert.ok(text.startsWith('sku,title,price,'));
+      assert.ok(text.includes('"Gizmo, ""Deluxe""\nEdition"'));
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
+  await t.test('HTTP: POST /api/listings/bulk-status validates payload and reports per-sku results', async () => {
+    resetHistory([
+      { sku: 'HTTP-B1', title: 'H1', price: 1, status: 'ACTIVE' },
+      { sku: 'HTTP-B2', title: 'H2', price: 2, status: 'DRAFT' }
+    ]);
+    const server = webServer.startWebGuiServer(0);
+    await new Promise(resolve => server.on('listening', resolve));
+    const port = server.address().port;
+    async function post(body) {
+      const res = await fetch(`http://127.0.0.1:${port}/api/listings/bulk-status`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body
+      });
+      return { status: res.status, json: await res.json() };
+    }
+    try {
+      const ok = await post(JSON.stringify({ skus: ['HTTP-B1', 'HTTP-B2', 'HTTP-NOPE'], status: 'SOLD' }));
+      assert.strictEqual(ok.status, 200);
+      assert.strictEqual(ok.json.updated, 2);
+      assert.strictEqual(ok.json.total, 3);
+      assert.strictEqual(ok.json.results.filter(r => r.ok).length, 2);
+      assert.strictEqual(ok.json.results.find(r => r.sku === 'HTTP-NOPE').ok, false);
+      const bad1 = await post(JSON.stringify({ skus: [], status: 'SOLD' }));
+      assert.strictEqual(bad1.status, 400);
+      const bad2 = await post(JSON.stringify({ skus: ['HTTP-B1'], status: 'WRONG' }));
+      assert.strictEqual(bad2.status, 400);
+      const bad3 = await post('not-json{');
+      assert.strictEqual(bad3.status, 400);
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+  });
+
+  await t.test('HTTP: GET/POST /api/notifications round-trips unread count and dismissal', async () => {
+    resetNotifications();
+    const server = webServer.startWebGuiServer(0);
+    await new Promise(resolve => server.on('listening', resolve));
+    const port = server.address().port;
+    try {
+      let res = await fetch(`http://127.0.0.1:${port}/api/notifications`);
+      let d = await res.json();
+      assert.strictEqual(d.unread, 0);
+      assert.deepStrictEqual(d.notifications, []);
+      utils.appendNotification('background-sync', 'interval blew up');
+      res = await fetch(`http://127.0.0.1:${port}/api/notifications`);
+      d = await res.json();
+      assert.strictEqual(d.unread, 1);
+      assert.strictEqual(d.notifications[0].task, 'background-sync');
+      const id = d.notifications[0].id;
+      res = await fetch(`http://127.0.0.1:${port}/api/notifications/dismiss`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual((await res.json()).success, true);
+      res = await fetch(`http://127.0.0.1:${port}/api/notifications`);
+      d = await res.json();
+      assert.strictEqual(d.unread, 0);
+      res = await fetch(`http://127.0.0.1:${port}/api/notifications/dismiss`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: 'does-not-exist' })
+      });
+      assert.strictEqual(res.status, 404);
+    } finally {
+      await new Promise(resolve => server.close(resolve));
+    }
+    resetNotifications();
+  });
+
+  // Restore sandbox state left by earlier suites.
+  if (historyBackup !== null) fs.writeFileSync(config.historyPath, historyBackup, 'utf8');
+  if (notifBackup !== null) fs.writeFileSync(config.notificationsPath, notifBackup, 'utf8');
+  // [WAVE1-B] Restore the env to exactly what it was before this block.
+  if (originalGoogleClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+  else process.env.GOOGLE_CLIENT_ID = originalGoogleClientId;
+});

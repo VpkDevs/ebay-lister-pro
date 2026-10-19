@@ -268,6 +268,45 @@
     }
     .icon-btn:hover { background: var(--surface-2); border-color: var(--border-2); color: var(--text); }
 
+    /* [WAVE1-B] ── Notification bell ─────────────────────────── */
+    .notif-bell { position: relative; }
+    .notif-badge {
+      position: absolute; top: -6px; right: -6px;
+      min-width: 18px; height: 18px; padding: 0 4px;
+      border-radius: 99px; background: var(--red, #ef4444);
+      color: #fff; font-size: 0.65rem; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .notif-panel {
+      position: absolute; top: 46px; right: 0; width: 340px; max-height: 420px;
+      overflow-y: auto; z-index: 200;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-lg, 12px); box-shadow: var(--shadow, 0 12px 32px rgba(0,0,0,0.35));
+      display: none;
+    }
+    .notif-panel.open { display: block; }
+    .notif-panel__header {
+      padding: 10px 14px; font-weight: 800; font-size: 0.8rem;
+      border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .notif-item { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 0.78rem; }
+    .notif-item:last-child { border-bottom: none; }
+    .notif-item__task { font-weight: 700; color: var(--amber, #f59e0b); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .notif-item__msg { color: var(--text); margin: 4px 0; word-break: break-word; }
+    .notif-item__meta { color: var(--text-muted); font-size: 0.68rem; display: flex; justify-content: space-between; align-items: center; }
+    .notif-empty { padding: 20px; text-align: center; color: var(--text-muted); font-size: 0.8rem; }
+
+    /* [WAVE1-B] ── Bulk action bar (history view) ─────────────── */
+    .bulk-bar {
+      display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 10px 14px; margin-bottom: 12px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius, 10px); font-size: 0.82rem;
+    }
+    .bulk-bar.visible { display: flex; }
+    .bulk-bar__count { font-weight: 800; color: var(--text); }
+
     /* ── User chip ────────────────────────────────── */
     .user-chip {
       display: flex;
@@ -1133,6 +1172,11 @@
         <span class="dot" id="apiStatusDot"></span>
         <span id="apiStatusText">Checking…</span>
       </div>
+      <!-- [WAVE1-B] Background-task error notifications -->
+      <div style="position:relative;">
+        <button class="icon-btn notif-bell" id="notifBell" onclick="toggleNotifPanel(event)" title="Notifications" aria-label="Notifications">🔔<span class="notif-badge" id="notifBadge" style="display:none">0</span></button>
+        <div class="notif-panel" id="notifPanel" role="dialog" aria-label="Background task notifications"></div>
+      </div>
       <button class="icon-btn" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle color theme">🌓</button>
       <div id="userTopbarWidget"></div>
     </div>
@@ -1425,9 +1469,11 @@
         <h1 class="section-title">Listing History</h1>
         <p class="section-subtitle">All listings across every channel, synced in real-time</p>
       </div>
-      <button class="btn btn--secondary btn--sm" id="syncBtn" onclick="syncPortfolio()">
-        🔄 Sync from eBay
-      </button>
+      <div style="display:flex;gap:8px;">
+        <!-- [WAVE1-B] CSV export of full inventory -->
+        <button class="btn btn--secondary btn--sm" id="exportCsvBtn" onclick="exportCsv()">📥 Export CSV</button>
+        <button class="btn btn--secondary btn--sm" id="syncBtn" onclick="syncPortfolio()">🔄 Sync from eBay</button>
+      </div>
     </div>
 
     <!-- Metrics -->
@@ -1461,6 +1507,13 @@
 
     <!-- Table card -->
     <div class="card">
+      <!-- [WAVE1-B] Bulk action bar (visible when rows are selected) -->
+      <div class="bulk-bar" id="bulkBar" aria-live="polite">
+        <span class="bulk-bar__count" id="bulkCount">0 selected</span>
+        <button class="btn btn--primary btn--xs" onclick="bulkSetStatus('SOLD')">Mark sold</button>
+        <button class="btn btn--secondary btn--xs" onclick="bulkSetStatus('ACTIVE')">Mark listed</button>
+        <button class="btn btn--ghost btn--xs" onclick="clearBulkSelection()">Clear</button>
+      </div>
       <div class="filter-bar">
         <input type="text" id="historySearch" placeholder="Search by SKU, title, listing ID…" oninput="filterHistoryTable()" aria-label="Search listings" />
         <select id="historyStatusFilter" onchange="filterHistoryTable()" aria-label="Filter by status">
@@ -1468,6 +1521,8 @@
           <option value="ACTIVE">Active</option>
           <option value="DRAFT">Drafts</option>
           <option value="ENDED">Ended</option>
+          <!-- [WAVE1-B] Bulk "Mark sold" status -->
+          <option value="SOLD">Sold</option>
         </select>
       </div>
       <div class="table-wrap" id="historyTableContainer">
@@ -1574,6 +1629,8 @@
   let initialPrice        = 0;
   let allHistoryData      = [];
   let shopifyShopName     = null;
+  // [WAVE1-B] Persistent bulk-selection set (survives table re-renders).
+  const bulkSelectedSkus  = new Set();
   let currentView         = 'create';
   let terminalOpen        = false;
   let terminalInterval    = null;
@@ -2206,7 +2263,7 @@
       const date    = new Date(item.timestamp).toLocaleDateString();
       const st      = item.status || 'ACTIVE';
       const isEnded = st === 'ENDED', isDraft = st === 'DRAFT';
-      const pill    = isDraft ? 'draft' : isEnded ? 'ended' : 'active';
+      const pill    = isDraft ? 'draft' : (isEnded || st === 'SOLD') ? 'ended' : 'active'; // [WAVE1-B] SOLD reuses ended styling
       const pillTxt = st.charAt(0) + st.slice(1).toLowerCase();
       const lid     = item.listingId || `<span style="color:var(--text-dim)">Draft</span>`;
       const viewBtn = item.listingId ? `<a href="https://www.ebay.com/itm/${item.listingId}" target="_blank" rel="noopener" class="btn btn--ghost btn--xs">View</a>` : '';
@@ -2224,6 +2281,7 @@
         ? `<button class="btn btn--ghost btn--xs" onclick="exportListing('Mercari','${escHtml(item.sku)}')">Mercari</button>
            <button class="btn btn--ghost btn--xs" onclick="exportListing('Poshmark','${escHtml(item.sku)}')">Poshmark</button>` : '';
       return `<tr>
+        <td><input type="checkbox" class="row-select" data-sku="${escHtml(item.sku)}" ${bulkSelectedSkus.has(item.sku) ? 'checked' : ''} onchange="toggleBulkSelection('${escHtml(item.sku)}', this.checked)" aria-label="Select listing ${escHtml(item.sku)}" /></td>
         <td style="color:var(--text-muted);white-space:nowrap;">${date}</td>
         <td><span class="sku-mono">${escHtml(item.sku)}</span></td>
         <td><span class="sku-mono">${lid}</span></td>
@@ -2235,13 +2293,173 @@
     }).join('');
     cnt.innerHTML = `<table role="table">
       <thead><tr>
+        <th scope="col"><input type="checkbox" id="bulkSelectAll" onclick="toggleBulkSelectAll(this.checked)" aria-label="Select all listings" /></th>
         <th scope="col">Date</th><th scope="col">SKU</th><th scope="col">Listing ID</th>
         <th scope="col">Title</th><th scope="col">Price</th>
         <th scope="col">Status</th><th scope="col">Actions</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+    updateBulkBar(); // [WAVE1-B]
   }
+
+  /* [WAVE1-B] ── Bulk selection & actions ─────────────────── */
+  function toggleBulkSelection(sku, checked) {
+    if (checked) bulkSelectedSkus.add(sku); else bulkSelectedSkus.delete(sku);
+    updateBulkBar();
+  }
+  function toggleBulkSelectAll(checked) {
+    document.querySelectorAll('.row-select').forEach(box => {
+      box.checked = checked;
+      const sku = box.getAttribute('data-sku');
+      if (!sku) return;
+      if (checked) bulkSelectedSkus.add(sku); else bulkSelectedSkus.delete(sku);
+    });
+    updateBulkBar();
+  }
+  function clearBulkSelection() {
+    bulkSelectedSkus.clear();
+    document.querySelectorAll('.row-select').forEach(box => { box.checked = false; });
+    const all = document.getElementById('bulkSelectAll');
+    if (all) all.checked = false;
+    updateBulkBar();
+  }
+  function updateBulkBar() {
+    const bar = document.getElementById('bulkBar');
+    const cnt = document.getElementById('bulkCount');
+    if (!bar || !cnt) return;
+    const n = bulkSelectedSkus.size;
+    cnt.textContent = `${n} selected`;
+    bar.classList.toggle('visible', n > 0);
+  }
+  async function bulkSetStatus(status) {
+    const skus = [...bulkSelectedSkus];
+    if (skus.length === 0) return;
+    const label = status === 'SOLD' ? 'sold' : 'listed';
+    try {
+      const res = await fetch('/api/listings/bulk-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skus, status })
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'Bulk update failed');
+      const failed = (d.results || []).filter(r => !r.ok);
+      clearBulkSelection();
+      if (failed.length === 0) {
+        showToast('success', `Marked ${label}`, `${d.updated} listing${d.updated === 1 ? '' : 's'} updated.`, 4000);
+      } else {
+        showToast('warn', 'Partial update',
+          `${d.updated}/${d.total} marked ${label}. Failed: ${failed.map(f => f.sku).join(', ')}.`, 0);
+      }
+      loadHistory();
+    } catch (err) {
+      showToast('error', 'Bulk update failed', err.message, 0);
+    }
+  }
+
+  /* [WAVE1-B] ── CSV export (browser download) ─────────────── */
+  function exportCsv() {
+    window.location.href = '/api/listings/export.csv';
+  }
+
+  /* [WAVE1-B] ── Background-task error notifications ──────── */
+  const knownNotifIds = new Set();
+  let notifPollInitialized = false;
+  let lastNotifList = [];
+  async function pollNotifications() {
+    try {
+      const res = await fetch('/api/notifications');
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = data.notifications || [];
+      lastNotifList = list;
+      const badge = document.getElementById('notifBadge');
+      if (badge) {
+        const unread = data.unread || 0;
+        badge.style.display = unread > 0 ? 'flex' : 'none';
+        badge.textContent = unread > 99 ? '99+' : String(unread);
+      }
+      const fresh = list.filter(n => !knownNotifIds.has(n.id));
+      fresh.forEach(n => knownNotifIds.add(n.id));
+      if (notifPollInitialized && fresh.length > 0) {
+        if (fresh.length === 1) {
+          showToast('warn', 'Background task error', `[${fresh[0].task}] ${fresh[0].message}`, 0);
+        } else {
+          showToast('warn', `${fresh.length} background task errors`,
+            `[${fresh[0].task}] ${fresh[0].message} (+${fresh.length - 1} more — see the bell)`, 0);
+        }
+      }
+      notifPollInitialized = true;
+      renderNotifPanel(list);
+    } catch { /* poll failures stay silent */ }
+  }
+  function toggleNotifPanel(ev) {
+    if (ev) ev.stopPropagation();
+    document.getElementById('notifPanel').classList.toggle('open');
+  }
+  function renderNotifPanel(list) {
+    const panel = document.getElementById('notifPanel');
+    if (!panel) return;
+    if (list.length === 0) {
+      panel.innerHTML = `<div class="notif-panel__header"><span>Notifications</span></div>
+        <div class="notif-empty">All clear — no background task errors. 🎉</div>`;
+      return;
+    }
+    panel.innerHTML = `<div class="notif-panel__header"><span>Notifications</span>
+        <button class="btn btn--ghost btn--xs" onclick="dismissAllNotifs(event)">Clear all</button></div>` +
+      list.map(n => `<div class="notif-item">
+        <div class="notif-item__task">${escHtml(n.task)}</div>
+        <div class="notif-item__msg">${escHtml(n.message)}</div>
+        <div class="notif-item__meta">
+          <span>${escHtml(new Date(n.ts).toLocaleString())}</span>
+          <button class="btn btn--ghost btn--xs" onclick="dismissNotif('${escHtml(n.id)}')">Dismiss</button>
+        </div>
+      </div>`).join('');
+  }
+  async function dismissNotif(id) {
+    try {
+      await fetch('/api/notifications/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      knownNotifIds.delete(id);
+      lastNotifList = lastNotifList.filter(n => n.id !== id);
+      renderNotifPanel(lastNotifList);
+      const badge = document.getElementById('notifBadge');
+      if (badge) {
+        badge.style.display = lastNotifList.length > 0 ? 'flex' : 'none';
+        badge.textContent = lastNotifList.length > 99 ? '99+' : String(lastNotifList.length);
+      }
+    } catch { /* silent */ }
+  }
+  async function dismissAllNotifs(ev) {
+    if (ev) ev.stopPropagation();
+    const ids = lastNotifList.map(n => n.id);
+    await Promise.all(ids.map(id => fetch('/api/notifications/dismiss', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id })
+    }).catch(() => null)));
+    lastNotifList = [];
+    renderNotifPanel([]);
+    const badge = document.getElementById('notifBadge');
+    if (badge) badge.style.display = 'none';
+  }
+  // Close the panel on outside click (registered once).
+  if (!window.__wave1bNotifClickBound) {
+    window.__wave1bNotifClickBound = true;
+    document.addEventListener('click', (ev) => {
+      const panel = document.getElementById('notifPanel');
+      const bell = document.getElementById('notifBell');
+      if (panel && panel.classList.contains('open') && bell &&
+          !panel.contains(ev.target) && !bell.contains(ev.target)) {
+        panel.classList.remove('open');
+      }
+    });
+  }
+  // [WAVE1-B] Poll notifications every 30s; immediate first poll.
+  pollNotifications();
+  setInterval(pollNotifications, 30000);
 
   /* ── Sync ──────────────────────────────────────── */
   async function syncPortfolio() {

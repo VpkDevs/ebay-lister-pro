@@ -231,6 +231,7 @@ async function crossPostToShopify(finalListing, imageUrls, sku) {
   } catch (err) {
     utils.logAudit("ERROR", `Shopify Cross-posting failed: ${err.message}`);
     addToDlq("shopify", sku, finalListing, imageUrls, err.message);
+    utils.appendNotification("cross-post", `Shopify cross-post failed for SKU ${sku} (queued for retry): ${err.message}`); // [WAVE1-B]
     return null;
   }
 }
@@ -244,6 +245,7 @@ async function crossPostToWooCommerce(finalListing, imageUrls, sku) {
   } catch (err) {
     utils.logAudit("ERROR", `WooCommerce Cross-posting failed: ${err.message}`);
     addToDlq("woocommerce", sku, finalListing, imageUrls, err.message);
+    utils.appendNotification("cross-post", `WooCommerce cross-post failed for SKU ${sku} (queued for retry): ${err.message}`); // [WAVE1-B]
     return null;
   }
 }
@@ -257,6 +259,7 @@ async function crossPostToEtsy(finalListing, sku) {
   } catch (err) {
     utils.logAudit("ERROR", `Etsy Cross-posting failed: ${err.message}`);
     addToDlq("etsy", sku, finalListing, [], err.message);
+    utils.appendNotification("cross-post", `Etsy cross-post failed for SKU ${sku} (queued for retry): ${err.message}`); // [WAVE1-B]
     return null;
   }
 }
@@ -291,6 +294,8 @@ async function processPendingSyncsDlq() {
     } catch (err) {
       job.lastError = err.message;
       utils.logAudit("WARN", `Retry failed for SKU ${job.sku} on ${job.platform}: ${err.message}`);
+      // [WAVE1-B] Surface repeated cross-post retry failures to the user.
+      utils.appendNotification("cross-post-retry", `${job.platform} cross-post retry failed for SKU ${job.sku}: ${err.message}`);
     }
 
     if (successId) {

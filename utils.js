@@ -8,6 +8,7 @@ const path = require('path');
 const { exec, execSync } = require('child_process');
 const config = require('./config');
 const { AsyncLocalStorage } = require('node:async_hooks');
+const crypto = require('crypto'); // [WAVE1-B] notification ids
 const asyncLocalStorage = new AsyncLocalStorage();
 
 function escapeRegExp(string) {
@@ -536,6 +537,74 @@ function cleanOldTempFiles() {
   }
 }
 
+// [WAVE1-B] Maximum notifications retained in notifications.json (newest first).
+const NOTIFICATIONS_MAX = 100;
+// [WAVE1-B] Suppress duplicate notifications for the same task+message within this window (ms)
+// so a failing 5-minute background loop does not spam the bell every cycle.
+const NOTIFICATION_DEDUPE_MS = 60 * 60 * 1000;
+
+/**
+ * [WAVE1-B] Reads the current notification list (newest first).
+ * @returns {Array<{id:string,ts:string,task:string,message:string}>} Notifications.
+ */
+function getNotifications() {
+  return readJsonFileSecure(config.notificationsPath, []);
+}
+
+/**
+ * [WAVE1-B] Appends a user-visible notification for a background-task error.
+ * Duplicates (same task + message within the dedupe window) are skipped to
+ * avoid spamming the bell from a retry loop. The list is capped at 100, newest first.
+ * @param {string} task - Task identifier (e.g. "background-sync", "cross-post-retry").
+ * @param {string} message - Human-readable error message.
+ * @returns {{id:string,ts:string,task:string,message:string}|null} The appended notification, or null if deduplicated.
+ */
+function appendNotification(task, message) {
+  try {
+    const list = readJsonFileSecure(config.notificationsPath, []);
+    const now = Date.now();
+    const msg = String(message || "Unknown error").slice(0, 500);
+    const newest = list[0];
+    if (newest && newest.task === task && newest.message === msg) {
+      const age = now - new Date(newest.ts).getTime();
+      if (!Number.isNaN(age) && age < NOTIFICATION_DEDUPE_MS) {
+        return null;
+      }
+    }
+    const notification = {
+      id: crypto.randomBytes(8).toString('hex'),
+      ts: new Date().toISOString(),
+      task: String(task),
+      message: msg
+    };
+    list.unshift(notification);
+    writeJsonFileSecure(config.notificationsPath, list.slice(0, NOTIFICATIONS_MAX));
+    logAudit("WARN", `Notification queued [${task}]: ${msg}`);
+    return notification;
+  } catch (err) {
+    logAudit("ERROR", `Failed to append notification: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * [WAVE1-B] Removes a notification by id (dismiss).
+ * @param {string} id - Notification id.
+ * @returns {boolean} True if a notification was removed.
+ */
+function dismissNotification(id) {
+  try {
+    const list = readJsonFileSecure(config.notificationsPath, []);
+    const filtered = list.filter(n => n.id !== id);
+    if (filtered.length === list.length) return false;
+    writeJsonFileSecure(config.notificationsPath, filtered);
+    return true;
+  } catch (err) {
+    logAudit("ERROR", `Failed to dismiss notification: ${err.message}`);
+    return false;
+  }
+}
+
 module.exports = {
   sanitizeLog,
   logAudit,
@@ -552,5 +621,10 @@ module.exports = {
   showHistory,
   optimizeImageNative,
   asyncLocalStorage,
-  cleanOldTempFiles
+  cleanOldTempFiles,
+  // [WAVE1-B] notification helpers
+  getNotifications,
+  appendNotification,
+  dismissNotification,
+  NOTIFICATIONS_MAX
 };

@@ -19,6 +19,8 @@ const recoveryPath = path.join(dataDir, 'lister-recovery.json');
 const logPath = path.join(dataDir, 'lister-audit.log');
 const historyPath = path.join(dataDir, 'listings-history.json');
 const dlqPath = path.join(dataDir, 'pending-syncs.json');
+// [WAVE1-B] Persistent store for user-visible background-task error notifications.
+const notificationsPath = path.join(dataDir, 'notifications.json');
 const uploadTempDir = path.join(dataDir, 'uploads');
 if (!fs.existsSync(uploadTempDir)) {
   fs.mkdirSync(uploadTempDir, { recursive: true });
@@ -75,6 +77,7 @@ module.exports = {
   logPath,
   historyPath,
   dlqPath,
+  notificationsPath, // [WAVE1-B]
   uploadTempDir,
   runDiagnostics,
   /** @returns {string|undefined} */
