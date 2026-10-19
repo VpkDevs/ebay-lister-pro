@@ -907,11 +907,24 @@ async function searchEbayComps(keywords, condition = "USED_EXCELLENT") {
     const sum = finalPrices.reduce((a, b) => a + b, 0);
     const avgPrice = parseFloat((sum / finalPrices.length).toFixed(2));
 
+    // [WAVE1-C] Capture comp item identities so the UI can render clickable
+    // links to the actual comparable listings.
+    const compItems = items
+      .filter(item => item && item.itemId)
+      .map(item => ({
+        itemId: String(item.itemId),
+        title: item.title || '',
+        price: parseFloat(item.price?.value) || null,
+        itemUrl: `https://www.ebay.com/itm/${encodeURIComponent(String(item.itemId))}`
+      }))
+      .slice(0, 10);
+
     return {
       minPrice: parseFloat(minPrice.toFixed(2)),
       maxPrice: parseFloat(maxPrice.toFixed(2)),
       avgPrice,
-      source: "eBay Browse API Comps"
+      source: "eBay Browse API Comps",
+      items: compItems
     };
   } catch (err) {
     utils.logAudit("WARN", `Browse API comps search failed: ${err.message}. Using fallback pricing.`);
@@ -955,7 +968,8 @@ function getFallbackPrices(condition, keywords = "") {
     minPrice: parseFloat((base * 0.7).toFixed(2)),
     maxPrice: parseFloat((base * 1.3).toFixed(2)),
     avgPrice: base,
-    source: "Condition & Category Rule Engine Defaults"
+    source: "Condition & Category Rule Engine Defaults",
+    items: [] // [WAVE1-C] No real comp items on the fallback path.
   };
 }
 

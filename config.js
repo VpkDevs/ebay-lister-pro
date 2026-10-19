@@ -19,6 +19,10 @@ const recoveryPath = path.join(dataDir, 'lister-recovery.json');
 const logPath = path.join(dataDir, 'lister-audit.log');
 const historyPath = path.join(dataDir, 'listings-history.json');
 const dlqPath = path.join(dataDir, 'pending-syncs.json');
+// [WAVE1-A] Listing templates storage (user-saved reusable field sets).
+const templatesPath = path.join(dataDir, 'templates.json');
+// [WAVE1-B] Persistent store for user-visible background-task error notifications.
+const notificationsPath = path.join(dataDir, 'notifications.json');
 const uploadTempDir = path.join(dataDir, 'uploads');
 if (!fs.existsSync(uploadTempDir)) {
   fs.mkdirSync(uploadTempDir, { recursive: true });
@@ -75,6 +79,9 @@ module.exports = {
   logPath,
   historyPath,
   dlqPath,
+  // [WAVE1-A]
+  templatesPath,
+  notificationsPath, // [WAVE1-B]
   uploadTempDir,
   runDiagnostics,
   /** @returns {string|undefined} */
@@ -135,6 +142,9 @@ module.exports = {
   getETSY_ACCESS_TOKEN: () => process.env.ETSY_ACCESS_TOKEN,
   /** @returns {string|undefined} */
   getWATERMARK_TEXT: () => process.env.WATERMARK_TEXT,
+  // [WAVE1-C] Discogs personal access token for barcode search on music items.
+  /** @returns {string|undefined} */
+  getDISCOGS_TOKEN: () => process.env.DISCOGS_TOKEN,
   /** @returns {string[]} */
   getVERO_BRANDS: () => [
     "rolex", "otterbox", "louis vuitton", "gucci", "chanel", "hermes", "prada", 
