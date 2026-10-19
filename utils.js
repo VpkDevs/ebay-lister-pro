@@ -536,6 +536,79 @@ function cleanOldTempFiles() {
   }
 }
 
+// [WAVE1-A] Per-item profit breakdown shared by listing form, history view and profit analytics.
+/**
+ * Computes gross, net, profit and margin percentage for a single listing sale.
+ * All inputs are treated as numbers; non-numeric / missing values default to 0.
+ * @param {object} [input] - Profit inputs.
+ * @param {number} [input.price] - Final sale price.
+ * @param {number} [input.fees] - Total marketplace/platform fees charged on the sale.
+ * @param {number} [input.cog] - Cost of goods (item acquisition cost).
+ * @param {number} [input.shippingCost] - Outbound shipping cost paid by the seller.
+ * @returns {{gross: number, net: number, profit: number, marginPct: number}} Profit breakdown.
+ */
+function computeProfit({ price = 0, fees = 0, cog = 0, shippingCost = 0 } = {}) {
+  const p = Number(price) || 0;
+  const f = Number(fees) || 0;
+  const c = Number(cog) || 0;
+  const s = Number(shippingCost) || 0;
+  const gross = p;
+  const net = p - f;
+  const profit = p - f - c - s;
+  const marginPct = p > 0 ? (profit / p) * 100 : 0; // guarded against divide-by-zero
+  return { gross, net, profit, marginPct };
+}
+
+// [WAVE1-A] Private-field stripper for marketplace-bound payloads.
+/**
+ * Returns a shallow copy of a listing with private-only fields removed.
+ * Private fields (internalNotes, costOfGoods) must NEVER be sent to any
+ * marketplace or appear in copy-paste export payloads. Call this before
+ * building any outbound payload (eBay, Shopify, WooCommerce, Etsy, exports).
+ * @param {object} [listing] - Raw listing object (may carry private fields).
+ * @returns {object} Sanitized shallow copy safe for outbound payloads.
+ */
+function sanitizeListingForMarketplace(listing) {
+  const copy = { ...(listing || {}) };
+  delete copy.internalNotes;
+  delete copy.costOfGoods;
+  return copy;
+}
+
+// [WAVE1-A] Normalizes Wave 1A listing fields at draft-save time.
+/**
+ * Normalizes the new Wave 1A fields on a listing object in place so every
+ * downstream consumer (history, publish, cross-posts) sees a stable shape:
+ * keywords is always an array of strings, msrp/costOfGoods are numbers or
+ * null, internalNotes is always a string.
+ * @param {object} listing - Listing object to normalize (mutated in place).
+ * @returns {object} The same listing object, for chaining.
+ */
+function normalizeListingFields(listing) {
+  if (!listing || typeof listing !== 'object') return listing;
+  // keywords: accept comma-separated string or array -> always array
+  if (Array.isArray(listing.keywords)) {
+    listing.keywords = listing.keywords
+      .map(k => String(k).trim())
+      .filter(k => k.length > 0);
+  } else if (typeof listing.keywords === 'string') {
+    listing.keywords = listing.keywords
+      .split(',')
+      .map(k => k.trim())
+      .filter(k => k.length > 0);
+  } else {
+    listing.keywords = [];
+  }
+  // msrp / costOfGoods: numbers or null
+  for (const key of ['msrp', 'costOfGoods']) {
+    const n = Number(listing[key]);
+    listing[key] = (listing[key] === '' || listing[key] == null || isNaN(n) || n <= 0) ? null : n;
+  }
+  // internalNotes: always a string (private; never sent to marketplaces)
+  listing.internalNotes = typeof listing.internalNotes === 'string' ? listing.internalNotes : '';
+  return listing;
+}
+
 module.exports = {
   sanitizeLog,
   logAudit,
@@ -552,5 +625,9 @@ module.exports = {
   showHistory,
   optimizeImageNative,
   asyncLocalStorage,
+  // [WAVE1-A]
+  computeProfit,
+  sanitizeListingForMarketplace,
+  normalizeListingFields,
   cleanOldTempFiles
 };

@@ -23,6 +23,22 @@ async function crossPostToShopifyDirect(finalListing, imageUrls, sku) {
     throw new Error("Shopify credentials missing.");
   }
 
+  // [WAVE1-A] Strip private-only fields (internalNotes, costOfGoods) before building the payload.
+  finalListing = utils.sanitizeListingForMarketplace(finalListing);
+  // [WAVE1-A] Thread keywords -> Shopify tags; MSRP -> variant compare-at price.
+  const wave1aKeywords = Array.isArray(finalListing.keywords) ? finalListing.keywords : [];
+  const wave1aMsrp = finalListing.msrp ? Number(finalListing.msrp) : null;
+
+  const variantPayload = {
+    price: String(finalListing.suggestedPrice),
+    sku: sku,
+    inventory_management: "shopify",
+    inventory_policy: "deny"
+  };
+  if (wave1aMsrp && wave1aMsrp > 0) {
+    variantPayload.compare_at_price = String(wave1aMsrp);
+  }
+
   const payload = {
     product: {
       title: finalListing.title,
@@ -30,12 +46,9 @@ async function crossPostToShopifyDirect(finalListing, imageUrls, sku) {
       vendor: finalListing.brand || "Generic",
       product_type: finalListing.model || "Product",
       status: "active",
-      variants: [{
-        price: String(finalListing.suggestedPrice),
-        sku: sku,
-        inventory_management: "shopify",
-        inventory_policy: "deny"
-      }],
+      // [WAVE1-A] Seller-entered keywords become Shopify tags.
+      tags: wave1aKeywords.join(', '),
+      variants: [variantPayload],
       images: imageUrls.map(url => ({ src: url }))
     }
   };
@@ -124,15 +137,26 @@ async function crossPostToWooCommerceDirect(finalListing, imageUrls, sku) {
     throw new Error("WooCommerce configuration missing.");
   }
 
+  // [WAVE1-A] Strip private-only fields (internalNotes, costOfGoods) before building the payload.
+  finalListing = utils.sanitizeListingForMarketplace(finalListing);
+  // [WAVE1-A] Thread keywords -> WooCommerce tags; MSRP -> description footer line.
+  const wave1aKeywords = Array.isArray(finalListing.keywords) ? finalListing.keywords : [];
+  let wave1aDescription = finalListing.description || "";
+  if (finalListing.msrp && !wave1aDescription.includes("Original MSRP")) {
+    wave1aDescription += `\n<p><strong>Original MSRP:</strong> $${Number(finalListing.msrp).toFixed(2)}</p>`;
+  }
+
   const wcPayload = {
     name: finalListing.title,
     type: "simple",
     regular_price: String(finalListing.suggestedPrice),
-    description: finalListing.description,
+    description: wave1aDescription,
     short_description: "Multichannel listing from eBay Lister",
     manage_stock: true,
     stock_quantity: 1,
     sku: sku,
+    // [WAVE1-A] Seller-entered keywords become WooCommerce tags.
+    tags: wave1aKeywords.map(name => ({ name })),
     images: imageUrls.map(url => ({ src: url }))
   };
 
@@ -163,17 +187,28 @@ async function crossPostToEtsyDirect(finalListing, sku) {
     throw new Error("Etsy configuration missing.");
   }
 
+  // [WAVE1-A] Strip private-only fields (internalNotes, costOfGoods) before building the payload.
+  finalListing = utils.sanitizeListingForMarketplace(finalListing);
+  // [WAVE1-A] Thread keywords -> Etsy tags (max 13); MSRP -> description footer line.
+  const wave1aKeywords = Array.isArray(finalListing.keywords) ? finalListing.keywords : [];
+  let wave1aDescription = finalListing.description || "";
+  if (finalListing.msrp && !wave1aDescription.includes("Original MSRP")) {
+    wave1aDescription += `\nOriginal MSRP: $${Number(finalListing.msrp).toFixed(2)}`;
+  }
+
   const cleanTitle = (finalListing.title || "No Title").replace(/\s+/g, ' ').trim().slice(0, 140);
 
   const etsyPayload = {
     quantity: 1,
     title: cleanTitle,
-    description: finalListing.description || "",
+    description: wave1aDescription,
     price: finalListing.suggestedPrice,
     who_made: "i_did",
     when_made: "made_to_order",
     taxonomy_id: 1,
-    is_personalizable: false
+    is_personalizable: false,
+    // [WAVE1-A] Seller-entered keywords become Etsy tags.
+    tags: wave1aKeywords.slice(0, 13)
   };
 
   const etsyRes = await ebayClient.fetchWithRetry(`https://api.etsy.com/v3/application/shops/${etsyShopId}/listings`, {

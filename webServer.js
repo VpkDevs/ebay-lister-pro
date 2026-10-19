@@ -854,13 +854,18 @@ function startWebGuiServer(port = 45900) {
           }
           
           const platform = parsedUrl.pathname.includes('mercari') ? "Mercari" : "Poshmark";
+          // [WAVE1-A] Prefer seller-entered keywords for cross-list tags; fall back to title words.
+          // Private fields (internalNotes, costOfGoods) are never included in export payloads.
+          const storedKeywords = (item.listingDetails && Array.isArray(item.listingDetails.keywords))
+            ? item.listingDetails.keywords.filter(k => typeof k === 'string' && k.trim()).slice(0, 13)
+            : [];
           const exportData = {
             title: item.title,
             description: item.description,
             price: item.price,
             sku: item.sku,
             brand: item.brand || "Generic",
-            suggestedTags: item.title.split(' ').slice(0, 3).join(', ')
+            suggestedTags: storedKeywords.length > 0 ? storedKeywords.join(', ') : item.title.split(' ').slice(0, 3).join(', ')
           };
           
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -871,6 +876,54 @@ function startWebGuiServer(port = 45900) {
             copyPaste: exportData,
             images: item.imageUrls || [] 
           }));
+        } catch (e) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-A] API: Listing templates — list saved templates
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/templates') {
+      try {
+        const templates = utils.readJsonFileSecure(config.templatesPath, []);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ templates }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    // [WAVE1-A] API: Listing templates — save a new template from a field set
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/templates') {
+      let bodyData = '';
+      req.on('data', chunk => bodyData += chunk);
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(bodyData);
+          const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+          const fields = payload.fields;
+          if (!name) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Template name is required." }));
+            return;
+          }
+          if (!fields || typeof fields !== 'object') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Template fields object is required." }));
+            return;
+          }
+          const templates = utils.readJsonFileSecure(config.templatesPath, []);
+          // Private fields travel with templates (local storage only) but are
+          // stripped from every outbound marketplace payload at publish time.
+          templates.push({ name, createdAt: new Date().toISOString(), fields });
+          utils.writeJsonFileSecure(config.templatesPath, templates);
+          utils.logAudit("INFO", `Saved listing template "${name}".`);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, name }));
         } catch (e) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: e.message }));
@@ -1206,28 +1259,36 @@ function startWebGuiServer(port = 45900) {
 
           const sku = payload.sku || `${config.getSKU_PREFIX()}SKU-${Date.now()}`;
 
+          // [WAVE1-A] All marketplace-bound payloads build from a sanitized copy:
+          // private fields (internalNotes, costOfGoods) never leave this server.
+          const outboundListing = utils.sanitizeListingForMarketplace(finalListing);
+          // [WAVE1-A] Thread MSRP into the buyer-facing description footer.
+          if (finalListing.msrp && !(outboundListing.description || '').includes("Original MSRP")) {
+            outboundListing.description += `\n<p><strong>Original MSRP:</strong> $${Number(finalListing.msrp).toFixed(2)}</p>`;
+          }
+
           const inventoryItem = {
-            condition: finalListing.condition,
+            condition: outboundListing.condition,
             availability: { shipToLocationAvailability: { quantity: 1 } },
             product: {
-              title: finalListing.title.slice(0, 80),
-              description: finalListing.description,
-              brand: finalListing.brand,
-              mpn: finalListing.model || "Does Not Apply",
-              aspects: Object.fromEntries(Object.entries(finalListing.aspects).map(([k, v]) => [k, [v]])),
+              title: outboundListing.title.slice(0, 80),
+              description: outboundListing.description,
+              brand: outboundListing.brand,
+              mpn: outboundListing.model || "Does Not Apply",
+              aspects: Object.fromEntries(Object.entries(outboundListing.aspects).map(([k, v]) => [k, [v]])),
               imageUrls: finalImageUrls
             },
             packageWeightAndSize: {
               dimensions: {
                 unit: "INCH",
-                length: finalListing.packageLength,
-                width: finalListing.packageWidth,
-                height: finalListing.packageHeight
+                length: outboundListing.packageLength,
+                width: outboundListing.packageWidth,
+                height: outboundListing.packageHeight
               },
               packageType: "PACKAGE",
               weight: {
                 unit: "OUNCE",
-                value: (finalListing.weightMajor * 16) + finalListing.weightMinor
+                value: (outboundListing.weightMajor * 16) + outboundListing.weightMinor
               }
             }
           };
@@ -1241,8 +1302,8 @@ function startWebGuiServer(port = 45900) {
             availableQuantity: 1,
             includeCatalogProductDetails: true,
             merchantLocationKey: config.getEBAY_LOCATION_KEY(),
-            categoryId: finalListing.categoryId,
-            listingDescription: finalListing.description,
+            categoryId: outboundListing.categoryId,
+            listingDescription: outboundListing.description,
             listingDuration: "GTC",
             listingPolicies: {
               fulfillmentPolicyId: policies.fulfillmentId,
@@ -1250,7 +1311,7 @@ function startWebGuiServer(port = 45900) {
               returnPolicyId: policies.returnId
             },
             pricingSummary: {
-              price: { currency: "USD", value: String(finalListing.suggestedPrice) }
+              price: { currency: "USD", value: String(outboundListing.suggestedPrice) }
             }
           };
 
@@ -1262,15 +1323,15 @@ function startWebGuiServer(port = 45900) {
           const crossPostKeys = [];
 
           if (payload.crossPostShopify && config.getSHOPIFY_SHOP_NAME() && config.getSHOPIFY_ACCESS_TOKEN()) {
-            crossPostPromises.push(crossPostToShopify(finalListing, finalImageUrls, sku));
+            crossPostPromises.push(crossPostToShopify(outboundListing, finalImageUrls, sku));
             crossPostKeys.push('shopify');
           }
           if (payload.crossPostWooCommerce && config.getWOOCOMMERCE_URL() && config.getWOOCOMMERCE_KEY() && config.getWOOCOMMERCE_SECRET()) {
-            crossPostPromises.push(crossPost.crossPostToWooCommerce(finalListing, finalImageUrls, sku));
+            crossPostPromises.push(crossPost.crossPostToWooCommerce(outboundListing, finalImageUrls, sku));
             crossPostKeys.push('woocommerce');
           }
           if (payload.crossPostEtsy && config.getETSY_SHOP_ID() && config.getETSY_ACCESS_TOKEN()) {
-            crossPostPromises.push(crossPost.crossPostToEtsy(finalListing, sku));
+            crossPostPromises.push(crossPost.crossPostToEtsy(outboundListing, sku));
             crossPostKeys.push('etsy');
           }
 
@@ -1358,6 +1419,10 @@ function startWebGuiServer(port = 45900) {
           }
 
           geminiClient.validateAndFixListingSchema(finalListing);
+
+          // [WAVE1-A] Normalize Wave 1A fields (keywords/msrp/costOfGoods/internalNotes)
+          // so listingDetails always carries a stable shape.
+          utils.normalizeListingFields(finalListing);
 
           // Auto-Enriched UPC Sourcing from active comps if missing
           if (!finalListing.upc || finalListing.upc === "" || finalListing.upc === "Does Not Apply") {
@@ -1499,6 +1564,14 @@ function startWebGuiServer(port = 45900) {
             finalListing.description += footer;
           }
 
+          // [WAVE1-A] All marketplace-bound payloads build from a sanitized copy:
+          // private fields (internalNotes, costOfGoods) never leave this server.
+          const outboundListing = utils.sanitizeListingForMarketplace(finalListing);
+          // [WAVE1-A] Thread MSRP into the buyer-facing description footer.
+          if (finalListing.msrp && !(outboundListing.description || '').includes("Original MSRP")) {
+            outboundListing.description += `\n<p><strong>Original MSRP:</strong> $${Number(finalListing.msrp).toFixed(2)}</p>`;
+          }
+
           await ebayClient.refreshEbayAccessToken();
           
           const policies = await ebayClient.getOrCreateListingPolicies(
@@ -1508,27 +1581,27 @@ function startWebGuiServer(port = 45900) {
           );
 
           const inventoryItem = {
-            condition: finalListing.condition,
+            condition: outboundListing.condition,
             availability: { shipToLocationAvailability: { quantity: 1 } },
             product: {
-              title: finalListing.title.slice(0, 80),
-              description: finalListing.description,
-              brand: finalListing.brand,
-              mpn: finalListing.model || "Does Not Apply",
-              aspects: Object.fromEntries(Object.entries(finalListing.aspects || {}).map(([k, v]) => [k, Array.isArray(v) ? v : [v]])),
+              title: outboundListing.title.slice(0, 80),
+              description: outboundListing.description,
+              brand: outboundListing.brand,
+              mpn: outboundListing.model || "Does Not Apply",
+              aspects: Object.fromEntries(Object.entries(outboundListing.aspects || {}).map(([k, v]) => [k, Array.isArray(v) ? v : [v]])),
               imageUrls: finalImageUrls
             },
             packageWeightAndSize: {
               dimensions: {
                 unit: "INCH",
-                length: finalListing.packageLength,
-                width: finalListing.packageWidth,
-                height: finalListing.packageHeight
+                length: outboundListing.packageLength,
+                width: outboundListing.packageWidth,
+                height: outboundListing.packageHeight
               },
               packageType: "PACKAGE",
               weight: {
                 unit: "OUNCE",
-                value: (finalListing.weightMajor * 16) + finalListing.weightMinor
+                value: (outboundListing.weightMajor * 16) + outboundListing.weightMinor
               }
             }
           };
@@ -1542,8 +1615,8 @@ function startWebGuiServer(port = 45900) {
             availableQuantity: 1,
             includeCatalogProductDetails: true,
             merchantLocationKey: config.getEBAY_LOCATION_KEY(),
-            categoryId: finalListing.categoryId,
-            listingDescription: finalListing.description,
+            categoryId: outboundListing.categoryId,
+            listingDescription: outboundListing.description,
             listingDuration: "GTC",
             listingPolicies: {
               fulfillmentPolicyId: policies.fulfillmentId,
@@ -1551,7 +1624,7 @@ function startWebGuiServer(port = 45900) {
               returnPolicyId: policies.returnId
             },
             pricingSummary: {
-              price: { currency: "USD", value: String(finalListing.suggestedPrice) }
+              price: { currency: "USD", value: String(outboundListing.suggestedPrice) }
             }
           };
 
@@ -1563,15 +1636,15 @@ function startWebGuiServer(port = 45900) {
           const crossPostKeys = [];
 
           if (payload.crossPostShopify && config.getSHOPIFY_SHOP_NAME() && config.getSHOPIFY_ACCESS_TOKEN()) {
-            crossPostPromises.push(crossPostToShopify(finalListing, finalImageUrls, payload.sku));
+            crossPostPromises.push(crossPostToShopify(outboundListing, finalImageUrls, payload.sku));
             crossPostKeys.push('shopify');
           }
           if (payload.crossPostWooCommerce && config.getWOOCOMMERCE_URL() && config.getWOOCOMMERCE_KEY() && config.getWOOCOMMERCE_SECRET()) {
-            crossPostPromises.push(crossPost.crossPostToWooCommerce(finalListing, finalImageUrls, payload.sku));
+            crossPostPromises.push(crossPost.crossPostToWooCommerce(outboundListing, finalImageUrls, payload.sku));
             crossPostKeys.push('woocommerce');
           }
           if (payload.crossPostEtsy && config.getETSY_SHOP_ID() && config.getETSY_ACCESS_TOKEN()) {
-            crossPostPromises.push(crossPost.crossPostToEtsy(finalListing, payload.sku));
+            crossPostPromises.push(crossPost.crossPostToEtsy(outboundListing, payload.sku));
             crossPostKeys.push('etsy');
           }
 

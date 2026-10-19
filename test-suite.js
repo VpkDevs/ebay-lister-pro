@@ -33,6 +33,8 @@ config.tempPath = path.join(testDir, 'test-temp-listing.json');
 config.recoveryPath = path.join(testDir, 'test-lister-recovery.json');
 config.logPath = path.join(testDir, 'test-lister-audit.log');
 config.uploadTempDir = testDir;
+// [WAVE1-A] Redirect listing templates into the test sandbox.
+config.templatesPath = path.join(testDir, 'test-templates.json');
 
 // Cleanup helper
 function cleanupSandbox() {
@@ -46,6 +48,10 @@ function cleanupSandbox() {
     config.tempPath,
     config.recoveryPath,
     config.logPath,
+    // [WAVE1-A]
+    config.templatesPath,
+    `${config.templatesPath}.tmp`,
+    `${config.templatesPath}.bak`,
     path.join(testDir, 'mock-image.png'),
     path.join(testDir, 'mock-image.jpg')
   ];
@@ -2359,3 +2365,257 @@ test('Additional maximal coverage and edge cases', async (t) => {
 
 
 
+
+// ==========================================
+// [WAVE1-A] Wave 1A: listing fields (keywords/MSRP/COG), templates, private notes
+// ==========================================
+test('Wave 1A listing fields, templates, and private notes', async (t) => {
+  // [WAVE1-A] Neutralize test pollution: the earlier OAuth tests restore
+  // GOOGLE_CLIENT_ID via `process.env.X = undefined`, which leaves the
+  // truthy string "undefined" and wrongly enables auth for later tests.
+  const savedGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+  const hadGoogleClientId = Object.prototype.hasOwnProperty.call(process.env, 'GOOGLE_CLIENT_ID');
+  if (hadGoogleClientId) delete process.env.GOOGLE_CLIENT_ID;
+  try {
+  await t.test('computeProfit math and zero-price guard', () => {
+    const r = utils.computeProfit({ price: 100, fees: 13, cog: 30, shippingCost: 5 });
+    assert.strictEqual(r.gross, 100);
+    assert.strictEqual(r.net, 87);
+    assert.strictEqual(r.profit, 52);
+    assert.strictEqual(r.marginPct, 52);
+
+    // Zero price must not produce NaN/Infinity
+    const z = utils.computeProfit({ price: 0, fees: 0, cog: 10, shippingCost: 5 });
+    assert.strictEqual(z.marginPct, 0);
+    assert.strictEqual(z.profit, -15);
+    assert.ok(Number.isFinite(z.marginPct));
+
+    // Missing inputs default to 0
+    const d = utils.computeProfit({});
+    assert.deepStrictEqual(d, { gross: 0, net: 0, profit: 0, marginPct: 0 });
+  });
+
+  await t.test('normalizeListingFields produces a stable shape', () => {
+    const out = utils.normalizeListingFields({
+      keywords: 'vintage, leather ,, mid century ',
+      msrp: '199.99',
+      costOfGoods: '',
+      internalNotes: 'fragile - pack well'
+    });
+    assert.deepStrictEqual(out.keywords, ['vintage', 'leather', 'mid century']);
+    assert.strictEqual(out.msrp, 199.99);
+    assert.strictEqual(out.costOfGoods, null);
+    assert.strictEqual(out.internalNotes, 'fragile - pack well');
+
+    const empty = utils.normalizeListingFields({});
+    assert.deepStrictEqual(empty.keywords, []);
+    assert.strictEqual(empty.msrp, null);
+    assert.strictEqual(empty.costOfGoods, null);
+    assert.strictEqual(empty.internalNotes, '');
+  });
+
+  await t.test('sanitizeListingForMarketplace strips private fields', () => {
+    const listing = {
+      title: 'Test Widget',
+      suggestedPrice: 49.99,
+      internalNotes: 'TOP-SECRET-NOTE-123',
+      costOfGoods: 12.5,
+      keywords: ['a', 'b']
+    };
+    const clean = utils.sanitizeListingForMarketplace(listing);
+    assert.ok(!('internalNotes' in clean));
+    assert.ok(!('costOfGoods' in clean));
+    assert.ok(!JSON.stringify(clean).includes('TOP-SECRET-NOTE-123'));
+    assert.strictEqual(clean.title, 'Test Widget');
+    // Original object is not mutated
+    assert.strictEqual(listing.internalNotes, 'TOP-SECRET-NOTE-123');
+  });
+
+  await t.test('templates save/load round-trip via /api/templates', async () => {
+    const testPort = 45913;
+    const server = webServer.startWebGuiServer(testPort);
+    try {
+      const fields = {
+        title: 'Template Title',
+        suggestedPrice: 25.5,
+        condition: 'USED_EXCELLENT',
+        brand: 'Acme',
+        model: 'X1',
+        keywords: ['retro', 'niche'],
+        msrp: 59.99,
+        costOfGoods: 8,
+        internalNotes: 'template-local-note',
+        aspects: { Color: 'Red' }
+      };
+      const saveRes = await fetch(`http://127.0.0.1:${testPort}/api/templates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'My Template', fields })
+      });
+      assert.strictEqual(saveRes.status, 200);
+      const saved = await saveRes.json();
+      assert.strictEqual(saved.success, true);
+      assert.strictEqual(saved.name, 'My Template');
+
+      const getRes = await fetch(`http://127.0.0.1:${testPort}/api/templates`);
+      assert.strictEqual(getRes.status, 200);
+      const data = await getRes.json();
+      assert.ok(Array.isArray(data.templates));
+      const tpl = data.templates.find(x => x.name === 'My Template');
+      assert.ok(tpl);
+      assert.ok(tpl.createdAt);
+      assert.deepStrictEqual(tpl.fields.keywords, ['retro', 'niche']);
+      assert.strictEqual(tpl.fields.msrp, 59.99);
+      assert.strictEqual(tpl.fields.internalNotes, 'template-local-note');
+
+      // Missing name is rejected
+      const badRes = await fetch(`http://127.0.0.1:${testPort}/api/templates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: '   ', fields: {} })
+      });
+      assert.strictEqual(badRes.status, 400);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test('keywords/msrp/cog/internalNotes persist in listingDetails via /api/save-draft', async () => {
+    const testPort = 45914;
+    const server = webServer.startWebGuiServer(testPort);
+    try {
+      const saveRes = await fetch(`http://127.0.0.1:${testPort}/api/save-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          listing: {
+            title: 'Wave1A Persistence Check',
+            suggestedPrice: 79.99,
+            condition: 'USED_VERY_GOOD',
+            brand: 'TestBrand',
+            model: 'M2',
+            categoryId: '111422',
+            upc: '123456789012',
+            weightMajor: 1,
+            weightMinor: 0,
+            packageLength: 10,
+            packageWidth: 8,
+            packageHeight: 6,
+            description: 'A fine test item.',
+            aspects: { Material: 'Steel' },
+            keywords: 'vintage, leather, mid century',
+            msrp: 199.99,
+            costOfGoods: 25,
+            internalNotes: 'sourcing: estate sale'
+          },
+          imageUrls: ['/uploads/local-test.jpg']
+        })
+      });
+      assert.strictEqual(saveRes.status, 200);
+      const saved = await saveRes.json();
+      assert.ok(saved.sku);
+
+      const history = utils.readJsonFileSecure(config.historyPath, []);
+      const item = history.find(i => i.sku === saved.sku);
+      assert.ok(item);
+      assert.deepStrictEqual(item.listingDetails.keywords, ['vintage', 'leather', 'mid century']);
+      assert.strictEqual(item.listingDetails.msrp, 199.99);
+      assert.strictEqual(item.listingDetails.costOfGoods, 25);
+      assert.strictEqual(item.listingDetails.internalNotes, 'sourcing: estate sale');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test('eBay-bound payload contains no internalNotes key or value', async () => {
+    const originalFetch = global.fetch;
+    const testPort = 45915;
+    const server = webServer.startWebGuiServer(testPort);
+    const createMockResponse = (status, bodyObj) => {
+      const bodyText = JSON.stringify(bodyObj);
+      return {
+        status,
+        ok: status >= 200 && status < 300,
+        headers: { get: () => null },
+        json: async () => bodyObj,
+        text: async () => bodyText
+      };
+    };
+    global.fetch = async (url, options) => {
+      const urlStr = String(url);
+      if (urlStr.startsWith(`http://127.0.0.1:${testPort}`)) {
+        return originalFetch(url, options);
+      }
+      return createMockResponse(200, { access_token: 'mock-token' });
+    };
+
+    const captured = {};
+    const originalEbayRequest = ebayClient.ebayRequest;
+    ebayClient.ebayRequest = async (path, method, body) => {
+      if (path.includes('/publish')) return { listingId: 'ebay-listing-1a' };
+      if (path === '/offer') return { offerId: 'ebay-offer-1a' };
+      if (path.includes('/inventory_item/')) {
+        captured.inventoryItem = body;
+        return {};
+      }
+      return {};
+    };
+
+    try {
+      // Save a draft carrying private fields
+      const saveRes = await originalFetch(`http://127.0.0.1:${testPort}/api/save-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          listing: {
+            title: 'Private Notes Strip Check',
+            suggestedPrice: 59.99,
+            condition: 'NEW',
+            brand: 'TestBrand',
+            model: 'M3',
+            categoryId: '111422',
+            upc: '123456789012',
+            weightMajor: 1,
+            weightMinor: 0,
+            packageLength: 10,
+            packageWidth: 8,
+            packageHeight: 6,
+            description: 'Public description here.',
+            aspects: { Color: 'Blue' },
+            keywords: ['kw1', 'kw2'],
+            msrp: 129.99,
+            costOfGoods: 20,
+            internalNotes: 'SUPER-SECRET-PRIVATE-NOTE-XYZ'
+          },
+          imageUrls: ['/uploads/local-test.jpg']
+        })
+      });
+      assert.strictEqual(saveRes.status, 200);
+      const saved = await saveRes.json();
+
+      const pubRes = await originalFetch(`http://127.0.0.1:${testPort}/api/publish-draft`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sku: saved.sku })
+      });
+      assert.strictEqual(pubRes.status, 200);
+
+      assert.ok(captured.inventoryItem, 'inventory item payload was captured');
+      const payloadJson = JSON.stringify(captured.inventoryItem);
+      assert.ok(!payloadJson.includes('internalNotes'), 'no internalNotes key in eBay payload');
+      assert.ok(!payloadJson.includes('SUPER-SECRET-PRIVATE-NOTE-XYZ'), 'no internal note value in eBay payload');
+      assert.ok(!payloadJson.includes('costOfGoods'), 'no costOfGoods key in eBay payload');
+      // MSRP is buyer-facing and threaded into the description footer
+      assert.ok(payloadJson.includes('Original MSRP'), 'MSRP threaded into eBay description');
+    } finally {
+      global.fetch = originalFetch;
+      ebayClient.ebayRequest = originalEbayRequest;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+  } finally {
+    // [WAVE1-A] Restore the (polluted) prior value so suite state is unchanged.
+    if (hadGoogleClientId) process.env.GOOGLE_CLIENT_ID = savedGoogleClientId;
+    else delete process.env.GOOGLE_CLIENT_ID;
+  }
+});

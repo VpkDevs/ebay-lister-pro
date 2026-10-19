@@ -1226,6 +1226,10 @@
           <span class="card__title-dot"></span>
           Listing Details
           <span id="draftSkuLabel" style="font-size:0.7rem;color:var(--amber);font-weight:700;margin-left:8px;text-transform:none;letter-spacing:0;"></span>
+          <!-- [WAVE1-A] -->
+          <select id="templateSelect" style="margin-left:auto;max-width:230px;font-size:0.78rem;" onchange="applyTemplate(this.value)" title="Prefill the form from a saved template">
+            <option value="">📋 New from template…</option>
+          </select>
         </div>
 
         <!-- Title -->
@@ -1291,6 +1295,28 @@
           <div class="form-group">
             <div class="field-label"><label for="model">Model / MPN</label></div>
             <input type="text" id="model" disabled autocomplete="off" />
+          </div>
+        </div>
+
+        <!-- [WAVE1-A] Keywords / MSRP / Cost of Goods / Internal Notes -->
+        <div class="grid-2">
+          <div class="form-group">
+            <div class="field-label"><label for="keywords">Keywords / Tags</label><span class="field-meta">comma-separated</span></div>
+            <input type="text" id="keywords" placeholder="vintage, leather, mid century" disabled autocomplete="off" />
+          </div>
+          <div class="form-group">
+            <div class="field-label"><label for="msrp">MSRP</label><span class="field-meta">original retail $</span></div>
+            <input type="number" id="msrp" placeholder="0.00" min="0" step="0.01" disabled />
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <div class="field-label"><label for="costOfGoods">Cost of Goods</label><span class="field-meta">$ paid for the item</span></div>
+            <input type="number" id="costOfGoods" placeholder="0.00" min="0" step="0.01" disabled />
+          </div>
+          <div class="form-group">
+            <div class="field-label"><label for="internalNotes">Internal Notes</label><span class="field-meta">private — never sent to marketplaces</span></div>
+            <textarea id="internalNotes" rows="2" placeholder="Sourcing, defects, reminders…" disabled></textarea>
           </div>
         </div>
 
@@ -1390,6 +1416,10 @@
           </button>
           <button class="btn btn--secondary" id="draftBtn" disabled onclick="saveDraft()" style="flex:1;">
             📝 Save Draft
+          </button>
+          <!-- [WAVE1-A] -->
+          <button class="btn btn--ghost" id="templateBtn" disabled onclick="saveAsTemplate()" style="flex:1;" title="Save the current form fields as a reusable template">
+            📋 Save as Template
           </button>
         </div>
       </div>
@@ -1760,6 +1790,7 @@
     });
     document.getElementById('publishBtn').disabled = false;
     document.getElementById('draftBtn').disabled   = false;
+    document.getElementById('templateBtn').disabled = false; // [WAVE1-A]
     document.getElementById('addAspectBtn').disabled = false;
     document.getElementById('presetFastBtn').disabled    = false;
     document.getElementById('presetMarketBtn').disabled  = false;
@@ -1783,6 +1814,11 @@
     document.getElementById('dimW').value     = data.packageWidth  || 8;
     document.getElementById('dimH').value     = data.packageHeight || 6;
     document.getElementById('description').value = data.description || '';
+    // [WAVE1-A] Prefill Wave 1A fields (keywords may arrive as an array).
+    document.getElementById('keywords').value     = Array.isArray(data.keywords) ? data.keywords.join(', ') : (data.keywords || '');
+    document.getElementById('msrp').value         = (data.msrp != null && data.msrp !== '') ? data.msrp : '';
+    document.getElementById('costOfGoods').value   = (data.costOfGoods != null && data.costOfGoods !== '') ? data.costOfGoods : '';
+    document.getElementById('internalNotes').value= data.internalNotes || '';
     updateTitleCharCount();
 
     const sel = document.getElementById('categoryId');
@@ -1824,6 +1860,7 @@
 
   // Bind input listener for real-time brand input VeRO checking
   document.addEventListener('DOMContentLoaded', () => {
+    loadTemplates(); // [WAVE1-A]
     const brandInput = document.getElementById('brand');
     if (brandInput) {
       brandInput.addEventListener('input', (e) => checkVeroWarning(e.target.value));
@@ -2117,6 +2154,56 @@
     }
   }
 
+  /* ── [WAVE1-A] Listing templates ─────────────────── */
+  async function loadTemplates() {
+    try {
+      const res  = await fetch('/api/templates');
+      const data = await res.json();
+      const sel  = document.getElementById('templateSelect');
+      if (!sel) return;
+      sel.querySelectorAll('option[data-tpl]').forEach(o => o.remove());
+      (data.templates || []).forEach((tpl, idx) => {
+        const opt = document.createElement('option');
+        opt.value = String(idx);
+        opt.textContent = tpl.name;
+        opt.dataset.tpl = '1';
+        sel.appendChild(opt);
+      });
+      window._templates = data.templates || [];
+    } catch (e) { /* templates unavailable — the rest of the form still works */ }
+  }
+  async function saveAsTemplate() {
+    const name = prompt('Template name:');
+    if (!name || !name.trim()) return;
+    const aspects    = collectAspects();
+    const categoryId = document.getElementById('categoryId').value;
+    const fields     = buildListingPayload(categoryId, aspects);
+    try {
+      const res  = await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), fields })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Save failed');
+      showToast('success', 'Template saved', data.name, 3000);
+      loadTemplates();
+    } catch (err) {
+      showToast('error', 'Template save failed', err.message, 0);
+    }
+  }
+  function applyTemplate(idx) {
+    if (idx === '' || idx == null) return;
+    const tpl = (window._templates || [])[Number(idx)];
+    if (!tpl || !tpl.fields) return;
+    enableForm();
+    populateForm(tpl.fields, []);
+    document.getElementById('formContainer').dataset.editingSku = '';
+    document.getElementById('draftSkuLabel').textContent = '';
+    document.getElementById('templateSelect').value = '';
+    showToast('info', 'Template applied', tpl.name, 2500);
+  }
+
   /* ── Helpers ──────────────────────────────────── */
   function collectAspects() {
     const aspects = {};
@@ -2141,6 +2228,11 @@
       packageWidth:  parseInt(document.getElementById('dimW').value)||8,
       packageHeight: parseInt(document.getElementById('dimH').value)||6,
       description:   document.getElementById('description').value,
+      // [WAVE1-A] New listing fields (server normalizes into listingDetails).
+      keywords:      document.getElementById('keywords').value,
+      msrp:          parseFloat(document.getElementById('msrp').value) || null,
+      costOfGoods:   parseFloat(document.getElementById('costOfGoods').value) || null,
+      internalNotes: document.getElementById('internalNotes').value,
       aspects
     });
   }
@@ -2152,6 +2244,12 @@
     document.getElementById('previewContainer').innerHTML = '';
     document.getElementById('notesInput').value = '';
     document.getElementById('upcInput').value   = '';
+    // [WAVE1-A]
+    document.getElementById('keywords').value = '';
+    document.getElementById('msrp').value = '';
+    document.getElementById('costOfGoods').value = '';
+    document.getElementById('internalNotes').value = '';
+    document.getElementById('templateSelect').value = '';
     document.getElementById('pipeline').classList.remove('visible');
     document.getElementById('pipelineSpinner').style.display = '';
     document.getElementById('formContainer').style.opacity = '0.55';

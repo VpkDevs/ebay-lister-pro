@@ -19,6 +19,8 @@ const recoveryPath = path.join(dataDir, 'lister-recovery.json');
 const logPath = path.join(dataDir, 'lister-audit.log');
 const historyPath = path.join(dataDir, 'listings-history.json');
 const dlqPath = path.join(dataDir, 'pending-syncs.json');
+// [WAVE1-A] Listing templates storage (user-saved reusable field sets).
+const templatesPath = path.join(dataDir, 'templates.json');
 const uploadTempDir = path.join(dataDir, 'uploads');
 if (!fs.existsSync(uploadTempDir)) {
   fs.mkdirSync(uploadTempDir, { recursive: true });
@@ -75,6 +77,8 @@ module.exports = {
   logPath,
   historyPath,
   dlqPath,
+  // [WAVE1-A]
+  templatesPath,
   uploadTempDir,
   runDiagnostics,
   /** @returns {string|undefined} */
