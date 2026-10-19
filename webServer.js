@@ -218,6 +218,199 @@ function getAuthenticatedUser(req) {
   return null;
 }
 
+/* ============================================================================
+ * [WAVE1-C] Extended barcode enrichment.
+ * Resolution order per barcode:
+ *   1. ISBN-13 (978/979 prefix) -> Google Books (keyless public API).
+ *   2. Everything else -> existing eBay catalog path (unchanged behavior).
+ *   3. On an eBay catalog miss for a non-ISBN code -> music sources:
+ *      Discogs barcode search if DISCOGS_TOKEN is set, else MusicBrainz.
+ * Every step degrades gracefully; null just means "no catalog data".
+ * ========================================================================== */
+
+/**
+ * Detects an ISBN-13 barcode (13 digits starting with 978 or 979).
+ * @param {string} code - Cleaned barcode digits.
+ * @returns {boolean}
+ */
+function isIsbn13(code) {
+  const digits = String(code || '').replace(/[\s-]/g, '');
+  return /^\d{13}$/.test(digits) && (digits.startsWith('978') || digits.startsWith('979'));
+}
+
+/**
+ * Looks up an ISBN on Google Books (no API key needed) and maps
+ * title/authors/publisher/publishedDate/pageCount into the upcData shape.
+ * @param {string} isbn - 13-digit ISBN.
+ * @returns {Promise<object|null>} upcData-compatible object or null.
+ */
+async function lookupIsbnOnGoogleBooks(isbn) {
+  try {
+    const response = await ebayClient.fetchWithRetry(
+      `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn)}`,
+      { headers: { "Accept": "application/json" } },
+      2, 500
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    const info = data.items?.[0]?.volumeInfo;
+    if (!info || !info.title) return null;
+
+    const authors = Array.isArray(info.authors) ? info.authors : [];
+    const thumbnail = info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || null;
+    const aspects = {};
+    if (authors.length > 0) aspects['Author'] = authors.join(', ');
+    if (info.publisher) aspects['Publisher'] = info.publisher;
+    if (info.publishedDate) aspects['Published Date'] = info.publishedDate;
+    if (info.pageCount) aspects['Page Count'] = String(info.pageCount);
+
+    utils.logAudit("INFO", `Google Books ISBN lookup successful: ${info.title}`);
+    return {
+      title: info.title,
+      brand: info.publisher || 'Unknown',
+      mpn: isbn,
+      stockImageUrls: thumbnail ? [thumbnail] : [],
+      aspects,
+      source: 'google-books',
+      authors,
+      publisher: info.publisher || null,
+      publishedDate: info.publishedDate || null,
+      pageCount: info.pageCount || null
+    };
+  } catch (err) {
+    utils.logAudit("WARN", `Google Books ISBN lookup failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Looks up a music barcode (CD/vinyl) on Discogs.
+ * HARD BLOCKER NOTE: the Discogs search API is auth-only — without a
+ * DISCOGS_TOKEN env var there is no anonymous search, so this path is skipped
+ * entirely and MusicBrainz is used instead.
+ * @param {string} code - Cleaned barcode digits.
+ * @param {string} token - Discogs personal access token.
+ * @returns {Promise<object|null>} upcData-compatible object or null.
+ */
+async function lookupBarcodeOnDiscogs(code, token) {
+  try {
+    const response = await ebayClient.fetchWithRetry(
+      `https://api.discogs.com/database/search?barcode=${encodeURIComponent(code)}`,
+      {
+        headers: {
+          "Accept": "application/json",
+          "Authorization": `Discogs token=${token}`,
+          "User-Agent": "ebay-lister-pro/1.0"
+        }
+      },
+      2, 500
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    const hit = data.results?.[0];
+    if (!hit || !hit.title) return null;
+
+    const aspects = {};
+    if (hit.year) aspects['Year'] = String(hit.year);
+    if (hit.label?.[0]) aspects['Label'] = hit.label[0];
+    if (hit.genre?.[0]) aspects['Genre'] = hit.genre[0];
+    if (hit.format?.[0]) aspects['Format'] = hit.format[0];
+
+    utils.logAudit("INFO", `Discogs barcode lookup successful: ${hit.title}`);
+    return {
+      title: hit.title,
+      brand: hit.label?.[0] || 'Unknown',
+      mpn: code,
+      stockImageUrls: hit.cover_image ? [hit.cover_image] : [],
+      aspects,
+      source: 'discogs'
+    };
+  } catch (err) {
+    utils.logAudit("WARN", `Discogs barcode lookup failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Looks up a music barcode on MusicBrainz (keyless; requires a User-Agent).
+ * @param {string} code - Cleaned barcode digits.
+ * @returns {Promise<object|null>} upcData-compatible object or null.
+ */
+async function lookupBarcodeOnMusicBrainz(code) {
+  try {
+    const response = await ebayClient.fetchWithRetry(
+      `https://musicbrainz.org/ws/2/release/?query=barcode:${encodeURIComponent(code)}&fmt=json`,
+      {
+        headers: {
+          "Accept": "application/json",
+          "User-Agent": "ebay-lister-pro/1.0 (barcode lookup)"
+        }
+      },
+      2, 500
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    const release = data.releases?.[0];
+    if (!release || !release.title) return null;
+
+    const artist = release['artist-credit']?.[0]?.name || release['artist-credit']?.[0]?.artist?.name || null;
+    const label = release['label-info']?.[0]?.label?.name || null;
+    const aspects = {};
+    if (artist) aspects['Artist'] = artist;
+    if (label) aspects['Label'] = label;
+    if (release.date) aspects['Release Date'] = release.date;
+    if (release.country) aspects['Country'] = release.country;
+
+    utils.logAudit("INFO", `MusicBrainz barcode lookup successful: ${release.title}`);
+    return {
+      title: release.title,
+      brand: label || artist || 'Unknown',
+      mpn: code,
+      stockImageUrls: [],
+      aspects,
+      source: 'musicbrainz',
+      artist
+    };
+  } catch (err) {
+    utils.logAudit("WARN", `MusicBrainz barcode lookup failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Resolves a barcode to catalog data, preferring specialist sources and always
+ * degrading gracefully to the existing eBay-catalog path.
+ * @param {string} barcode - Raw barcode string from the client.
+ * @returns {Promise<object|null>} upcData-compatible object or null.
+ */
+async function resolveBarcodeData(barcode) {
+  const clean = String(barcode || '').trim().replace(/[\s-]/g, '');
+  if (!clean) return null;
+
+  // [WAVE1-C] ISBN -> Google Books first, eBay catalog as fallback.
+  if (isIsbn13(clean)) {
+    const book = await lookupIsbnOnGoogleBooks(clean);
+    if (book) return book;
+  }
+
+  // Existing eBay catalog path (unchanged).
+  const ebayData = await ebayClient.lookupUPCOnEbay(clean);
+  if (ebayData) return ebayData;
+
+  // [WAVE1-C] Music fallback for non-ISBN codes: Discogs only with a token,
+  // otherwise MusicBrainz. Returns null when nothing is found.
+  if (!isIsbn13(clean)) {
+    const token = config.getDISCOGS_TOKEN();
+    if (token) {
+      const discogsData = await lookupBarcodeOnDiscogs(clean, token);
+      if (discogsData) return discogsData;
+    }
+    return await lookupBarcodeOnMusicBrainz(clean);
+  }
+
+  return null;
+}
+
 /**
  * Starts the local loopback web server for the eBay Personal Lister dashboard.
  * @param {number} [port=45900] - Server listen port.
@@ -1059,7 +1252,9 @@ function startWebGuiServer(port = 45900) {
 
           let upcData = null;
           if (payload.barcode) {
-            upcData = await ebayClient.lookupUPCOnEbay(payload.barcode);
+            // [WAVE1-C] Extended barcode enrichment: ISBN -> Google Books,
+            // music -> Discogs/MusicBrainz, degrades to the eBay catalog path.
+            upcData = await resolveBarcodeData(payload.barcode);
           }
 
           const fileBuffers = [];
@@ -1116,6 +1311,55 @@ function startWebGuiServer(port = 45900) {
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ listing, imageUrls, categorySuggestions, comps, stockPhotos }));
+        } catch (e) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-C] API: Enhance a seller-written title/description with AI polish.
+    // Distinct from the photo->listing generation flow (/api/analyze).
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/enhance') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(body);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+
+          // Validate payload schema
+          if (typeof payload !== 'object' || payload === null) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Invalid payload: must be a JSON object" }));
+            return;
+          }
+          if (typeof payload.title !== 'string' || typeof payload.description !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Invalid payload: title and description must be strings" }));
+            return;
+          }
+          if (payload.context !== undefined && payload.context !== null && typeof payload.context !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Invalid context: must be a string" }));
+            return;
+          }
+
+          const enhanced = await geminiClient.enhanceListingDraft({
+            title: payload.title,
+            description: payload.description,
+            context: payload.context || null
+          });
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(enhanced));
         } catch (e) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: e.message }));
@@ -1882,7 +2126,10 @@ function resetRateLimits() {
 module.exports = {
   startWebGuiServer,
   crossPostToShopify,
-  resetRateLimits
+  resetRateLimits,
+  // [WAVE1-C] Exported for unit tests
+  isIsbn13,
+  resolveBarcodeData
 };
 
 if (require.main === module) {

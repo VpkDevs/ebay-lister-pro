@@ -731,6 +731,37 @@
     .comps-canvas-wrap { margin-top: 8px; }
     #compsChart { display: none; width: 100%; border-radius: var(--radius); border: 1px solid var(--border); background: var(--bg-2); }
 
+    /* <!-- [WAVE1-C] --> Take-home pricing panel */
+    .takehome-panel { margin-top: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); padding: 10px 12px; font-size: 0.82rem; }
+    .takehome-panel .th-title { font-weight: 700; color: var(--text); margin-bottom: 6px; }
+    .takehome-panel .th-sub { color: var(--text-dim); font-size: 0.72rem; margin-bottom: 8px; }
+    .takehome-panel table { width: 100%; border-collapse: collapse; }
+    .takehome-panel th, .takehome-panel td { padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .takehome-panel th:first-child, .takehome-panel td:first-child { text-align: left; }
+    .takehome-panel th { color: var(--text-dim); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border-2); }
+    .takehome-panel td.tier-name { font-weight: 700; color: var(--text); }
+    .takehome-panel td .gross { font-weight: 700; color: var(--green); }
+    .takehome-panel td .net { color: var(--text-dim); font-size: 0.76rem; }
+    .takehome-panel .th-use { cursor: pointer; background: var(--brand-dim); border: 1px solid var(--brand); color: var(--brand-light); border-radius: 6px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700; }
+    .takehome-panel .th-use:hover { background: var(--brand); color: #fff; }
+    .takehome-panel .th-note { color: var(--text-dim); font-size: 0.68rem; margin-top: 8px; }
+    /* <!-- [WAVE1-C] --> Comp listing links */
+    .comp-links { margin-top: 8px; font-size: 0.78rem; }
+    .comp-links .cl-title { color: var(--text-dim); font-weight: 700; margin-bottom: 4px; }
+    .comp-links ul { list-style: none; margin: 0; padding: 0; }
+    .comp-links li { margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .comp-links a { color: var(--brand-light); text-decoration: none; }
+    .comp-links a:hover { text-decoration: underline; }
+    .comp-links .cl-price { color: var(--green); font-weight: 700; margin-right: 6px; }
+    /* <!-- [WAVE1-C] --> Uncertainty badges */
+    .wave1c-badge { display: inline-block; font-size: 0.66rem; font-weight: 700; color: #fbbf24; background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.45); border-radius: 6px; padding: 1px 7px; margin-left: 8px; vertical-align: middle; }
+    .wave1c-needs-review { outline: 2px solid rgba(251,191,36,0.55) !important; outline-offset: 1px; }
+    /* <!-- [WAVE1-C] --> Enhance-with-AI button */
+    .enhance-btn { cursor: pointer; background: transparent; border: 1px solid var(--border-2); color: var(--text-dim); border-radius: 6px; padding: 2px 8px; font-size: 0.7rem; font-weight: 700; margin-left: 8px; }
+    .enhance-btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand-light); }
+    .enhance-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .enhance-btn.undoing { border-color: var(--amber); color: var(--amber); }
+
     /* ══════════════════════════════════════════════════
        HISTORY / TABLE VIEW
     ══════════════════════════════════════════════════ */
@@ -1233,6 +1264,8 @@
           <div class="field-label">
             <label for="title">SEO Title</label>
             <span class="field-meta" id="titleCharCount">0 / 80</span>
+            <!-- [WAVE1-C] AI enhancement mode: text polish, separate from the photo->listing flow -->
+            <button class="enhance-btn" id="enhanceBtnTitle" onclick="enhanceListingText()" disabled title="Polish title & description with AI (one click undoes)">✨ Enhance with AI</button>
           </div>
           <input type="text" id="title" maxlength="80" disabled oninput="updateTitleCharCount()" autocomplete="off" />
         </div>
@@ -1262,6 +1295,10 @@
             <div class="comps-canvas-wrap">
               <canvas id="compsChart" width="400" height="140" aria-label="Market price comparison chart"></canvas>
             </div>
+            <!-- [WAVE1-C] Clickable comp listing links -->
+            <div class="comp-links" id="compLinks" style="display:none"></div>
+            <!-- [WAVE1-C] Take-home pricing panel (tiers x marketplaces, gross + net) -->
+            <div class="takehome-panel" id="takeHomePanel" style="display:none" aria-label="Take-home pricing panel"></div>
             <!-- Presets -->
             <div class="preset-group" role="group" aria-label="Price presets">
               <button class="preset-btn" id="presetFastBtn" onclick="applyPricePreset(0.9)" disabled>Fast (−10%)</button>
@@ -1378,6 +1415,8 @@
               <button class="tab-pill active" id="descEditTab" role="tab" aria-selected="true" onclick="switchDescTab('edit')" disabled>Source</button>
               <button class="tab-pill" id="descPreviewTab" role="tab" aria-selected="false" onclick="switchDescTab('preview')" disabled>Preview</button>
             </div>
+            <!-- [WAVE1-C] AI enhancement mode: text polish, separate from the photo->listing flow -->
+            <button class="enhance-btn" id="enhanceBtnDesc" onclick="enhanceListingText()" disabled title="Polish title & description with AI (one click undoes)">✨ Enhance with AI</button>
           </div>
           <textarea id="description" rows="6" disabled></textarea>
           <div id="descriptionPreviewBox" class="desc-preview" role="region" aria-label="Description preview"></div>
@@ -1764,6 +1803,8 @@
     document.getElementById('presetFastBtn').disabled    = false;
     document.getElementById('presetMarketBtn').disabled  = false;
     document.getElementById('presetPremiumBtn').disabled = false;
+    document.getElementById('enhanceBtnTitle').disabled  = false; // <!-- [WAVE1-C] -->
+    document.getElementById('enhanceBtnDesc').disabled   = false; // <!-- [WAVE1-C] -->
     document.getElementById('descEditTab').disabled = false;
     document.getElementById('descPreviewTab').disabled = false;
     document.querySelectorAll('.tab-pill').forEach(b => b.disabled = false);
@@ -1784,6 +1825,7 @@
     document.getElementById('dimH').value     = data.packageHeight || 6;
     document.getElementById('description').value = data.description || '';
     updateTitleCharCount();
+    applyConfidenceBadges(data._confidence); // <!-- [WAVE1-C] --> no-op when _confidence is absent
 
     const sel = document.getElementById('categoryId');
     sel.innerHTML = '';
@@ -1850,7 +1892,7 @@
   /* ── Comps ─────────────────────────────────────── */
   function handleComps(comps) {
     const bar = document.getElementById('compsBar');
-    if (!comps) { bar.classList.remove('visible'); document.getElementById('compsChart').style.display='none'; return; }
+    if (!comps) { bar.classList.remove('visible'); document.getElementById('compsChart').style.display='none'; renderCompLinks(null); renderTakeHomePanel(null); return; }
     bar.classList.add('visible');
     document.getElementById('compMin').textContent = '$' + comps.minPrice.toFixed(2);
     document.getElementById('compMax').textContent = '$' + comps.maxPrice.toFixed(2);
@@ -1859,6 +1901,8 @@
     avgEl.dataset.val = comps.avgPrice;
     avgEl.onclick = () => setPriceToCompAvg();
     drawCompsChart(comps.minPrice, comps.avgPrice, comps.maxPrice, comps.avgPrice);
+    renderCompLinks(comps);      // <!-- [WAVE1-C] -->
+    renderTakeHomePanel(comps);  // <!-- [WAVE1-C] -->
   }
   function setPriceToCompAvg() {
     const avg = parseFloat(document.getElementById('compAvg').dataset.val);
@@ -1937,6 +1981,176 @@
     ctx.font = 'bold 10px Inter,sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('Your Price', xSel, yPeak - 18);
     ctx.fillText('$' + selected.toFixed(2), xSel, yPeak - 6);
+  }
+
+  /* <!-- [WAVE1-C] --> Take-home pricing panel + comp links + uncertainty badges + AI enhance */
+  // Fee estimates as of Oct 2026 — review periodically. Source of truth: MARKETPLACE_FEES in utils.js.
+  const WAVE1C_FEE_TABLE = {
+    ebay:     { label: 'eBay',     percent: 0.1325, fixed: 0.30 },
+    mercari:  { label: 'Mercari',  percent: 0.10,   fixed: 0, paymentPercent: 0.029 },
+    poshmark: { label: 'Poshmark', percent: 0.20,   fixed: 0, flatUnder15: 2.95 },
+    etsy:     { label: 'Etsy',     percent: 0.065,  fixed: 0.20, paymentPercent: 0.03, paymentFixed: 0.25 },
+    shopify:  { label: 'Shopify',  percent: 0.029,  fixed: 0.30 }
+  };
+  const WAVE1C_MARKETS = Object.keys(WAVE1C_FEE_TABLE);
+
+  function wave1cEstimateFee(market, gross) {
+    const f = WAVE1C_FEE_TABLE[market];
+    if (!f || !(gross > 0)) return 0;
+    if (f.flatUnder15 && gross < 15) return f.flatUnder15;
+    let fee = gross * f.percent + (f.fixed || 0);
+    if (f.paymentPercent) fee += gross * f.paymentPercent;
+    if (f.paymentFixed) fee += f.paymentFixed;
+    return Math.round(fee * 100) / 100;
+  }
+
+  function wave1cPercentile(sortedAsc, p) {
+    if (!sortedAsc.length) return 0;
+    const idx = (sortedAsc.length - 1) * p;
+    const lo = Math.floor(idx), hi = Math.ceil(idx), w = idx - lo;
+    return Math.round((sortedAsc[lo] * (1 - w) + sortedAsc[hi] * w) * 100) / 100;
+  }
+
+  function wave1cComputeTiers(prices) {
+    const clean = (Array.isArray(prices) ? prices : [])
+      .map(Number).filter(n => !isNaN(n) && n > 0).sort((a, b) => a - b);
+    if (!clean.length) return null;
+    return {
+      sellFast: wave1cPercentile(clean, 0.25),
+      market:   wave1cPercentile(clean, 0.50),
+      patient:  wave1cPercentile(clean, 0.75),
+      sampleSize: clean.length
+    };
+  }
+
+  // Render clickable links to the actual comparable listings under the comp chart.
+  function renderCompLinks(comps) {
+    const box = document.getElementById('compLinks');
+    if (!box) return;
+    const items = (comps && Array.isArray(comps.items)) ? comps.items.filter(i => i && i.itemUrl) : [];
+    if (!items.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    const rows = items.map(i => {
+      const price = (typeof i.price === 'number' && i.price > 0) ? `<span class="cl-price">$${i.price.toFixed(2)}</span>` : '';
+      return `<li>${price}<a href="${escHtml(i.itemUrl)}" target="_blank" rel="noopener noreferrer" title="Open on eBay (new tab)">${escHtml(i.title || i.itemId)}</a></li>`;
+    }).join('');
+    box.innerHTML = `<div class="cl-title">Comparable listings</div><ul>${rows}</ul>`;
+  }
+
+  // Render the take-home pricing panel: three tiers x marketplaces, gross + net-after-fees.
+  function renderTakeHomePanel(comps) {
+    const panel = document.getElementById('takeHomePanel');
+    if (!panel) return;
+    if (!comps) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+    let prices = (Array.isArray(comps.items) ? comps.items : [])
+      .map(i => i && i.price).filter(p => typeof p === 'number' && p > 0);
+    if (!prices.length && comps.minPrice > 0) prices = [comps.minPrice, comps.avgPrice, comps.maxPrice];
+    const tiers = wave1cComputeTiers(prices);
+    if (!tiers) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+
+    const tierDefs = [
+      { key: 'sellFast', label: 'Sell fast' },
+      { key: 'market',   label: 'Market' },
+      { key: 'patient',  label: 'Patient' }
+    ];
+    const head = WAVE1C_MARKETS.map(m => `<th>${escHtml(WAVE1C_FEE_TABLE[m].label)}</th>`).join('');
+    const body = tierDefs.map(t => {
+      const gross = tiers[t.key];
+      const cells = WAVE1C_MARKETS.map(m => {
+        const net = Math.round((gross - wave1cEstimateFee(m, gross)) * 100) / 100;
+        return `<td><div class="gross">$${gross.toFixed(2)}</div><div class="net">net $${net.toFixed(2)}</div></td>`;
+      }).join('');
+      return `<tr><td class="tier-name">${t.label}</td>${cells}<td><button class="th-use" onclick="useTierPrice(${gross})" title="Set listing price to $${gross.toFixed(2)}">Use</button></td></tr>`;
+    }).join('');
+
+    panel.style.display = 'block';
+    panel.innerHTML =
+      `<div class="th-title">Take-home pricing</div>` +
+      `<div class="th-sub">Net = gross minus estimated marketplace fees. Based on ${tiers.sampleSize} comp${tiers.sampleSize === 1 ? '' : 's'}.</div>` +
+      `<div style="overflow-x:auto"><table><thead><tr><th>Tier</th>${head}<th></th></tr></thead><tbody>${body}</tbody></table></div>` +
+      `<div class="th-note">Fee rates are estimates as of Oct 2026 and change over time.</div>`;
+  }
+
+  // "Use this price" — sets the listing price field to the chosen tier gross.
+  function useTierPrice(gross) {
+    const v = parseFloat(gross);
+    if (!v || v <= 0) return;
+    document.getElementById('price').value = v.toFixed(2);
+    initialPrice = v;
+    const min = parseFloat(document.getElementById('compMin').textContent.replace('$',''));
+    const max = parseFloat(document.getElementById('compMax').textContent.replace('$',''));
+    const avg = parseFloat(document.getElementById('compAvg').dataset.val);
+    if (!isNaN(min) && !isNaN(max)) drawCompsChart(min, avg, max, v);
+    showToast('success', 'Price set', `Listing price set to $${v.toFixed(2)}`, 3000);
+  }
+
+  // Uncertainty UI: fields the AI rated below 0.8 confidence get a "review" badge.
+  // Fields >= 0.8 show nothing. Older listings without _confidence are ignored.
+  function applyConfidenceBadges(conf) {
+    document.querySelectorAll('.wave1c-badge').forEach(b => b.remove());
+    document.querySelectorAll('.wave1c-needs-review').forEach(el => el.classList.remove('wave1c-needs-review'));
+    if (!conf || typeof conf !== 'object') return;
+    const fieldMap = {
+      title: ['title'],
+      specifics: ['brand', 'model'],
+      price: ['price']
+    };
+    Object.keys(fieldMap).forEach(key => {
+      const v = Number(conf[key]);
+      if (isNaN(v) || v >= 0.8) return; // confident (or missing) -> no badge, no noise
+      fieldMap[key].forEach(fieldId => {
+        const input = document.getElementById(fieldId);
+        if (input) input.classList.add('wave1c-needs-review');
+        const label = document.querySelector(`label[for="${fieldId}"]`);
+        const labelRow = label ? label.closest('.field-label') : null;
+        if (labelRow && !labelRow.querySelector('.wave1c-badge')) {
+          const badge = document.createElement('span');
+          badge.className = 'wave1c-badge';
+          badge.title = `AI confidence ${(v * 100).toFixed(0)}% — please review`;
+          badge.textContent = '⚠ review';
+          labelRow.appendChild(badge);
+        }
+      });
+    });
+  }
+
+  // AI enhancement mode: polish title+description; one more click undoes it.
+  // Distinct from the photo->listing generation flow (/api/analyze).
+  let preEnhanceBackup = null;
+  async function enhanceListingText() {
+    const titleEl = document.getElementById('title');
+    const descEl = document.getElementById('description');
+    const btns = document.querySelectorAll('.enhance-btn');
+    if (preEnhanceBackup) {
+      titleEl.value = preEnhanceBackup.title;
+      descEl.value = preEnhanceBackup.description;
+      preEnhanceBackup = null;
+      btns.forEach(b => { b.classList.remove('undoing'); b.textContent = '✨ Enhance with AI'; });
+      updateTitleCharCount();
+      showToast('info', 'Enhance undone', 'Restored your original text.', 3000);
+      return;
+    }
+    preEnhanceBackup = { title: titleEl.value, description: descEl.value };
+    btns.forEach(b => { b.disabled = true; });
+    try {
+      const res = await fetch('/api/enhance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: titleEl.value, description: descEl.value })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Enhancement failed');
+      titleEl.value = data.title || titleEl.value;
+      descEl.value = data.description || descEl.value;
+      btns.forEach(b => { b.classList.add('undoing'); b.textContent = '↩ Undo enhance'; });
+      updateTitleCharCount();
+      showToast('success', 'Enhanced', 'Title & description polished — click again to undo.', 5000);
+    } catch (err) {
+      preEnhanceBackup = null;
+      showToast('error', 'Enhance failed', err.message, 0);
+    } finally {
+      btns.forEach(b => { b.disabled = false; });
+    }
   }
 
   /* ── Stock photos ─────────────────────────────── */

@@ -506,6 +506,205 @@ async function optimizeImageNative(inputPath, outputPath, canvasSize = 1600, wat
   });
 }
 
+/* ============================================================================
+ * [WAVE1-C] Marketplace fee estimates + take-home pricing tiers.
+ * ----------------------------------------------------------------------------
+ * The percentages below are ESTIMATES as of Oct 2026. Marketplace fee
+ * schedules change regularly — review and update this table when they do.
+ * All take-home (net-after-fees) math in the app flows from this table.
+ * ========================================================================== */
+
+/**
+ * Estimated per-sale fee structure per marketplace (Oct 2026 estimates).
+ * percent: fraction of the gross sale price taken as the main fee.
+ * fixed: flat per-order amount. paymentPercent/paymentFixed: extra payment-processing cut.
+ * flatUnder15: Poshmark charges a flat $2.95 instead of 20% on sales under $15.
+ */
+const MARKETPLACE_FEES = {
+  ebay: {
+    label: 'eBay',
+    percent: 0.1325, // ~13.25% final value fee (varies by category)
+    fixed: 0.30,     // $0.30 per order
+    note: 'Final value fee varies by category; 13.25% covers most.'
+  },
+  mercari: {
+    label: 'Mercari',
+    percent: 0.10,         // 10% selling fee
+    fixed: 0,
+    paymentPercent: 0.029, // ~2-4% payment processing fee; 2.9% estimate
+    note: 'Selling fee 10% plus payment processing (~2-4%).'
+  },
+  poshmark: {
+    label: 'Poshmark',
+    percent: 0.20,     // 20% on sales of $15+
+    fixed: 0,
+    flatUnder15: 2.95, // flat $2.95 fee on sales under $15
+    note: '20% for $15 and up; flat $2.95 under $15.'
+  },
+  etsy: {
+    label: 'Etsy',
+    percent: 0.065,      // 6.5% transaction fee
+    fixed: 0.20,         // $0.20 listing fee, amortized into the sale
+    paymentPercent: 0.03, // 3% payment processing (varies by country)
+    paymentFixed: 0.25,
+    note: '6.5% transaction + ~3% payment processing + $0.20 listing fee.'
+  },
+  shopify: {
+    label: 'Shopify',
+    percent: 0.029, // ~2.9% online credit-card rate (plan-dependent)
+    fixed: 0.30,
+    note: 'Online card rate by plan (~2.9% + $0.30 on Basic). Excludes monthly plan cost.'
+  }
+};
+
+/**
+ * Rounds to 2 decimal places (money-safe).
+ * @param {number} n
+ * @returns {number}
+ */
+function round2(n) {
+  return Math.round(Number(n) * 100) / 100;
+}
+
+/**
+ * Estimates the total marketplace fee for a gross sale price.
+ * @param {string} marketplace - Key of MARKETPLACE_FEES.
+ * @param {number} grossPrice - Gross sale price in dollars.
+ * @returns {number} Fee in dollars, rounded to cents.
+ * @throws {Error} If the marketplace key is unknown.
+ */
+function estimateMarketplaceFee(marketplace, grossPrice) {
+  const feeDef = MARKETPLACE_FEES[marketplace];
+  if (!feeDef) {
+    throw new Error(`Unknown marketplace: ${marketplace}`);
+  }
+  const gross = Number(grossPrice);
+  if (isNaN(gross) || gross <= 0) return 0;
+  // [WAVE1-C] Poshmark special case: flat $2.95 under $15.
+  if (feeDef.flatUnder15 && gross < 15) {
+    return round2(feeDef.flatUnder15);
+  }
+  let fee = gross * feeDef.percent + (feeDef.fixed || 0);
+  if (feeDef.paymentPercent) fee += gross * feeDef.paymentPercent;
+  if (feeDef.paymentFixed) fee += feeDef.paymentFixed;
+  return round2(fee);
+}
+
+/**
+ * Take-home math with the cross-builder contract:
+ * utils.computeProfit({ price, fees, cog, shippingCost }) -> { gross, net, profit, marginPct }.
+ * Consumed defensively — if the sibling builder's helper is absent, identical
+ * local fallback math is used so this code works either way.
+ * @param {object} args - { price, fees, cog, shippingCost }
+ * @returns {{gross:number, net:number, profit:number, marginPct:number}}
+ */
+function takeHomeMath(args) {
+  const input = args || {};
+  // [WAVE1-C] Defensive consume: the helper lives on this module's exports when present.
+  const helper = module.exports.computeProfit;
+  if (typeof helper === 'function') {
+    return helper({ price: input.price, fees: input.fees, cog: input.cog, shippingCost: input.shippingCost });
+  }
+  // [WAVE1-C] Local fallback — same semantics as the contract above.
+  const gross = round2(Number(input.price) || 0);
+  const fees = round2(Number(input.fees) || 0);
+  const cog = round2(Number(input.cog) || 0);
+  const shipping = round2(Number(input.shippingCost) || 0);
+  const net = round2(gross - fees - shipping);
+  const profit = round2(net - cog);
+  return {
+    gross,
+    net,
+    profit,
+    marginPct: gross > 0 ? round2((profit / gross) * 100) : 0
+  };
+}
+
+/**
+ * Net-after-fees for one gross price on one marketplace (cost of goods and
+ * shipping excluded — pass them via takeHomeMath when known).
+ * @param {string} marketplace - Key of MARKETPLACE_FEES.
+ * @param {number} grossPrice - Gross sale price in dollars.
+ * @returns {{marketplace:string, label:string, gross:number, fee:number, net:number}}
+ */
+function netAfterMarketplaceFees(marketplace, grossPrice) {
+  const gross = round2(Number(grossPrice) || 0);
+  const fee = estimateMarketplaceFee(marketplace, gross);
+  const calc = takeHomeMath({ price: gross, fees: fee, cog: 0, shippingCost: 0 });
+  return {
+    marketplace,
+    label: MARKETPLACE_FEES[marketplace].label,
+    gross,
+    fee,
+    net: calc.net
+  };
+}
+
+/**
+ * Linear-interpolation percentile of an ascending-sorted array.
+ * @param {number[]} sortedAsc - Ascending numbers.
+ * @param {number} p - Percentile 0..1.
+ * @returns {number}
+ */
+function percentileOfSorted(sortedAsc, p) {
+  if (!sortedAsc.length) return 0;
+  const idx = (sortedAsc.length - 1) * p;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  const w = idx - lo;
+  return round2(sortedAsc[lo] * (1 - w) + sortedAsc[hi] * w);
+}
+
+/**
+ * Three pricing tiers from a list of sold-comp prices:
+ * sell-fast ≈ 25th percentile, market ≈ median, patient ≈ 75th percentile.
+ * @param {number[]} prices - Comp sale prices.
+ * @returns {{sellFast:number, market:number, patient:number, sampleSize:number}|null}
+ */
+function computePricingTiers(prices) {
+  const clean = (Array.isArray(prices) ? prices : [])
+    .map(Number)
+    .filter(n => !isNaN(n) && n > 0)
+    .sort((a, b) => a - b);
+  if (clean.length === 0) return null;
+  return {
+    sellFast: percentileOfSorted(clean, 0.25),
+    market: percentileOfSorted(clean, 0.5),
+    patient: percentileOfSorted(clean, 0.75),
+    sampleSize: clean.length
+  };
+}
+
+/**
+ * Builds the full take-home pricing panel: three tiers x every marketplace,
+ * each cell carrying gross AND net-after-fees.
+ * @param {number[]} prices - Comp sale prices.
+ * @returns {{rows:object[], sampleSize:number, feesAsOf:string, feesAreEstimates:boolean}|null}
+ */
+function buildTakeHomePanel(prices) {
+  const tiers = computePricingTiers(prices);
+  if (!tiers) return null;
+  const marketplaces = Object.keys(MARKETPLACE_FEES);
+  const rows = [
+    { key: 'sellFast', label: 'Sell fast' },
+    { key: 'market', label: 'Market' },
+    { key: 'patient', label: 'Patient' }
+  ].map(row => {
+    const gross = tiers[row.key];
+    const perMarketplace = {};
+    for (const m of marketplaces) {
+      perMarketplace[m] = netAfterMarketplaceFees(m, gross);
+    }
+    return { tier: row.key, tierLabel: row.label, gross, perMarketplace };
+  });
+  return {
+    rows,
+    sampleSize: tiers.sampleSize,
+    feesAsOf: '2026-10',
+    feesAreEstimates: true
+  };
+}
+
 /**
  * Scans the uploads folder and deletes files older than 24 hours.
  * @returns {void}
@@ -552,5 +751,12 @@ module.exports = {
   showHistory,
   optimizeImageNative,
   asyncLocalStorage,
-  cleanOldTempFiles
+  cleanOldTempFiles,
+  // [WAVE1-C] Take-home pricing panel helpers
+  MARKETPLACE_FEES,
+  estimateMarketplaceFee,
+  takeHomeMath,
+  netAfterMarketplaceFees,
+  computePricingTiers,
+  buildTakeHomePanel
 };

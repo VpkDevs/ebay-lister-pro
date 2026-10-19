@@ -135,6 +135,9 @@ module.exports = {
   getETSY_ACCESS_TOKEN: () => process.env.ETSY_ACCESS_TOKEN,
   /** @returns {string|undefined} */
   getWATERMARK_TEXT: () => process.env.WATERMARK_TEXT,
+  // [WAVE1-C] Discogs personal access token for barcode search on music items.
+  /** @returns {string|undefined} */
+  getDISCOGS_TOKEN: () => process.env.DISCOGS_TOKEN,
   /** @returns {string[]} */
   getVERO_BRANDS: () => [
     "rolex", "otterbox", "louis vuitton", "gucci", "chanel", "hermes", "prada", 

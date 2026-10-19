@@ -2359,3 +2359,272 @@ test('Additional maximal coverage and edge cases', async (t) => {
 
 
 
+
+// ==========================================
+// Wave 1C: take-home pricing, sold-listing links, uncertainty UI,
+// AI enhance mode, extended barcode lookups
+// ==========================================
+test('Wave 1C: marketplace fees, tiers, confidence, enhance, barcode enrichment', async (t) => {
+
+  await t.test('Fee table net math per marketplace', () => {
+    // eBay: 13.25% + $0.30
+    assert.strictEqual(utils.estimateMarketplaceFee('ebay', 100), 13.55);
+    assert.strictEqual(utils.netAfterMarketplaceFees('ebay', 100).net, 86.45);
+    // Mercari: 10% + ~2.9% payment
+    assert.strictEqual(utils.estimateMarketplaceFee('mercari', 100), 12.90);
+    assert.strictEqual(utils.netAfterMarketplaceFees('mercari', 100).net, 87.10);
+    // Poshmark: 20% at/over $15, flat $2.95 under $15
+    assert.strictEqual(utils.estimateMarketplaceFee('poshmark', 100), 20.00);
+    assert.strictEqual(utils.netAfterMarketplaceFees('poshmark', 100).net, 80.00);
+    assert.strictEqual(utils.estimateMarketplaceFee('poshmark', 10), 2.95);
+    assert.strictEqual(utils.netAfterMarketplaceFees('poshmark', 10).net, 7.05);
+    assert.strictEqual(utils.estimateMarketplaceFee('poshmark', 15), 3.00);
+    // Etsy: 6.5% + $0.20 + 3% + $0.25
+    assert.strictEqual(utils.estimateMarketplaceFee('etsy', 100), 9.95);
+    assert.strictEqual(utils.netAfterMarketplaceFees('etsy', 100).net, 90.05);
+    // Shopify: 2.9% + $0.30
+    assert.strictEqual(utils.estimateMarketplaceFee('shopify', 100), 3.20);
+    assert.strictEqual(utils.netAfterMarketplaceFees('shopify', 100).net, 96.80);
+    // Unknown marketplace + non-positive price
+    assert.throws(() => utils.estimateMarketplaceFee('nope', 100), /Unknown marketplace/);
+    assert.strictEqual(utils.estimateMarketplaceFee('ebay', 0), 0);
+  });
+
+  await t.test('takeHomeMath uses cross-builder computeProfit when present, falls back otherwise', () => {
+    // Sibling helper absent on this branch -> local fallback math
+    assert.strictEqual(typeof utils.computeProfit, 'undefined');
+    const fallback = utils.takeHomeMath({ price: 100, fees: 13.55, cog: 20, shippingCost: 5 });
+    assert.deepStrictEqual(fallback, { gross: 100, net: 81.45, profit: 61.45, marginPct: 61.45 });
+
+    // Simulate the sibling builder's helper -> it must be consumed defensively
+    const seen = [];
+    utils.computeProfit = (args) => { seen.push(args); return { gross: 1, net: 2, profit: 3, marginPct: 4 }; };
+    try {
+      const delegated = utils.takeHomeMath({ price: 100, fees: 13.55, cog: 0, shippingCost: 0 });
+      assert.deepStrictEqual(delegated, { gross: 1, net: 2, profit: 3, marginPct: 4 });
+      assert.strictEqual(seen.length, 1);
+      assert.deepStrictEqual(seen[0], { price: 100, fees: 13.55, cog: 0, shippingCost: 0 });
+    } finally {
+      delete utils.computeProfit;
+    }
+    assert.strictEqual(typeof utils.computeProfit, 'undefined');
+  });
+
+  await t.test('Three-tier computation from a sample comp array', () => {
+    const prices = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100];
+    const tiers = utils.computePricingTiers(prices);
+    // Linear interpolation: p25 idx 2.25 -> 32.5; median idx 4.5 -> 55; p75 idx 6.75 -> 77.5
+    assert.strictEqual(tiers.sellFast, 32.5);
+    assert.strictEqual(tiers.market, 55);
+    assert.strictEqual(tiers.patient, 77.5);
+    assert.strictEqual(tiers.sampleSize, 10);
+    // Single comp -> all tiers equal; empty -> null; junk filtered
+    const single = utils.computePricingTiers([42]);
+    assert.deepStrictEqual([single.sellFast, single.market, single.patient], [42, 42, 42]);
+    assert.strictEqual(utils.computePricingTiers([]), null);
+    assert.strictEqual(utils.computePricingTiers(['x', -5, 0]), null);
+
+    const panel = utils.buildTakeHomePanel(prices);
+    assert.strictEqual(panel.rows.length, 3);
+    assert.deepStrictEqual(panel.rows.map(r => r.tier), ['sellFast', 'market', 'patient']);
+    assert.strictEqual(panel.rows[0].gross, 32.5);
+    assert.deepStrictEqual(Object.keys(panel.rows[0].perMarketplace).sort(), ['ebay', 'etsy', 'mercari', 'poshmark', 'shopify']);
+    assert.strictEqual(panel.rows[0].perMarketplace.ebay.net, 27.89); // 32.5 - (32.5*0.1325 + 0.30)
+    assert.strictEqual(panel.sampleSize, 10);
+    assert.strictEqual(panel.feesAsOf, '2026-10');
+    assert.strictEqual(panel.feesAreEstimates, true);
+    assert.strictEqual(utils.buildTakeHomePanel([]), null);
+  });
+
+  await t.test('_confidence schema validation (present, clamped, and missing)', () => {
+    const base = () => ({
+      title: 't', description: 'd', brand: 'b', model: 'm', suggestedPrice: 10,
+      condition: 'NEW', weightMajor: 1, weightMinor: 0,
+      packageLength: 1, packageWidth: 1, packageHeight: 1, aspects: {}, detectedDefects: []
+    });
+
+    // Present: clamped to 0..1, junk keys dropped
+    const withConf = base();
+    withConf._confidence = { title: 0.95, specifics: 1.5, price: -0.2, bogus: 'x' };
+    geminiClient.validateAndFixListingSchema(withConf);
+    assert.deepStrictEqual(withConf._confidence, { title: 0.95, specifics: 1, price: 0 });
+
+    // Missing: untouched, no badge data injected, no crash
+    const withoutConf = base();
+    geminiClient.validateAndFixListingSchema(withoutConf);
+    assert.strictEqual(withoutConf._confidence, undefined);
+    assert.strictEqual(withoutConf.title, 't');
+
+    // Malformed: string / array / empty object are removed, never crash
+    for (const bad of ['high', [0.9], {}, { title: 'nah' }]) {
+      const d = base();
+      d._confidence = bad;
+      geminiClient.validateAndFixListingSchema(d);
+      assert.strictEqual(d._confidence, undefined, `bad _confidence ${JSON.stringify(bad)} should be dropped`);
+    }
+  });
+
+  await t.test('Enhance prompt builder output shape', () => {
+    const prompt = geminiClient.buildEnhancePrompt('my  TITLE!!', '<p>desc here</p>', 'Vintage');
+    assert.strictEqual(typeof prompt, 'string');
+    assert.ok(prompt.includes('my  TITLE!!'), 'prompt carries the title');
+    assert.ok(prompt.includes('<p>desc here</p>'), 'prompt carries the description');
+    assert.ok(prompt.includes('Vintage'), 'prompt carries the context');
+    assert.ok(/never invent/i.test(prompt), 'prompt forbids inventing facts');
+    assert.ok(prompt.includes('80 characters'), 'prompt keeps the 80-char title rule');
+  });
+
+  await t.test('enhanceListingDraft returns { title, description } (mocked fetch)', async () => {
+    const originalFetch = global.fetch;
+    global.fetch = async () => ({
+      status: 200,
+      ok: true,
+      headers: { get: () => null },
+      json: async () => ({
+        candidates: [{ content: { parts: [{ text: JSON.stringify({ title: 'Polished Title', description: '<p>Polished</p>' }) }] } }]
+      })
+    });
+    try {
+      const out = await geminiClient.enhanceListingDraft({ title: 'raw', description: '<p>raw</p>' });
+      assert.deepStrictEqual(out, { title: 'Polished Title', description: '<p>Polished</p>' });
+    } finally {
+      global.fetch = originalFetch;
+    }
+    // Validation errors
+    await assert.rejects(() => geminiClient.enhanceListingDraft({ title: 123, description: 'x' }), /must be strings/);
+    await assert.rejects(() => geminiClient.enhanceListingDraft({ title: 'x', description: 'y', context: 5 }), /context/);
+  });
+
+  await t.test('ISBN detection', () => {
+    assert.strictEqual(webServer.isIsbn13('9780140449136'), true);
+    assert.strictEqual(webServer.isIsbn13('9791090636070'), true);
+    assert.strictEqual(webServer.isIsbn13('978-0-14-044913-6'), true);
+    assert.strictEqual(webServer.isIsbn13('0123456789012'), false); // 13 digits but not 978/979
+    assert.strictEqual(webServer.isIsbn13('978014044913'), false);  // 12 digits
+    assert.strictEqual(webServer.isIsbn13(''), false);
+    assert.strictEqual(webServer.isIsbn13(null), false);
+  });
+
+  await t.test('ISBN -> Google Books response mapping (mocked fetch)', async () => {
+    const originalFetch = global.fetch;
+    const seenUrls = [];
+    global.fetch = async (url) => {
+      seenUrls.push(url);
+      return {
+        status: 200,
+        ok: true,
+        headers: { get: () => null },
+        json: async () => ({
+          items: [{
+            volumeInfo: {
+              title: 'The Odyssey',
+              authors: ['Homer', 'Emily Wilson'],
+              publisher: 'W. W. Norton',
+              publishedDate: '2017-11-07',
+              pageCount: 592,
+              imageLinks: { thumbnail: 'https://example.com/cover.jpg' }
+            }
+          }]
+        })
+      };
+    };
+    try {
+      const upcData = await webServer.resolveBarcodeData('9780393089059');
+      assert.ok(upcData, 'expected upcData for an ISBN');
+      assert.strictEqual(upcData.title, 'The Odyssey');
+      assert.deepStrictEqual(upcData.authors, ['Homer', 'Emily Wilson']);
+      assert.strictEqual(upcData.publisher, 'W. W. Norton');
+      assert.strictEqual(upcData.publishedDate, '2017-11-07');
+      assert.strictEqual(upcData.pageCount, 592);
+      assert.strictEqual(upcData.source, 'google-books');
+      assert.deepStrictEqual(upcData.stockImageUrls, ['https://example.com/cover.jpg']);
+      assert.ok(seenUrls.some(u => u.includes('www.googleapis.com/books/v1/volumes?q=isbn:9780393089059')));
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  await t.test('Music barcode -> MusicBrainz fallback when eBay catalog misses and no Discogs token', async () => {
+    const originalFetch = global.fetch;
+    const originalToken = ebayClient.getAccessToken();
+    const seenUrls = [];
+    ebayClient.setAccessToken(null); // force lookupUPCOnEbay to miss
+    delete process.env.DISCOGS_TOKEN;
+    global.fetch = async (url) => {
+      seenUrls.push(url);
+      return {
+        status: 200,
+        ok: true,
+        headers: { get: () => null },
+        json: async () => ({
+          releases: [{
+            title: 'Kind of Blue',
+            'artist-credit': [{ name: 'Miles Davis' }],
+            date: '1959',
+            'label-info': [{ label: { name: 'Columbia' } }],
+            country: 'US'
+          }]
+        })
+      };
+    };
+    try {
+      const upcData = await webServer.resolveBarcodeData('0600758394123');
+      assert.ok(upcData, 'expected upcData from MusicBrainz fallback');
+      assert.strictEqual(upcData.title, 'Kind of Blue');
+      assert.strictEqual(upcData.artist, 'Miles Davis');
+      assert.strictEqual(upcData.source, 'musicbrainz');
+      assert.ok(seenUrls.some(u => u.includes('musicbrainz.org/ws/2/release/')), 'MusicBrainz was queried');
+      assert.ok(!seenUrls.some(u => u.includes('api.discogs.com')), 'Discogs skipped without token');
+    } finally {
+      global.fetch = originalFetch;
+      ebayClient.setAccessToken(originalToken);
+    }
+  });
+
+  await t.test('POST /api/enhance endpoint (mocked AI)', async () => {
+    const originalFetch = global.fetch;
+    // NOTE: an earlier block restores process.env.GOOGLE_CLIENT_ID to the *string*
+    // "undefined" (assigning undefined to process.env coerces it), which flips the
+    // server's auth middleware on for all /api routes. Neutralize it for this test.
+    const originalGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+    delete process.env.GOOGLE_CLIENT_ID;
+    // Route local server calls to the real fetch; mock only the Gemini API call.
+    global.fetch = async (url, options) => {
+      if (typeof url === 'string' && url.startsWith('http://127.0.0.1')) {
+        return originalFetch(url, options);
+      }
+      return {
+        status: 200,
+        ok: true,
+        headers: { get: () => null },
+        json: async () => ({
+          candidates: [{ content: { parts: [{ text: JSON.stringify({ title: 'Endpoint Title', description: '<p>Endpoint desc</p>' }) }] } }]
+        })
+      };
+    };
+    const testPort = 45913;
+    const server = webServer.startWebGuiServer(testPort);
+    try {
+      const res = await fetch(`http://127.0.0.1:${testPort}/api/enhance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'raw title', description: '<p>raw</p>' })
+      });
+      assert.strictEqual(res.status, 200);
+      const data = await res.json();
+      assert.deepStrictEqual(data, { title: 'Endpoint Title', description: '<p>Endpoint desc</p>' });
+
+      const bad = await fetch(`http://127.0.0.1:${testPort}/api/enhance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'only title' })
+      });
+      assert.strictEqual(bad.status, 400);
+    } finally {
+      global.fetch = originalFetch;
+      if (originalGoogleClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+      else process.env.GOOGLE_CLIENT_ID = originalGoogleClientId;
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});
