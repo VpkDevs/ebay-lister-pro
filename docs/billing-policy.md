@@ -33,6 +33,26 @@
 - Downgrades take effect at the end of the current billing period (standard
   SaaS behavior) unless support intervenes.
 
+## Policy 3 — Team seats (Power Seller) <!-- [WAVE1-D] implemented -->
+
+**Power Seller workspaces include 3 seats. Owner/member only — no roles matrix.**
+
+- The billing plan is recorded from the Stripe checkout session's
+  `metadata.plan` (`"pro"` or `"power_seller"`, defaulting to `"pro"` when
+  absent). **The Power Seller price in Stripe must carry
+  `metadata: { plan: "power_seller" }`** or seats will not unlock.
+- Only an active Power Seller subscription unlocks seat management. Starter
+  and Pro accounts see the Team view as an upsell, never as an error.
+- Pending invites hold a seat: a workspace cannot invite beyond 3 total
+  (active + invited). Invites are accepted by signing in — no email delivery
+  exists in this codebase, so there is no emailed invitation; the owner tells
+  the teammate to sign in.
+- Seats go dormant if the owner's subscription lapses: members lose workspace
+  access until billing is current. Removing a member never deletes listings.
+- The workspace is shared structurally: the app keeps a single-tenant data
+  store, so every seat inherently sees the same listings. A true multi-tenant
+  split is future work, not a launch blocker.
+
 ## Open questions (not decided)
 
 - Exact per-tier credit allotments and overage pricing.

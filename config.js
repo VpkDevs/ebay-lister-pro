@@ -23,6 +23,8 @@ const dlqPath = path.join(dataDir, 'pending-syncs.json');
 const templatesPath = path.join(dataDir, 'templates.json');
 // [WAVE1-B] Persistent store for user-visible background-task error notifications.
 const notificationsPath = path.join(dataDir, 'notifications.json');
+// [WAVE1-D] Team seats storage (Power Seller workspaces: owner -> members).
+const teamPath = path.join(dataDir, 'team.json');
 const uploadTempDir = path.join(dataDir, 'uploads');
 if (!fs.existsSync(uploadTempDir)) {
   fs.mkdirSync(uploadTempDir, { recursive: true });
@@ -82,6 +84,7 @@ module.exports = {
   // [WAVE1-A]
   templatesPath,
   notificationsPath, // [WAVE1-B]
+  teamPath, // [WAVE1-D]
   uploadTempDir,
   runDiagnostics,
   /** @returns {string|undefined} */

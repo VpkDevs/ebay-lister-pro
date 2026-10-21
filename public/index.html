@@ -1167,6 +1167,11 @@
       Listing History
       <span class="nav-badge" id="historyCountBadge">0</span>
     </button>
+    <!-- [WAVE1-D] Team seats (Power Seller workspaces) -->
+    <button class="nav-item" id="nav-team" onclick="switchView('team')">
+      <span class="nav-icon" aria-hidden="true">👥</span>
+      Team Seats
+    </button>
 
     <span class="nav-section-label" style="margin-top:8px;">Channels</span>
     <button class="nav-item" onclick="showToast('info','eBay','API connection managed in Settings.',3000)">
@@ -1541,6 +1546,9 @@
       <div style="display:flex;gap:8px;">
         <!-- [WAVE1-B] CSV export of full inventory -->
         <button class="btn btn--secondary btn--sm" id="exportCsvBtn" onclick="exportCsv()">📥 Export CSV</button>
+        <!-- [WAVE1-D] CSV import: upload inventory rows, batch-create drafts -->
+        <button class="btn btn--secondary btn--sm" id="importCsvBtn" onclick="document.getElementById('importCsvFile').click()">📤 Import CSV</button>
+        <input type="file" id="importCsvFile" accept=".csv,text/csv,text/plain" style="display:none" onchange="importCsvFile(this)" aria-label="Import listings CSV" />
         <button class="btn btn--secondary btn--sm" id="syncBtn" onclick="syncPortfolio()">🔄 Sync from eBay</button>
       </div>
     </div>
@@ -1599,6 +1607,22 @@
           <div class="empty-state__icon">📦</div>
           Loading listing database…
         </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- [WAVE1-D] Team seats view (Power Seller workspaces) -->
+  <main class="content" id="team-view" style="display:none;" aria-label="Team seats">
+    <div class="section-header">
+      <div class="section-header__left">
+        <h1 class="section-title">👥 Team Seats</h1>
+        <p class="section-subtitle">Power Seller workspaces include 3 seats — everyone shares the same listings</p>
+      </div>
+    </div>
+    <div id="teamContainer">
+      <div class="empty-state">
+        <div class="empty-state__icon">👥</div>
+        Loading team…
       </div>
     </div>
   </main>
@@ -1742,17 +1766,19 @@
   /* ── View switching ───────────────────────────── */
   function switchView(view) {
     currentView = view;
-    const titles = { create: 'New Listing', history: 'Listing History' };
+    const titles = { create: 'New Listing', history: 'Listing History', team: 'Team Seats' }; // [WAVE1-D] team view
     document.getElementById('topbarTitle').textContent = titles[view] || view;
 
     document.getElementById('create-view').style.display  = view === 'create'  ? 'block' : 'none';
     document.getElementById('history-view').style.display = view === 'history' ? 'block' : 'none';
+    document.getElementById('team-view').style.display    = view === 'team'    ? 'block' : 'none'; // [WAVE1-D]
 
     document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
     const btn = document.getElementById('nav-' + view);
     if (btn) { btn.classList.add('active'); btn.setAttribute('aria-current','page'); }
 
     if (view === 'history') loadHistory();
+    if (view === 'team') loadTeam(); // [WAVE1-D]
   }
 
   /* ── File uploads ─────────────────────────────── */
@@ -2675,6 +2701,48 @@
     window.location.href = '/api/listings/export.csv';
   }
 
+  /* [WAVE1-D] ── CSV import: upload inventory rows, batch-create drafts ── */
+  async function importCsvFile(input) {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    let text;
+    try {
+      text = await file.text();
+    } catch (e) {
+      showToast('error', 'Import failed', 'Could not read the file.', 4000);
+      return;
+    }
+    async function postImport(dryRun) {
+      const res = await fetch('/api/listings/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv: text, dryRun })
+      });
+      return res.json();
+    }
+    try {
+      // Validate first (dry run), then confirm before writing anything.
+      const check = await postImport(true);
+      if (!check.success) throw new Error(check.error || 'Validation failed');
+      const bad = (check.results || []).filter(r => !r.ok);
+      const preview = bad.slice(0, 5).map(r => `Row ${r.row}: ${r.error}`).join('\n');
+      const msg = `Import check: ${check.valid} of ${check.total} rows valid` +
+        (bad.length ? `, ${bad.length} with errors:\n${preview}${bad.length > 5 ? `\n…+${bad.length - 5} more` : ''}` : '.') +
+        `\n\nCreate ${check.valid} draft listing(s)? (Columns: sku, title, price; optional: msrp, keywords, costOfGoods, internalNotes, categoryId. Keywords separated by semicolons.)`;
+      if (check.valid === 0 || !window.confirm(msg)) {
+        if (check.valid === 0) showToast('error', 'Import check', 'No valid rows — nothing to import.', 5000);
+        return;
+      }
+      const done = await postImport(false);
+      if (!done.success) throw new Error(done.error || 'Import failed');
+      showToast('success', 'CSV import complete', `${done.imported} draft(s) created${done.failed ? `, ${done.failed} row(s) rejected` : ''}.`, 5000);
+      loadHistory();
+    } catch (err) {
+      showToast('error', 'Import failed', err.message, 6000);
+    }
+  }
+
   /* [WAVE1-B] ── Background-task error notifications ──────── */
   const knownNotifIds = new Set();
   let notifPollInitialized = false;
@@ -3085,6 +3153,94 @@
   async function logout() {
     await fetch('/api/auth/logout', { method:'POST' });
     location.reload();
+  }
+
+  /* [WAVE1-D] ── Team seats ───────────────────────── */
+  async function loadTeam() {
+    const box = document.getElementById('teamContainer');
+    try {
+      const res = await fetch('/api/team');
+      if (res.status === 401) {
+        box.innerHTML = `<div class="empty-state"><div class="empty-state__icon">🔒</div>Sign in to manage team seats.</div>`;
+        return;
+      }
+      const t = await res.json();
+      if (t.role === 'none') {
+        const upsell = t.plan === 'power_seller'
+          ? 'Your subscription is not active — seats are dormant until billing is current.'
+          : 'Team seats are a Power Seller feature (3 seats per workspace).';
+        box.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state__icon">👥</div>
+            <div style="font-weight:600;margin-bottom:6px;">No team workspace yet</div>
+            <div style="font-size:0.85rem;color:var(--text-dim);max-width:420px;">${escHtml(upsell)}</div>
+            ${t.plan !== 'power_seller' ? `<button class="btn btn--primary btn--sm" style="margin-top:12px;" onclick="upgradeToPremium()">Upgrade to Power Seller</button>` : ''}
+          </div>`;
+        return;
+      }
+      const used = t.usedSeats || 0;
+      const max = t.maxSeats || 3;
+      const rows = (t.members || []).map(m => `
+        <tr>
+          <td>${escHtml(m.email)}</td>
+          <td><span class="pill ${m.status === 'active' ? 'pill--active' : 'pill--draft'}" style="font-size:0.65rem;">${escHtml(m.status)}</span></td>
+          <td style="font-size:0.75rem;color:var(--text-dim);">${escHtml(m.addedAt ? m.addedAt.slice(0,10) : '')}</td>
+          <td>${t.role === 'owner' ? `<button class="btn btn--ghost btn--xs" onclick="removeTeamMember('${escHtml(m.email)}')">Remove</button>` : ''}</td>
+        </tr>`).join('');
+      box.innerHTML = `
+        <div class="metrics-grid" style="margin-bottom:16px;">
+          <div class="metric-card"><span class="metric-label">Workspace</span><span class="metric-value" style="font-size:1rem;">${escHtml(t.owner)}</span><span class="metric-sub">your role: ${escHtml(t.role)}</span></div>
+          <div class="metric-card"><span class="metric-label">Seats used</span><span class="metric-value">${used} / ${max}</span><span class="metric-sub">Power Seller plan</span></div>
+        </div>
+        ${t.role === 'owner' ? `
+        <div style="display:flex;gap:8px;margin-bottom:16px;max-width:520px;">
+          <input id="teamInviteEmail" type="email" placeholder="teammate@example.com" aria-label="Invite email"
+                 style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);" />
+          <button class="btn btn--primary btn--sm" onclick="inviteTeamMember()">Invite</button>
+        </div>` : `
+        <div style="margin-bottom:16px;"><button class="btn btn--ghost btn--sm" onclick="leaveTeam()">Leave workspace</button></div>`}
+        <div class="table-wrap"><table>
+          <thead><tr><th scope="col">Email</th><th scope="col">Status</th><th scope="col">Added</th><th scope="col"></th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="4" style="text-align:center;color:var(--text-dim);">No seats used yet.</td></tr>'}</tbody>
+        </table></div>
+        <p style="font-size:0.75rem;color:var(--text-dim);margin-top:12px;">Invites are pending until the teammate signs in — every seat shares this workspace's listings.</p>`;
+    } catch (err) {
+      box.innerHTML = `<div class="empty-state"><div class="empty-state__icon">⚠️</div>Could not load team: ${escHtml(err.message)}</div>`;
+    }
+  }
+
+  async function inviteTeamMember() {
+    const email = (document.getElementById('teamInviteEmail').value || '').trim();
+    if (!email) { showToast('error', 'Invite', 'Enter an email address.', 3000); return; }
+    try {
+      const res = await fetch('/api/team/invite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Invite failed');
+      showToast('success', 'Invite sent', `${email} can now sign in to join.`, 4000);
+      loadTeam();
+    } catch (err) { showToast('error', 'Invite failed', err.message, 5000); }
+  }
+
+  async function removeTeamMember(email) {
+    if (!window.confirm(`Remove ${email} from the team?`)) return;
+    try {
+      const res = await fetch('/api/team/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Remove failed');
+      showToast('success', 'Removed', `${email} was removed.`, 4000);
+      loadTeam();
+    } catch (err) { showToast('error', 'Remove failed', err.message, 5000); }
+  }
+
+  async function leaveTeam() {
+    if (!window.confirm('Leave this workspace?')) return;
+    try {
+      const res = await fetch('/api/team/leave', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Leave failed');
+      showToast('success', 'Left workspace', 'You are no longer on the team.', 4000);
+      loadTeam();
+    } catch (err) { showToast('error', 'Leave failed', err.message, 5000); }
   }
 
   /* ── Utility ───────────────────────────────────── */

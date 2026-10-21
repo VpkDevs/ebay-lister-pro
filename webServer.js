@@ -141,6 +141,19 @@ function csvEscape(value) {
 }
 
 /**
+ * [WAVE1-D] Canonical CSV column order. Export and import share this list so
+ * a downloaded export can be edited and re-imported (round-trip safe).
+ * Import treats sku/title/price as required input; status/createdAt/marketplace
+ * IDs are export-only output columns and are ignored on import (imports always
+ * create DRAFT listings).
+ */
+const LISTING_CSV_HEADERS = [
+  "sku", "title", "price", "msrp", "keywords", "costOfGoods", "internalNotes",
+  "status", "categoryId", "createdAt",
+  "ebayListingId", "shopifyId", "woocommerceId", "etsyId"
+];
+
+/**
  * [WAVE1-B] Builds the full CSV export of listings history.
  * Includes Wave-1 fields (keywords, msrp, costOfGoods, internalNotes) when present;
  * fields added by other waves are read defensively and export as empty columns
@@ -149,11 +162,7 @@ function csvEscape(value) {
  * @returns {string} CSV document text.
  */
 function buildListingsCsv(history) {
-  const headers = [
-    "sku", "title", "price", "msrp", "keywords", "costOfGoods", "internalNotes",
-    "status", "categoryId", "createdAt",
-    "ebayListingId", "shopifyId", "woocommerceId", "etsyId"
-  ];
+  const headers = LISTING_CSV_HEADERS;
   const lines = [headers.join(",")];
   for (const item of history) {
     const details = item.listingDetails || {};
@@ -181,6 +190,168 @@ function buildListingsCsv(history) {
     lines.push(row.map(csvEscape).join(","));
   }
   return lines.join("\r\n") + "\r\n";
+}
+
+/**
+ * [WAVE1-D] Parses CSV text (RFC 4180) into rows of cell strings.
+ * Handles quoted fields containing commas, quotes (""), and newlines, plus
+ * CRLF/LF line endings, a leading BOM, and blank lines.
+ * @param {string} text - Raw CSV document text.
+ * @returns {string[][]} Rows of cells (first row = header).
+ * @throws {Error} On an unterminated quoted field.
+ */
+function parseListingsCsv(text) {
+  const src = String(text).replace(/^﻿/, "");
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') { field += '"'; i++; }
+        else { inQuotes = false; }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(field); field = "";
+    } else if (ch === '\r') {
+      if (src[i + 1] !== '\n') { row.push(field); field = ""; rows.push(row); row = []; }
+      // else: CRLF — the \n branch below ends the row
+    } else if (ch === '\n') {
+      row.push(field); field = ""; rows.push(row); row = [];
+    } else {
+      field += ch;
+    }
+  }
+  if (inQuotes) throw new Error("Malformed CSV: unterminated quoted field.");
+  if (field !== "" || row.length > 0) { row.push(field); rows.push(row); }
+  // Drop blank lines (a single empty cell).
+  return rows.filter(r => !(r.length === 1 && r[0] === ""));
+}
+
+/**
+ * [WAVE1-D] Validates one imported CSV row against the listing schema.
+ * @param {string[]} cells - Raw cell values for the row.
+ * @param {Object<string,number>} headerIndex - Header name -> column index.
+ * @param {Set<string>} seenSkus - SKUs already seen in this file.
+ * @param {Set<string>} historySkus - SKUs already in history.
+ * @returns {{ok:boolean, sku:string, errors:string[], listing:object|null}}
+ */
+function validateImportRow(cells, headerIndex, seenSkus, historySkus) {
+  const get = (name) => {
+    const idx = headerIndex[name];
+    return idx === undefined ? "" : String(cells[idx] ?? "").trim();
+  };
+  const errors = [];
+  const sku = get("sku");
+  if (!sku) errors.push('sku is required');
+  else if (seenSkus.has(sku)) errors.push(`duplicate sku "${sku}" in this file`);
+  else if (historySkus.has(sku)) errors.push(`sku "${sku}" already exists`);
+  const title = get("title");
+  if (!title) errors.push("title is required");
+  const priceRaw = get("price");
+  const price = Number(priceRaw);
+  if (priceRaw === "" || isNaN(price) || price < 0) {
+    errors.push(`price must be a number >= 0 (got "${priceRaw}")`);
+  }
+  for (const key of ["msrp", "costOfGoods"]) {
+    const raw = get(key);
+    if (raw !== "" && (isNaN(Number(raw)) || Number(raw) < 0)) {
+      errors.push(`${key} must be a number >= 0 (got "${raw}")`);
+    }
+  }
+  if (errors.length > 0) return { ok: false, sku, errors, listing: null };
+  // Keywords: export joins with "; " — split on ";" for an exact round-trip.
+  const keywordsRaw = get("keywords");
+  const keywords = keywordsRaw === "" ? []
+    : keywordsRaw.split(";").map(k => k.trim()).filter(k => k.length > 0);
+  return {
+    ok: true,
+    sku,
+    errors: [],
+    listing: {
+      title,
+      price,
+      msrp: get("msrp") === "" ? null : Number(get("msrp")),
+      costOfGoods: get("costOfGoods") === "" ? null : Number(get("costOfGoods")),
+      keywords,
+      internalNotes: get("internalNotes"),
+      categoryId: get("categoryId") || null
+    }
+  };
+}
+
+/**
+ * [WAVE1-D] Imports inventory rows from CSV text as DRAFT listings.
+ * Mirrors the export schema so exports round-trip. Each valid row goes through
+ * the same history write path as /api/save-draft (with Wave-1A field
+ * normalization); drafts are flagged _confidence: 0 so the Wave-1C uncertainty
+ * UI marks them for human review (they were not AI-generated).
+ * @param {string} csvText - Raw CSV document text.
+ * @param {{dryRun?:boolean}} [opts] - When dryRun is true, validate only.
+ * @returns {{imported:number, valid:number, failed:number, total:number, results:Array}}
+ * @throws {Error} On empty input or missing required columns.
+ */
+function importListingsFromCsv(csvText, opts = {}) {
+  const dryRun = !!opts.dryRun;
+  const rows = parseListingsCsv(csvText);
+  if (rows.length === 0) throw new Error("CSV is empty.");
+  const headers = rows[0].map(h => String(h).trim());
+  const headerIndex = {};
+  headers.forEach((h, i) => { if (!(h in headerIndex)) headerIndex[h] = i; });
+  for (const required of ["sku", "title", "price"]) {
+    if (!(required in headerIndex)) throw new Error(`Missing required column "${required}".`);
+  }
+  const history = utils.readJsonFileSecure(config.historyPath, []);
+  const historySkus = new Set(history.map(h => h.sku));
+  const seenSkus = new Set();
+  const results = [];
+  let imported = 0;
+  let valid = 0;
+  for (let r = 1; r < rows.length; r++) {
+    const lineNo = r + 1;
+    const v = validateImportRow(rows[r], headerIndex, seenSkus, historySkus);
+    if (!v.ok) {
+      results.push({ row: lineNo, sku: v.sku || null, ok: false, error: v.errors.join("; ") });
+      continue;
+    }
+    seenSkus.add(v.sku);
+    valid++;
+    if (!dryRun) {
+      const details = utils.normalizeListingFields({
+        title: v.listing.title,
+        suggestedPrice: v.listing.price,
+        categoryId: v.listing.categoryId,
+        keywords: v.listing.keywords,
+        msrp: v.listing.msrp,
+        costOfGoods: v.listing.costOfGoods,
+        internalNotes: v.listing.internalNotes,
+        _confidence: 0,          // not AI-generated -> Wave-1C review badge
+        importSource: "csv"
+      });
+      utils.saveListingToHistory(
+        v.sku, null, v.listing.title, v.listing.price, v.listing.categoryId,
+        null, null, "DRAFT", details
+      );
+      imported++;
+    }
+    results.push({ row: lineNo, sku: v.sku, ok: true, error: null });
+  }
+  if (!dryRun && imported > 0) {
+    utils.logAudit("INFO", `CSV import: ${imported} draft(s) created, ${results.length - imported} row(s) rejected.`);
+  }
+  return {
+    imported,
+    valid,
+    failed: results.filter(x => !x.ok).length,
+    total: results.length,
+    results
+  };
 }
 
 /**
@@ -217,6 +388,203 @@ function bulkUpdateListingStatus(skus, status) {
   }
   utils.logAudit("INFO", `Bulk status update to "${status}": ${updated}/${skus.length} updated.`);
   return { updated, results };
+}
+
+/* ==========================================================================
+ * [WAVE1-D] Team seats (Power Seller workspaces).
+ *
+ * Minimal honest model: the subscription owner holds the workspace; the app's
+ * single-tenant data store is shared by every seat, so "shared workspace" is
+ * structural (all seats see the same listings) rather than a sync layer.
+ * Roles are owner/member only — no permissions matrix. Invites are pending
+ * until the invitee logs in and accepts (no email delivery exists in this
+ * codebase); pending invites hold a seat so a workspace cannot over-invite.
+ * Seats go dormant (member workspace lookups return null) if the owner's
+ * Power Seller subscription lapses.
+ * ========================================================================== */
+
+// [WAVE1-D] Seats granted per billing plan. Plans not listed here get no team features.
+const TEAM_SEATS_BY_PLAN = { power_seller: 3 };
+
+/**
+ * [WAVE1-D] Seats available for a billing plan (0 when the plan has no team features).
+ * @param {string} plan - Billing plan id.
+ * @returns {number}
+ */
+function getTeamMaxSeats(plan) {
+  return TEAM_SEATS_BY_PLAN[plan] || 0;
+}
+
+/**
+ * [WAVE1-D] Resolves the caller's billing standing from the local billing store
+ * (written by the Stripe webhook). Unknown/absent records are treated as the
+ * free Starter tier — never as premium.
+ * @param {string} email - Account email.
+ * @returns {{premium:boolean, plan:string}}
+ */
+function getBillingPlan(email) {
+  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
+  const rec = email ? billingHistory[email] : null;
+  if (!rec || !rec.premium) return { premium: false, plan: "starter" };
+  return { premium: true, plan: rec.plan || "pro" };
+}
+
+/**
+ * [WAVE1-D] Reads the team store: { [ownerEmail]: { members: [{email,status,addedAt}] } }.
+ * @returns {object}
+ */
+function readTeamStore() {
+  return utils.readJsonFileSecure(config.teamPath, {});
+}
+
+/**
+ * [WAVE1-D] Persists the team store.
+ * @param {object} store - Team store object.
+ */
+function writeTeamStore(store) {
+  utils.writeJsonFileSecure(config.teamPath, store);
+}
+
+/**
+ * [WAVE1-D] Seats currently held (active + pending invites) in a team record.
+ * @param {{members:Array}} record - Team record.
+ * @returns {number}
+ */
+function countUsedSeats(record) {
+  return (record.members || []).filter(m => m.status === "active" || m.status === "invited").length;
+}
+
+/**
+ * [WAVE1-D] Invites an email to the owner's workspace as a pending member.
+ * Requires the owner to hold an active Power Seller subscription.
+ * @param {string} ownerEmail - Workspace owner.
+ * @param {string} memberEmail - Invitee email.
+ * @returns {{email:string,status:string,addedAt:string}} The invite record.
+ * @throws {Error} When validation fails.
+ */
+function inviteTeamMember(ownerEmail, memberEmail) {
+  memberEmail = String(memberEmail || "").trim().toLowerCase();
+  if (!memberEmail || !memberEmail.includes("@")) {
+    throw new Error("A valid member email is required.");
+  }
+  if (memberEmail === String(ownerEmail).toLowerCase()) {
+    throw new Error("You cannot invite yourself.");
+  }
+  const { premium, plan } = getBillingPlan(ownerEmail);
+  if (!premium || plan !== "power_seller") {
+    throw new Error("Team seats require an active Power Seller subscription.");
+  }
+  const store = readTeamStore();
+  const record = store[ownerEmail] || { members: [] };
+  if (record.members.some(m => m.email === memberEmail)) {
+    throw new Error(`${memberEmail} is already on the team.`);
+  }
+  if (countUsedSeats(record) >= getTeamMaxSeats(plan)) {
+    throw new Error(`Seat limit reached (${getTeamMaxSeats(plan)} seats on Power Seller).`);
+  }
+  const invite = { email: memberEmail, status: "invited", addedAt: new Date().toISOString() };
+  record.members.push(invite);
+  store[ownerEmail] = record;
+  writeTeamStore(store);
+  utils.logAudit("INFO", `Team invite: ${ownerEmail} invited ${memberEmail}.`);
+  return invite;
+}
+
+/**
+ * [WAVE1-D] Removes a member (active or invited) from the workspace. Owner-only.
+ * @param {string} ownerEmail - Workspace owner.
+ * @param {string} memberEmail - Member email to remove.
+ * @returns {boolean} True when a member was removed.
+ * @throws {Error} When the member is not on the team.
+ */
+function removeTeamMember(ownerEmail, memberEmail) {
+  memberEmail = String(memberEmail || "").trim().toLowerCase();
+  const store = readTeamStore();
+  const record = store[ownerEmail];
+  if (!record || !record.members.some(m => m.email === memberEmail)) {
+    throw new Error(`${memberEmail} is not on the team.`);
+  }
+  record.members = record.members.filter(m => m.email !== memberEmail);
+  store[ownerEmail] = record;
+  writeTeamStore(store);
+  utils.logAudit("INFO", `Team remove: ${ownerEmail} removed ${memberEmail}.`);
+  return true;
+}
+
+/**
+ * [WAVE1-D] Accepts a pending invite. The invitee must be logged in as the
+ * invited email; the owner's subscription is re-checked at accept time.
+ * @param {string} ownerEmail - Workspace owner.
+ * @param {string} memberEmail - Invitee email (must match the logged-in user).
+ * @returns {{email:string,status:string,addedAt:string}} The activated member record.
+ * @throws {Error} When no pending invite exists or the owner's plan lapsed.
+ */
+function acceptTeamInvite(ownerEmail, memberEmail) {
+  memberEmail = String(memberEmail || "").trim().toLowerCase();
+  const { premium, plan } = getBillingPlan(ownerEmail);
+  if (!premium || plan !== "power_seller") {
+    throw new Error("This workspace's Power Seller subscription is no longer active.");
+  }
+  const store = readTeamStore();
+  const record = store[ownerEmail];
+  const invite = record && record.members.find(m => m.email === memberEmail && m.status === "invited");
+  if (!invite) {
+    throw new Error("No pending invite found for this workspace.");
+  }
+  invite.status = "active";
+  writeTeamStore(store);
+  utils.logAudit("INFO", `Team accept: ${memberEmail} joined ${ownerEmail}'s workspace.`);
+  return invite;
+}
+
+/**
+ * [WAVE1-D] Lets an active member leave their workspace.
+ * @param {string} memberEmail - Member email leaving.
+ * @returns {string|null} The owner email left, or null when not on a team.
+ */
+function leaveTeam(memberEmail) {
+  memberEmail = String(memberEmail || "").trim().toLowerCase();
+  const store = readTeamStore();
+  for (const [ownerEmail, record] of Object.entries(store)) {
+    const idx = (record.members || []).findIndex(m => m.email === memberEmail && m.status === "active");
+    if (idx !== -1) {
+      record.members.splice(idx, 1);
+      store[ownerEmail] = record;
+      writeTeamStore(store);
+      utils.logAudit("INFO", `Team leave: ${memberEmail} left ${ownerEmail}'s workspace.`);
+      return ownerEmail;
+    }
+  }
+  return null;
+}
+
+/**
+ * [WAVE1-D] Resolves which workspace (if any) an email belongs to.
+ * Owners qualify only while their Power Seller subscription is active; members
+ * qualify only while their seat is active AND the owner's subscription is active.
+ * @param {string} email - Account email.
+ * @returns {{role:"owner"|"member", owner:string}|null}
+ */
+function getWorkspaceFor(email) {
+  email = String(email || "").trim().toLowerCase();
+  if (!email) return null;
+  const self = getBillingPlan(email);
+  if (self.premium && self.plan === "power_seller") {
+    return { role: "owner", owner: email };
+  }
+  const store = readTeamStore();
+  for (const [ownerEmail, record] of Object.entries(store)) {
+    const member = (record.members || []).find(m => m.email === email && m.status === "active");
+    if (member) {
+      const ownerBilling = getBillingPlan(ownerEmail);
+      if (ownerBilling.premium && ownerBilling.plan === "power_seller") {
+        return { role: "member", owner: ownerEmail };
+      }
+      return null; // owner's subscription lapsed -> seat dormant
+    }
+  }
+  return null;
 }
 const activeSessions = new Map();
 
@@ -874,7 +1242,7 @@ function startWebGuiServer(port = 45900) {
         user.isPremium = true;
         const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
         const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
-        billingHistory[user.email] = { premium: true, subscriptionId: "mock-sub-12345" };
+        billingHistory[user.email] = { premium: true, subscriptionId: "mock-sub-12345", plan: "pro" }; // [WAVE1-D] plan recorded for entitlements
         utils.writeJsonFileSecure(billingDbPath, billingHistory);
       }
       res.writeHead(302, { 'Location': '/?billing=success' });
@@ -922,9 +1290,13 @@ function startWebGuiServer(port = 45900) {
             const session = event.data.object;
             const email = session.customer_email || session.customer_details?.email;
             if (email) {
-              billingHistory[email] = { premium: true, subscriptionId: session.subscription };
+              // [WAVE1-D] Record the billing plan from checkout metadata
+              // (plan: "pro" | "power_seller") so team-seat entitlements can
+              // be enforced. Defaults to "pro" for sessions without metadata.
+              const plan = (session.metadata && session.metadata.plan) || "pro";
+              billingHistory[email] = { premium: true, subscriptionId: session.subscription, plan };
               utils.writeJsonFileSecure(billingDbPath, billingHistory);
-              utils.logAudit("INFO", `Stripe Premium Activated for customer: ${email}`);
+              utils.logAudit("INFO", `Stripe Premium Activated for customer: ${email} (plan: ${plan})`);
               for (const [sid, sess] of activeSessions.entries()) {
                 if (sess.user.email === email) {
                   sess.user.isPremium = true;
@@ -954,6 +1326,141 @@ function startWebGuiServer(port = 45900) {
           res.end(JSON.stringify({ error: err.message }));
         }
       });
+      return;
+    }
+
+    // [WAVE1-D] API: Team workspace status for the logged-in user.
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/team') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      const ws = getWorkspaceFor(user.email);
+      const billing = getBillingPlan(user.email);
+      const maxSeats = getTeamMaxSeats(billing.plan);
+      if (!ws) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ role: "none", owner: null, plan: billing.plan, maxSeats, members: [] }));
+        return;
+      }
+      const store = readTeamStore();
+      const record = store[ws.owner] || { members: [] };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        role: ws.role, owner: ws.owner, plan: billing.plan,
+        maxSeats: getTeamMaxSeats("power_seller"),
+        usedSeats: countUsedSeats(record),
+        members: record.members
+      }));
+      return;
+    }
+
+    // [WAVE1-D] Helper: parse a JSON body, 400 on malformed input.
+    function parseTeamJsonBody(bodyData, res) {
+      try {
+        return JSON.parse(bodyData);
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+        return null;
+      }
+    }
+
+    // [WAVE1-D] API: Invite a member to the owner's workspace (owner only).
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/team/invite') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      const ws = getWorkspaceFor(user.email);
+      if (!ws || ws.role !== "owner") {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Only the workspace owner can invite members." }));
+        return;
+      }
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        const payload = parseTeamJsonBody(bodyData, res);
+        if (!payload) return;
+        try {
+          const member = inviteTeamMember(user.email, payload.email);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, member }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-D] API: Remove a member from the workspace (owner only).
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/team/remove') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      const ws = getWorkspaceFor(user.email);
+      if (!ws || ws.role !== "owner") {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Only the workspace owner can remove members." }));
+        return;
+      }
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        const payload = parseTeamJsonBody(bodyData, res);
+        if (!payload) return;
+        try {
+          removeTeamMember(user.email, payload.email);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-D] API: Accept a pending team invite (invitee must be logged in).
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/team/accept') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        const payload = parseTeamJsonBody(bodyData, res);
+        if (!payload) return;
+        try {
+          const member = acceptTeamInvite(payload.owner, user.email);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, member }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-D] API: Leave the current team workspace.
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/team/leave') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      const left = leaveTeam(user.email);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, left }));
       return;
     }
 
@@ -1362,6 +1869,44 @@ function startWebGuiServer(port = 45900) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: err.message }));
       }
+      return;
+    }
+
+    // [WAVE1-D] API: Import listings from CSV (mirror of export.csv).
+    // Body: { csv: "<csv text>", dryRun?: boolean }. dryRun validates without writing.
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/listings/import') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(bodyData);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+          if (!payload || typeof payload.csv !== 'string' || payload.csv.trim() === '') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Payload must include a non-empty csv string." }));
+            return;
+          }
+          // 10 MB cap keeps a hostile upload from exhausting memory.
+          if (payload.csv.length > 10 * 1024 * 1024) {
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "CSV too large (max 10 MB)." }));
+            return;
+          }
+          const result = importListingsFromCsv(payload.csv, { dryRun: !!payload.dryRun });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, dryRun: !!payload.dryRun, ...result }));
+        } catch (err) {
+          utils.logAudit("ERROR", `CSV import failed: ${err.message}`);
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
       return;
     }
 
@@ -2416,7 +2961,22 @@ module.exports = {
   BULK_ALLOWED_STATUSES,
   // [WAVE1-C] Exported for unit tests
   isIsbn13,
-  resolveBarcodeData
+  resolveBarcodeData,
+  // [WAVE1-D] Exported for unit tests
+  LISTING_CSV_HEADERS,
+  parseListingsCsv,
+  validateImportRow,
+  importListingsFromCsv,
+  TEAM_SEATS_BY_PLAN,
+  getTeamMaxSeats,
+  getBillingPlan,
+  readTeamStore,
+  countUsedSeats,
+  inviteTeamMember,
+  removeTeamMember,
+  acceptTeamInvite,
+  leaveTeam,
+  getWorkspaceFor
 };
 
 if (require.main === module) {

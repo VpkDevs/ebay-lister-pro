@@ -36,6 +36,7 @@ config.uploadTempDir = testDir;
 // [WAVE1-A] Redirect listing templates into the test sandbox.
 config.templatesPath = path.join(testDir, 'test-templates.json');
 config.notificationsPath = path.join(testDir, 'test-notifications.json'); // [WAVE1-B]
+config.teamPath = path.join(testDir, 'test-team.json'); // [WAVE1-D]
 
 // Cleanup helper
 function cleanupSandbox() {
@@ -56,6 +57,9 @@ function cleanupSandbox() {
     config.notificationsPath, // [WAVE1-B]
     `${config.notificationsPath}.tmp`, // [WAVE1-B]
     `${config.notificationsPath}.bak`, // [WAVE1-B]
+    config.teamPath, // [WAVE1-D]
+    `${config.teamPath}.tmp`, // [WAVE1-D]
+    `${config.teamPath}.bak`, // [WAVE1-D]
     path.join(testDir, 'mock-image.png'),
     path.join(testDir, 'mock-image.jpg')
   ];
@@ -3125,4 +3129,307 @@ test('Wave 1C: marketplace fees, tiers, confidence, enhance, barcode enrichment'
       await new Promise((resolve) => server.close(resolve));
     }
   });
+});
+
+// ==========================================
+// [WAVE1-D] CSV import and team seats
+// ==========================================
+test('Wave 1D: bulk CSV import and Power Seller team seats', async (t) => {
+  // Hermetic backups: history, team store, billing store.
+  const historyBackup = fs.existsSync(config.historyPath)
+    ? fs.readFileSync(config.historyPath, 'utf8') : null;
+  const teamBackup = fs.existsSync(config.teamPath)
+    ? fs.readFileSync(config.teamPath, 'utf8') : null;
+  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingBackup = fs.existsSync(billingDbPath)
+    ? fs.readFileSync(billingDbPath, 'utf8') : null;
+
+  const originalGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+  delete process.env.GOOGLE_CLIENT_ID;
+
+  function resetHistory(rows) { utils.writeJsonFileSecure(config.historyPath, rows); }
+  function resetTeam(obj) { utils.writeJsonFileSecure(config.teamPath, obj); }
+  function resetBilling(obj) { utils.writeJsonFileSecure(billingDbPath, obj); }
+  function setPlan(email, plan) {
+    resetBilling({ [email]: { premium: true, subscriptionId: 'sub_test', plan } });
+  }
+
+  await t.test('parseListingsCsv handles plain rows, CRLF, BOM and blank lines', () => {
+    const rows = webServer.parseListingsCsv('﻿sku,title,price\r\nA1,Widget,9.99\r\n\r\nB2,Gadget,5\r\n');
+    assert.deepStrictEqual(rows, [
+      ['sku', 'title', 'price'],
+      ['A1', 'Widget', '9.99'],
+      ['B2', 'Gadget', '5']
+    ]);
+  });
+
+  await t.test('parseListingsCsv handles quoted commas, escaped quotes and embedded newlines', () => {
+    const rows = webServer.parseListingsCsv('sku,title,price\nA1,"Vintage ""Rare"", Camera\n(boxed)",149.99\n');
+    assert.deepStrictEqual(rows, [
+      ['sku', 'title', 'price'],
+      ['A1', 'Vintage "Rare", Camera\n(boxed)', '149.99']
+    ]);
+  });
+
+  await t.test('parseListingsCsv throws on unterminated quoted field', () => {
+    assert.throws(() => webServer.parseListingsCsv('sku,title\nA1,"oops\n'), /unterminated quoted field/);
+  });
+
+  await t.test('LISTING_CSV_HEADERS matches the export header (round-trip schema)', () => {
+    const csv = webServer.buildListingsCsv([]);
+    const headerLine = csv.split('\r\n')[0];
+    assert.strictEqual(headerLine, webServer.LISTING_CSV_HEADERS.join(','));
+    assert.deepStrictEqual(webServer.LISTING_CSV_HEADERS.slice(0, 3), ['sku', 'title', 'price']);
+  });
+
+  await t.test('importListingsFromCsv creates DRAFT listings through the history write path', () => {
+    resetHistory([]);
+    const csv = 'sku,title,price,msrp,keywords,costOfGoods,internalNotes,categoryId\r\n' +
+      'IMP-1,Red Widget,19.99,29.99,"red; shiny; widget",7.5,restock soon,12345\r\n' +
+      'IMP-2,Blue Widget,9.5,,,,,\r\n';
+    const result = webServer.importListingsFromCsv(csv);
+    assert.strictEqual(result.imported, 2);
+    assert.strictEqual(result.failed, 0);
+    assert.strictEqual(result.total, 2);
+    const history = utils.readJsonFileSecure(config.historyPath, []);
+    assert.strictEqual(history.length, 2);
+    const first = history.find(h => h.sku === 'IMP-1');
+    assert.strictEqual(first.status, 'DRAFT');
+    assert.strictEqual(first.price, 19.99);
+    assert.deepStrictEqual(first.listingDetails.keywords, ['red', 'shiny', 'widget']);
+    assert.strictEqual(first.listingDetails.msrp, 29.99);
+    assert.strictEqual(first.listingDetails.costOfGoods, 7.5);
+    assert.strictEqual(first.listingDetails.internalNotes, 'restock soon');
+    assert.strictEqual(first.listingDetails._confidence, 0); // flagged for review (not AI-generated)
+    assert.strictEqual(first.listingDetails.importSource, 'csv');
+  });
+
+  await t.test('importListingsFromCsv reports per-row errors and skips bad rows', () => {
+    resetHistory([{ sku: 'TAKEN-1', title: 'Existing', price: 1, status: 'DRAFT' }]);
+    const csv = 'sku,title,price\r\n' +
+      'OK-1,Good Item,10\r\n' +                 // valid
+      ',No Sku,10\r\n' +                        // missing sku
+      'OK-1,Duplicate Sku,10\r\n' +             // duplicate in file
+      'TAKEN-1,Clash,10\r\n' +                  // duplicate in history
+      'BAD-1,,10\r\n' +                         // missing title
+      'BAD-2,No Price,\r\n' +                   // missing price
+      'BAD-3,Neg Price,-5\r\n' +                // negative price
+      'BAD-4,NaN Price,abc\r\n';                // non-numeric price
+    const result = webServer.importListingsFromCsv(csv);
+    assert.strictEqual(result.imported, 1);
+    assert.strictEqual(result.failed, 7);
+    assert.strictEqual(result.total, 8);
+    const byRow = Object.fromEntries(result.results.map(r => [r.row, r]));
+    assert.strictEqual(byRow[2].ok, true);
+    assert.match(byRow[3].error, /sku is required/);
+    assert.match(byRow[4].error, /duplicate sku/);
+    assert.match(byRow[5].error, /already exists/);
+    assert.match(byRow[6].error, /title is required/);
+    assert.match(byRow[7].error, /price must be a number/);
+    assert.match(byRow[8].error, /price must be a number/);
+    assert.match(byRow[9].error, /price must be a number/);
+    const history = utils.readJsonFileSecure(config.historyPath, []);
+    assert.strictEqual(history.filter(h => h.sku === 'OK-1').length, 1);
+  });
+
+  await t.test('importListingsFromCsv rejects bad msrp/costOfGoods and accepts empty optionals', () => {
+    resetHistory([]);
+    const csv = 'sku,title,price,msrp,costOfGoods\r\nA,Item,10,abc,\r\nB,Item,10,,xyz\r\n';
+    const result = webServer.importListingsFromCsv(csv);
+    assert.strictEqual(result.imported, 0);
+    assert.match(result.results[0].error, /msrp must be a number/);
+    assert.match(result.results[1].error, /costOfGoods must be a number/);
+  });
+
+  await t.test('importListingsFromCsv dryRun validates without writing', () => {
+    resetHistory([]);
+    const csv = 'sku,title,price\r\nDRY-1,Item,10\r\n,Broken,\r\n';
+    const result = webServer.importListingsFromCsv(csv, { dryRun: true });
+    assert.strictEqual(result.imported, 0);
+    assert.strictEqual(result.valid, 1);
+    assert.strictEqual(result.failed, 1);
+    assert.deepStrictEqual(utils.readJsonFileSecure(config.historyPath, []), []);
+  });
+
+  await t.test('importListingsFromCsv throws on empty input and missing required columns', () => {
+    assert.throws(() => webServer.importListingsFromCsv(''), /CSV is empty/);
+    assert.throws(() => webServer.importListingsFromCsv('name,amount\nx,1\n'), /Missing required column "sku"/);
+    assert.throws(() => webServer.importListingsFromCsv('sku,name\nx,y\n'), /Missing required column "title"/);
+  });
+
+  await t.test('export -> import round-trips through the shared schema', () => {
+    resetHistory([{
+      sku: 'RT-1', title: 'Round, "Trip"', price: 42.5, status: 'ACTIVE',
+      categoryId: '999', timestamp: '2026-10-19T00:00:00.000Z',
+      keywords: ['a', 'b; c'], msrp: 60, costOfGoods: 10, internalNotes: 'note',
+      listingId: 'e1', shopifyId: 's1', woocommerceId: null, etsyId: 'et1',
+      listingDetails: {}
+    }]);
+    const history = utils.readJsonFileSecure(config.historyPath, []);
+    const csv = webServer.buildListingsCsv(history);
+    resetHistory([]);
+    const result = webServer.importListingsFromCsv(csv, { dryRun: true });
+    assert.strictEqual(result.failed, 0);
+    assert.strictEqual(result.valid, 1); // statuses/marketplace IDs are export-only; rows still validate
+  });
+
+  await t.test('getBillingPlan defaults unknown/absent records to starter', () => {
+    resetBilling({});
+    assert.deepStrictEqual(webServer.getBillingPlan('nobody@test.com'), { premium: false, plan: 'starter' });
+    resetBilling({ 'legacy@test.com': { premium: true, subscriptionId: 'sub_x' } });
+    assert.deepStrictEqual(webServer.getBillingPlan('legacy@test.com'), { premium: true, plan: 'pro' });
+    setPlan('ps@test.com', 'power_seller');
+    assert.deepStrictEqual(webServer.getBillingPlan('ps@test.com'), { premium: true, plan: 'power_seller' });
+  });
+
+  await t.test('getTeamMaxSeats grants 3 seats to power_seller only', () => {
+    assert.strictEqual(webServer.getTeamMaxSeats('power_seller'), 3);
+    assert.strictEqual(webServer.getTeamMaxSeats('pro'), 0);
+    assert.strictEqual(webServer.getTeamMaxSeats('starter'), 0);
+    assert.strictEqual(webServer.getTeamMaxSeats('nope'), 0);
+  });
+
+  await t.test('inviteTeamMember enforces entitlement and email rules', () => {
+    setPlan('owner-a@test.com', 'pro');
+    assert.throws(() => webServer.inviteTeamMember('owner-a@test.com', 'm@test.com'), /active Power Seller subscription/);
+    setPlan('owner-b@test.com', 'power_seller');
+    assert.throws(() => webServer.inviteTeamMember('owner-b@test.com', 'not-an-email'), /valid member email/);
+    assert.throws(() => webServer.inviteTeamMember('owner-b@test.com', 'owner-b@test.com'), /cannot invite yourself/);
+    assert.throws(() => webServer.inviteTeamMember('owner-b@test.com', 'OWNER-B@test.com'), /cannot invite yourself/);
+  });
+
+  await t.test('invite -> accept -> workspace lifecycle with seat cap', () => {
+    setPlan('boss@test.com', 'power_seller');
+    resetTeam({});
+    const inv = webServer.inviteTeamMember('boss@test.com', 'Member@Test.com');
+    assert.strictEqual(inv.email, 'member@test.com'); // normalized
+    assert.strictEqual(inv.status, 'invited');
+    assert.throws(() => webServer.inviteTeamMember('boss@test.com', 'member@test.com'), /already on the team/);
+    // Fill the remaining seats (3 total).
+    webServer.inviteTeamMember('boss@test.com', 'm2@test.com');
+    webServer.inviteTeamMember('boss@test.com', 'm3@test.com');
+    assert.throws(() => webServer.inviteTeamMember('boss@test.com', 'm4@test.com'), /Seat limit reached/);
+    // Accept flips pending -> active; unknown invite throws.
+    const active = webServer.acceptTeamInvite('boss@test.com', 'member@test.com');
+    assert.strictEqual(active.status, 'active');
+    assert.throws(() => webServer.acceptTeamInvite('boss@test.com', 'ghost@test.com'), /No pending invite/);
+    // Workspace resolution.
+    assert.deepStrictEqual(webServer.getWorkspaceFor('boss@test.com'), { role: 'owner', owner: 'boss@test.com' });
+    assert.deepStrictEqual(webServer.getWorkspaceFor('member@test.com'), { role: 'member', owner: 'boss@test.com' });
+    assert.strictEqual(webServer.getWorkspaceFor('stranger@test.com'), null);
+    // Remove and leave.
+    assert.strictEqual(webServer.removeTeamMember('boss@test.com', 'm2@test.com'), true);
+    assert.throws(() => webServer.removeTeamMember('boss@test.com', 'm2@test.com'), /not on the team/);
+    assert.strictEqual(webServer.leaveTeam('member@test.com'), 'boss@test.com');
+    assert.strictEqual(webServer.getWorkspaceFor('member@test.com'), null);
+    assert.strictEqual(webServer.leaveTeam('member@test.com'), null);
+  });
+
+  await t.test('member seats go dormant when the owner subscription lapses', () => {
+    setPlan('lapse@test.com', 'power_seller');
+    resetTeam({});
+    webServer.inviteTeamMember('lapse@test.com', 'teammate@test.com');
+    webServer.acceptTeamInvite('lapse@test.com', 'teammate@test.com');
+    assert.deepStrictEqual(webServer.getWorkspaceFor('teammate@test.com'), { role: 'member', owner: 'lapse@test.com' });
+    // Owner downgrades to pro (or cancels): member workspace resolves to null.
+    setPlan('lapse@test.com', 'pro');
+    assert.strictEqual(webServer.getWorkspaceFor('teammate@test.com'), null);
+    // Owner is no longer an owner either.
+    assert.strictEqual(webServer.getWorkspaceFor('lapse@test.com'), null);
+  });
+
+  await t.test('Stripe webhook records plan from checkout metadata', async () => {
+    const testPort = 45921;
+    const server = webServer.startWebGuiServer(testPort);
+    resetBilling({});
+    try {
+      const eventObj = {
+        id: 'evt_w1d',
+        type: 'checkout.session.completed',
+        data: { object: {
+          customer_email: 'ps-buyer@test.com',
+          subscription: 'sub_ps_1',
+          metadata: { plan: 'power_seller' }
+        } }
+      };
+      const res = await fetch(`http://127.0.0.1:${testPort}/api/billing/webhook`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(eventObj)
+      });
+      assert.strictEqual(res.status, 200);
+      const billing = utils.readJsonFileSecure(billingDbPath, {});
+      assert.strictEqual(billing['ps-buyer@test.com'].premium, true);
+      assert.strictEqual(billing['ps-buyer@test.com'].plan, 'power_seller');
+      assert.deepStrictEqual(webServer.getWorkspaceFor('ps-buyer@test.com'), { role: 'owner', owner: 'ps-buyer@test.com' });
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test('POST /api/listings/import endpoint imports via HTTP with dryRun gate', async () => {
+    const testPort = 45922;
+    const server = webServer.startWebGuiServer(testPort);
+    resetHistory([]);
+    try {
+      const csv = 'sku,title,price\r\nHTTP-1,Http Item,12.5\r\n';
+      const bad = await fetch(`http://127.0.0.1:${testPort}/api/listings/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: 'not json'
+      });
+      assert.strictEqual(bad.status, 400);
+      const empty = await fetch(`http://127.0.0.1:${testPort}/api/listings/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({})
+      });
+      assert.strictEqual(empty.status, 400);
+      const dry = await fetch(`http://127.0.0.1:${testPort}/api/listings/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv, dryRun: true })
+      });
+      const dryData = await dry.json();
+      assert.strictEqual(dryData.success, true);
+      assert.strictEqual(dryData.valid, 1);
+      assert.deepStrictEqual(utils.readJsonFileSecure(config.historyPath, []), []);
+      const live = await fetch(`http://127.0.0.1:${testPort}/api/listings/import`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv })
+      });
+      const liveData = await live.json();
+      assert.strictEqual(liveData.success, true);
+      assert.strictEqual(liveData.imported, 1);
+      const history = utils.readJsonFileSecure(config.historyPath, []);
+      assert.strictEqual(history.length, 1);
+      assert.strictEqual(history[0].status, 'DRAFT');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  await t.test('GET /api/team requires login', async () => {
+    const testPort = 45923;
+    const server = webServer.startWebGuiServer(testPort);
+    try {
+      const res = await fetch(`http://127.0.0.1:${testPort}/api/team`);
+      assert.strictEqual(res.status, 401);
+      const data = await res.json();
+      assert.match(data.error, /Login required/);
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  // Restore pre-block state.
+  if (historyBackup === null) { try { fs.unlinkSync(config.historyPath); } catch (e) {} }
+  else fs.writeFileSync(config.historyPath, historyBackup, 'utf8');
+  if (teamBackup === null) { try { fs.unlinkSync(config.teamPath); } catch (e) {} }
+  else fs.writeFileSync(config.teamPath, teamBackup, 'utf8');
+  if (billingBackup === null) { try { fs.unlinkSync(billingDbPath); } catch (e) {} }
+  else fs.writeFileSync(billingDbPath, billingBackup, 'utf8');
+  if (originalGoogleClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
+  else process.env.GOOGLE_CLIENT_ID = originalGoogleClientId;
 });
