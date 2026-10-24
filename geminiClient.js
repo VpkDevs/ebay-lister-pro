@@ -3,9 +3,60 @@
  * @description Interfaces with the Google Gemini API to analyze product photos and generate optimized eBay listings.
  */
 
+const fs = require('fs');
 const config = require('./config');
 const utils = require('./utils');
 const ebayClient = require('./ebayClient');
+
+/**
+ * Retrieves up to 3 similar past listings from local history to act as few-shot style examples.
+ * @param {string} draftTitle - The temporary draft title from Pass 1.
+ * @param {number} [limit=3] - Max examples.
+ * @returns {string} Formatted text block with style examples.
+ */
+function getSimilarListingsFromHistory(draftTitle, limit = 3) {
+  try {
+    const historyPath = config.historyPath;
+    if (!fs.existsSync(historyPath)) return "";
+    const history = utils.readJsonFileSecure(historyPath, []);
+    if (history.length === 0) return "";
+
+    const draftTokens = String(draftTitle || '').toLowerCase()
+      .split(/\s+/)
+      .filter(t => t.length > 2 && !['and', 'the', 'for', 'with', 'new', 'used'].includes(t));
+
+    if (draftTokens.length === 0) return "";
+
+    const scored = history.map(item => {
+      let score = 0;
+      if (item.title) {
+        const itemTokens = item.title.toLowerCase().split(/\s+/);
+        for (const token of draftTokens) {
+          if (itemTokens.includes(token)) score++;
+        }
+      }
+      return { item, score };
+    }).filter(x => x.score > 0);
+
+    const topExamples = scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(x => x.item);
+
+    if (topExamples.length === 0) return "";
+
+    let styleCloningPrompt = "\nHere are examples of past successful listings in this store. Match their tone, level of detail, formatting style, and aspect key naming conventions:\n";
+    topExamples.forEach((ex, idx) => {
+      const descriptionText = ex.listingDetails?.description || ex.description || "";
+      const cleanDesc = descriptionText.replace(/<[^>]*>/g, '').slice(0, 300).trim();
+      styleCloningPrompt += `Example ${idx + 1}:\n- Title: ${ex.title}\n- Aspects: ${JSON.stringify(ex.listingDetails?.aspects || ex.aspects || {})}\n- Description: ${cleanDesc}\n\n`;
+    });
+    return styleCloningPrompt;
+  } catch (err) {
+    utils.logAudit("WARN", `Failed to build style cloning prompt from history: ${err.message}`);
+    return "";
+  }
+}
 
 /**
  * Runs the Gemini AI orchestration to generate listing details based on product photos and metadata.
@@ -14,10 +65,11 @@ const ebayClient = require('./ebayClient');
  * @param {string|null} [barcode] - Optional barcode or UPC number.
  * @param {string|null} [customNotes] - Optional custom notes/instructions from user.
  * @param {object|null} [upcData] - Optional verified catalog details from eBay catalog.
+ * @param {object} [options={}] - Persona and styling template choices.
  * @returns {Promise<object>} The validated and formatted listing object.
  * @throws {Error} If parameters are invalid or Gemini API call fails.
  */
-async function runAIOrchestration(photoBuffers, filenames, barcode = null, customNotes = null, upcData = null) {
+async function runAIOrchestration(photoBuffers, filenames, barcode = null, customNotes = null, upcData = null, options = {}) {
   // Parameter validation
   if (!Array.isArray(photoBuffers) || photoBuffers.length === 0) {
     throw new Error("Validation Error: photoBuffers must be a non-empty array of Buffers.");
@@ -43,6 +95,9 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
   const geminiKey = config.getGEMINI_API_KEY();
   if (!geminiKey) {
     throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");
+  }
+  if (geminiKey === "your_gemini_api_key_here") {
+    throw new Error("GEMINI_API_KEY is not configured. Please run 'node bootstrap.js' or set the GEMINI_API_KEY in your .env file to your actual Google AI Studio API key.");
   }
 
   const imageParts = photoBuffers.map((buffer, index) => {
@@ -136,13 +191,60 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
   let categoryId = "111422"; 
   let requiredAspects = [];
   let categorySuggestions = [];
+  let aspectsMetadata = {};
   const token = ebayClient.getAccessToken();
   if (token) {
     categorySuggestions = await ebayClient.getCategorySuggestions(draftTitle);
     if (categorySuggestions.length > 0) {
       categoryId = categorySuggestions[0].id;
       requiredAspects = await ebayClient.getRequiredCategoryAspects(categoryId);
+      aspectsMetadata = await ebayClient.getItemAspectsMetadata(categoryId);
     }
+  }
+
+  // 1. Fetch live market comps (Comps-Aware Copywriting)
+  let comps = null;
+  let compsPrompt = "";
+  try {
+    comps = await ebayClient.searchEbayComps(draftTitle, "USED_EXCELLENT");
+    if (comps && comps.avgPrice) {
+      compsPrompt = `\nLive eBay Market Comps Stats for similar items:\n- Min Price: $${comps.minPrice}\n- Max Price: $${comps.maxPrice}\n- Average Price: $${comps.avgPrice}\nUse this pricing context to suggest a competitive price. Mention in the description naturally why the item represents high value based on condition relative to these market benchmarks.`;
+    }
+  } catch (err) {
+    utils.logAudit("WARN", `Failed to retrieve comps for AI generation: ${err.message}`);
+  }
+
+  // 2. Query history examples (Style Cloning)
+  const styleCloningPrompt = getSimilarListingsFromHistory(draftTitle, 3);
+
+  // 3. Define Copywriting Persona Prompt
+  const persona = (options.persona || 'standard').toLowerCase();
+  let personaPrompt = "";
+  if (persona === 'luxury') {
+    personaPrompt = "Use a sophisticated, elegant, and prestigious copywriting tone suited for a high-end luxury store. Focus heavily on authenticity details, product care, craftsmanship, and premium quality. Avoid overhyped marketing buzzwords.";
+  } else if (persona === 'friendly') {
+    personaPrompt = "Use a warm, friendly, conversational, and welcoming tone. Speak directly to the buyer as a passionate small-business seller. Feel free to use a few matching emojis (e.g., ✨, 📦) sparingly.";
+  } else if (persona === 'vintage') {
+    personaPrompt = "Use an informative, detailed, and collector-oriented historical tone. Emphasize age, specific patina, authenticity markings, model history, and collectible value.";
+  } else if (persona === 'discount') {
+    personaPrompt = "Use a direct, bold, value-focused, and concise tone. Put specifications, condition, and value savings first. Minimize flowery prose.";
+  } else {
+    personaPrompt = "Use a professional, SEO-optimized, clear, and descriptive tone designed to maximize eBay search relevance.";
+  }
+
+  // 4. Define HTML Template Style Prompt
+  const template = (options.template || 'classic').toLowerCase();
+  let templatePrompt = "";
+  if (template === 'sleek_grid') {
+    templatePrompt = "Format the description as a modern, premium HTML layout. Start with an engaging overview paragraph. Then, render a beautifully styled specifications table using CSS (e.g. `<table style='width: 100%; border-collapse: collapse; margin: 20px 0;'>` with light horizontal borders, padding, and subtle alternate-row shading). Add clean bullet points for shipping and seller guarantees at the bottom.";
+  } else if (template === 'vintage_accordion') {
+    templatePrompt = "Format the description with visually separated accordion-style sections. Use clean styled title headers (e.g., `<div style='background: #f7f5f0; border-left: 4px solid #c8921a; padding: 8px 12px; margin: 15px 0 8px; font-weight: bold;'>📜 Historical Context & Overview</div>`) to divide the overview, exact condition details, collector's markings, and specifications into clean thematic blocks.";
+  } else if (template === 'minimalist') {
+    templatePrompt = "Format the description with an ultra-clean, minimalist layout emphasizing editorial typography and ample whitespace. Use simple paragraphs (`<p>`), bold inline labels, and clear heading hierarchies (e.g. `<h2>`, `<h3>`) with no tables, borders, or backgrounds. Keep it extremely spacious and readable.";
+  } else if (template === 'tech_dark') {
+    templatePrompt = "Format the description as a sleek, high-tech terminal layout. Use clean code-like font styles, visual layout divider rows (e.g., `=========================================`), clear nested specification lists, and tech indicators (like `[SPEC]`, `[CONDITION]`, `[SHIPPING]`) wrapped in structured paragraphs for a modern, state-of-the-art gadget reseller look.";
+  } else {
+    templatePrompt = "Format the description with a clean, classic retail structure. Start with a solid introductory paragraph highlighting product benefits, followed by a well-organized bulleted list (`<ul>`, `<li>`) detailing specifications, condition comments, and delivery parameters.";
   }
 
   const pass2Prompt = `
@@ -179,9 +281,13 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
     - "price": how confident you are suggestedPrice matches the current market.
     Rate below 0.8 whenever you are guessing from the photos alone. Do NOT default to 1.0.
     
+    Copywriting Vibe Rules: ${personaPrompt}
+    HTML Formatting Rules: ${templatePrompt}
+    ${compsPrompt}
+    ${styleCloningPrompt}
     ${customNotes ? `Important user notes/hints to include: "${customNotes}"` : ''}
     ${activeUpcData ? `Verified eBay Catalog Specifications: Brand=${activeUpcData.brand}, MPN=${activeUpcData.mpn}, Catalog Title=${activeUpcData.title}. Incorporate these specs.` : ''}
-    ${requiredAspects.length > 0 ? `For the 'aspects' object, you MUST include values for the following required taxonomy keys: ${JSON.stringify(requiredAspects)}` : ''}
+    ${Object.keys(aspectsMetadata).length > 0 ? `To help you populate the 'aspects' object correctly, here are the required/recommended aspect keys and their allowed standard values: \n${JSON.stringify(aspectsMetadata)}\nYou MUST choose values from these lists for the aspect keys.` : ''}
     ${tempTitleObj.detectedDefects && tempTitleObj.detectedDefects.length > 0 ? `Wear/Defects detected in pass 1: ${JSON.stringify(tempTitleObj.detectedDefects)}. Ensure these are listed in 'detectedDefects'.` : ''}
   `;
 
@@ -259,6 +365,12 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
   const finalObj = parseSafeJsonString(res2.candidates[0].content.parts[0].text);
   finalObj.categoryId = categoryId;
   validateAndFixListingSchema(finalObj);
+
+  // If comps was fetched, attach it to returned payload so backend gets latest stats
+  if (comps) {
+    finalObj.compsPriceInfo = comps;
+  }
+
   return finalObj;
 }
 
@@ -491,11 +603,106 @@ async function enhanceListingDraft({ title, description, context = null }) {
   };
 }
 
+/**
+ * Generates an optimized eBay listing draft from plain text keywords/title using Gemini.
+ * @param {string} keywords - Product search term/title.
+ * @returns {Promise<object>} Generated listing details matching the editor schema.
+ */
+async function generateListingFromKeywords(keywords) {
+  const geminiKey = config.getGEMINI_API_KEY();
+  if (!geminiKey) {
+    throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");
+  }
+
+  utils.logAudit("INFO", `Generating listing details from keywords via Gemini: "${keywords}"`);
+
+  const schema = {
+    type: "OBJECT",
+    properties: {
+      title: { type: "STRING", description: "Optimized title under 80 characters" },
+      brand: { type: "STRING", description: "Brand name of the product" },
+      model: { type: "STRING", description: "Model or part number of the product" },
+      suggestedPrice: { type: "NUMBER", description: "Typical market retail/resale price in USD, e.g., 24.99" },
+      condition: { type: "STRING", description: "One of: NEW, LIKE_NEW, USED_VERY_GOOD, USED_GOOD, USED_ACCEPTABLE" },
+      weightMajor: { type: "INTEGER", description: "Estimated package weight in pounds (lbs), default 1" },
+      weightMinor: { type: "INTEGER", description: "Estimated package weight in ounces (oz), default 0" },
+      packageLength: { type: "INTEGER", description: "Estimated package length in inches, default 10" },
+      packageWidth: { type: "INTEGER", description: "Estimated package width in inches, default 8" },
+      packageHeight: { type: "INTEGER", description: "Estimated package height in inches, default 6" },
+      description: { type: "STRING", description: "A detailed HTML or plain text eBay listing description including specifications and package contents" },
+      categoryId: { type: "STRING", description: "Estimated eBay leaf category ID matching this item, default to '111422'" },
+      aspects: { 
+        type: "OBJECT", 
+        description: "Key-value pairs of important product aspects like Brand, Model, Capacity, Color, Type, Size, UPC, MPN, etc.",
+        properties: {
+          Brand:       { type: "STRING" },
+          Model:       { type: "STRING" },
+          Type:        { type: "STRING" },
+          Color:       { type: "STRING" },
+          Size:        { type: "STRING" },
+          Capacity:    { type: "STRING" },
+          Material:    { type: "STRING" },
+          UPC:         { type: "STRING" },
+          MPN:         { type: "STRING" },
+          "Country/Region of Manufacture": { type: "STRING" },
+          "Active Ingredients": { type: "STRING" },
+          Flavor:      { type: "STRING" },
+          Scent:       { type: "STRING" },
+          "Unit Count": { type: "STRING" },
+          "Item Form":  { type: "STRING" }
+        }
+      }
+    },
+    required: ["title", "brand", "model", "suggestedPrice", "condition", "description", "categoryId", "aspects"]
+  };
+
+  const prompt = `
+    Generate a complete, professional eBay listing draft for the product: "${keywords}".
+    Based on the product name, estimate the correct specifications, typical size, color, brand, model, weight, dimensions, and the best matching eBay category ID.
+    Provide only a raw JSON matching the schema.
+  `;
+
+  const response = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{
+        parts: [{ text: prompt }]
+      }],
+      generationConfig: { 
+        responseMimeType: "application/json",
+        responseSchema: schema
+      }
+    })
+  });
+
+  const resData = await response.json();
+  if (!response.ok || !resData.candidates?.[0]?.content?.parts?.[0]?.text) {
+    throw new Error(`Gemini keyword listing generation failed: ${JSON.stringify(resData)}`);
+  }
+
+  const generated = parseSafeJsonString(resData.candidates[0].content.parts[0].text, null);
+  if (!generated) {
+    throw new Error("Failed to parse valid JSON listing draft from Gemini response.");
+  }
+  
+  // Set default values if missing
+  if (!generated.condition) generated.condition = "USED_GOOD";
+  if (typeof generated.suggestedPrice !== 'number') generated.suggestedPrice = 19.99;
+  if (!generated.title) generated.title = keywords;
+  if (!generated.description) generated.description = `eBay listing for ${keywords}`;
+  if (!generated.aspects) generated.aspects = {};
+  
+  return generated;
+}
+
+
 module.exports = {
   runAIOrchestration,
   parseSafeJsonString,
   validateAndFixListingSchema,
   // [WAVE1-C] AI listing enhancement mode (text polish, separate from photo->listing generation)
   buildEnhancePrompt,
-  enhanceListingDraft
+  enhanceListingDraft,
+  generateListingFromKeywords
 };

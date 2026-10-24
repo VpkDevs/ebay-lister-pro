@@ -243,7 +243,9 @@ async function fetchWithRetry(url, options = {}, retries = 3, delay = 1000) {
  */
 async function ebayFetch(url, options = {}) {
   const makeRequest = async () => {
-    const headers = Object.assign({}, options.headers, {
+    const headers = Object.assign({
+      "Accept-Language": "en-US"
+    }, options.headers, {
       "Authorization": `Bearer ${ebayAccessToken}`
     });
     return await fetchWithRetry(url, Object.assign({}, options, { headers }));
@@ -266,6 +268,21 @@ async function refreshEbayAccessToken() {
   const clientId = config.getEBAY_CLIENT_ID();
   const clientSecret = config.getEBAY_CLIENT_SECRET();
   const refreshToken = config.getEBAY_REFRESH_TOKEN();
+
+  if (!clientId || !clientSecret || !refreshToken) {
+    const errMsg = "Credentials missing. Run --bootstrap to configure your settings.";
+    utils.logAudit("FATAL", errMsg);
+    console.error(`Error: ${errMsg}`);
+    throw new OAuthRefreshError(errMsg);
+  }
+
+  const isPlaceholder = (val) => val.includes('your_ebay') || val === 'default';
+  if (isPlaceholder(clientId) || isPlaceholder(clientSecret) || isPlaceholder(refreshToken)) {
+    const errMsg = "eBay credentials are placeholder values. Run node bootstrap.js to configure.";
+    utils.logAudit("FATAL", errMsg);
+    console.error(`Error: ${errMsg}`);
+    throw new OAuthRefreshError(errMsg);
+  }
 
   if (clientId && clientSecret && refreshToken) {
     utils.logAudit("INFO", "Refreshing eBay Access Token using Client credentials.");
@@ -377,17 +394,28 @@ async function listPolicies() {
  * @param {string} [shippingOption=USPS_GROUND] - Shipping selector.
  * @param {string} [returnOption=NO_RETURNS] - Return policy selector.
  * @param {boolean} [immediatePay=true] - Immediate payment requirement toggle.
+ * @param {string} [shippingType=CALCULATED] - Shipping type ('CALCULATED' or 'FLAT').
  * @returns {Promise<{fulfillmentId: string, paymentId: string, returnId: string}>} Resolved Policy IDs.
  */
-async function getOrCreateListingPolicies(shippingOption = "USPS_GROUND", returnOption = "NO_RETURNS", immediatePay = true) {
-  utils.logAudit("INFO", `Enforcing listing policies on eBay: Shipping=${shippingOption}, Return=${returnOption}, ImmediatePay=${immediatePay}`);
+async function getOrCreateListingPolicies(shippingOption = "USPS_GROUND", returnOption = "NO_RETURNS", immediatePay = true, shippingType = "CALCULATED") {
+  utils.logAudit("INFO", `Enforcing listing policies on eBay: Shipping=${shippingOption}, Return=${returnOption}, ImmediatePay=${immediatePay}, ShippingType=${shippingType}`);
   
   let fulfillmentId = config.getEBAY_FULFILLMENT_POLICY_ID();
   let paymentId = config.getEBAY_PAYMENT_POLICY_ID();
   let returnId = config.getEBAY_RETURN_POLICY_ID();
 
-  if (fulfillmentId && paymentId && returnId && shippingOption === "USPS_GROUND" && returnOption === "NO_RETURNS" && immediatePay) {
-    return { fulfillmentId, paymentId, returnId };
+  const isFulfillmentCustom = /^\d+$/.test(String(shippingOption));
+  const isReturnCustom = /^\d+$/.test(String(returnOption));
+  const isPaymentCustom = /^\d+$/.test(String(immediatePay));
+
+  if (isFulfillmentCustom) fulfillmentId = String(shippingOption);
+  if (isReturnCustom) returnId = String(returnOption);
+  if (isPaymentCustom) paymentId = String(immediatePay);
+
+  if (!isFulfillmentCustom && !isReturnCustom && !isPaymentCustom) {
+    if (fulfillmentId && paymentId && returnId && shippingOption === "USPS_GROUND" && returnOption === "NO_RETURNS" && immediatePay && shippingType === "CALCULATED") {
+      return { fulfillmentId, paymentId, returnId };
+    }
   }
 
   const headers = {
@@ -396,149 +424,192 @@ async function getOrCreateListingPolicies(shippingOption = "USPS_GROUND", return
   };
 
   // 1. Return Policy
-  let returnPolicyName = "ListerReturnPolicy_NoReturns";
-  let returnsAccepted = false;
-  let returnPeriod = null;
-  let refundMethod = null;
-  let shippingCostPayer = null;
+  if (isReturnCustom) {
+    returnId = String(returnOption);
+  } else {
+    let returnPolicyName = "ListerReturnPolicy_NoReturns";
+    let returnsAccepted = false;
+    let returnPeriod = null;
+    let refundMethod = null;
+    let shippingCostPayer = null;
 
-  if (returnOption === "30_DAYS_BUYER_PAYS") {
-    returnPolicyName = "ListerReturnPolicy_30DaysBuyerPays";
-    returnsAccepted = true;
-    returnPeriod = { value: 30, unit: "DAY" };
-    refundMethod = "MONEY_BACK";
-    shippingCostPayer = "BUYER";
-  } else if (returnOption === "30_DAYS_FREE") {
-    returnPolicyName = "ListerReturnPolicy_30DaysFree";
-    returnsAccepted = true;
-    returnPeriod = { value: 30, unit: "DAY" };
-    refundMethod = "MONEY_BACK";
-    shippingCostPayer = "SELLER";
-  }
-
-  try {
-    const res = await ebayFetch("https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_US", { headers });
-    const data = await res.json();
-    const existing = (data.returnPolicies || []).find(p => p.name === returnPolicyName);
-    if (existing) {
-      returnId = existing.returnPolicyId;
-    } else {
-      const payload = {
-        name: returnPolicyName,
-        description: `Returns managed by Auto Lister: ${returnOption}`,
-        marketplaceId: "EBAY_US",
-        categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
-        returnsAccepted
-      };
-      if (returnsAccepted) {
-        payload.returnPeriod = returnPeriod;
-        payload.refundMethod = refundMethod;
-        payload.shippingCostPayer = shippingCostPayer;
-      }
-      const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/return_policy", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload)
-      });
-      const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(`Return policy creation failed: ${JSON.stringify(createData)}`);
-      returnId = createData.returnPolicyId;
+    if (returnOption === "30_DAYS_BUYER_PAYS") {
+      returnPolicyName = "ListerReturnPolicy_30DaysBuyerPays";
+      returnsAccepted = true;
+      returnPeriod = { value: 30, unit: "DAY" };
+      refundMethod = "MONEY_BACK";
+      shippingCostPayer = "BUYER";
+    } else if (returnOption === "30_DAYS_FREE") {
+      returnPolicyName = "ListerReturnPolicy_30DaysFree";
+      returnsAccepted = true;
+      returnPeriod = { value: 30, unit: "DAY" };
+      refundMethod = "MONEY_BACK";
+      shippingCostPayer = "SELLER";
     }
-  } catch (err) {
-    utils.logAudit("ERROR", `Failed to resolve return policy: ${err.message}`);
-    throw err;
+
+    try {
+      const res = await ebayFetch("https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_US", { headers });
+      const data = await res.json();
+      const existing = (data.returnPolicies || []).find(p => p.name === returnPolicyName);
+      if (existing) {
+        returnId = existing.returnPolicyId;
+      } else {
+        const payload = {
+          name: returnPolicyName,
+          description: `Returns managed by Auto Lister: ${returnOption}`,
+          marketplaceId: "EBAY_US",
+          categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
+          returnsAccepted
+        };
+        if (returnsAccepted) {
+          payload.returnPeriod = returnPeriod;
+          payload.refundMethod = refundMethod;
+          payload.shippingCostPayer = shippingCostPayer;
+        }
+        const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/return_policy", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload)
+        });
+        const createData = await createRes.json();
+        if (!createRes.ok) throw new Error(`Return policy creation failed: ${JSON.stringify(createData)}`);
+        returnId = createData.returnPolicyId;
+      }
+    } catch (err) {
+      utils.logAudit("WARN", `Failed to create return policy: ${err.message}. Falling back to first available account policy.`);
+      try {
+        const fbRes = await ebayFetch("https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_US", { headers });
+        const fbData = await fbRes.json();
+        const firstPolicy = (fbData.returnPolicies || [])[0];
+        if (firstPolicy) {
+          returnId = firstPolicy.returnPolicyId;
+          utils.logAudit("INFO", `Using existing return policy as fallback: ${returnId} (${firstPolicy.name})`);
+        } else {
+          throw new Error("No return policies exist on this eBay account.");
+        }
+      } catch (fbErr) {
+        throw new Error(`Failed to resolve any return policy: ${fbErr.message}`);
+      }
+    }
   }
 
   // 2. Shipping Policy
-  let shippingPolicyName = "ListerFulfillmentPolicy_USPSGround";
-  let carrier = "USPS";
-  let serviceCode = "US_USPSGroundAdvantage";
-  let costType = "CALCULATED";
+  if (isFulfillmentCustom) {
+    fulfillmentId = String(shippingOption);
+  } else {
+    let cleanType = shippingType === "FLAT" ? "FLAT" : "CALCULATED";
+    let shippingPolicyName = `ListerFulfillmentPolicy_USPSGround_${cleanType}`;
+    let carrier = "USPS";
+    let serviceCode = "US_USPSGroundAdvantage";
+    let costType = cleanType;
 
-  if (shippingOption === "USPS_PRIORITY") {
-    shippingPolicyName = "ListerFulfillmentPolicy_USPSPriority";
-    carrier = "USPS";
-    serviceCode = "US_USPSPriority";
-  } else if (shippingOption === "UPS_GROUND") {
-    shippingPolicyName = "ListerFulfillmentPolicy_UPSGround";
-    carrier = "UPS";
-    serviceCode = "US_UPSGround";
-  } else if (shippingOption === "FLAT_RATE_STANDARD") {
-    shippingPolicyName = "ListerFulfillmentPolicy_FlatStandard";
-    carrier = "USPS";
-    serviceCode = "US_USPSGroundAdvantage";
-    costType = "FLAT_RATE";
-  }
-
-  try {
-    const res = await ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers });
-    const data = await res.json();
-    const existing = (data.fulfillmentPolicies || []).find(p => p.name === shippingPolicyName);
-    if (existing) {
-      fulfillmentId = existing.fulfillmentPolicyId;
-    } else {
-      const payload = {
-        name: shippingPolicyName,
-        description: `Shipping managed by Auto Lister: ${shippingOption}`,
-        marketplaceId: "EBAY_US",
-        categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
-        handlingTime: { value: 1, unit: "DAY" },
-        shippingOptions: [{
-          optionType: "DOMESTIC",
-          costType,
-          shippingServices: [{
-            shippingCarrierCode: carrier,
-            shippingServiceCode: serviceCode,
-            buyerResponsibleForShippingFee: costType === "CALCULATED" ? true : false,
-            freeShipping: false
-          }]
-        }]
-      };
-      if (costType === "FLAT_RATE") {
-        payload.shippingOptions[0].shippingServices[0].shippingFee = { currency: "USD", value: "5.00" };
-      }
-      const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload)
-      });
-      const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(`Fulfillment policy creation failed: ${JSON.stringify(createData)}`);
-      fulfillmentId = createData.fulfillmentPolicyId;
+    if (shippingOption === "USPS_PRIORITY") {
+      shippingPolicyName = `ListerFulfillmentPolicy_USPSPriority_${cleanType}`;
+      carrier = "USPS";
+      serviceCode = "US_USPSPriority";
+    } else if (shippingOption === "UPS_GROUND") {
+      shippingPolicyName = `ListerFulfillmentPolicy_UPSGround_${cleanType}`;
+      carrier = "UPS";
+      serviceCode = "US_UPSGround";
     }
-  } catch (err) {
-    utils.logAudit("ERROR", `Failed to resolve fulfillment policy: ${err.message}`);
-    throw err;
+
+    try {
+      const res = await ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers });
+      const data = await res.json();
+      const existing = (data.fulfillmentPolicies || []).find(p => p.name === shippingPolicyName);
+      if (existing) {
+        fulfillmentId = existing.fulfillmentPolicyId;
+      } else {
+        const payload = {
+          name: shippingPolicyName,
+          description: `Fulfillment managed by Auto Lister: ${shippingOption} (${cleanType})`,
+          marketplaceId: "EBAY_US",
+          categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
+          handlingTime: { value: 1, unit: "DAY" },
+          shipToLocations: { regionGroups: [{ regionGroupId: "DOMESTIC" }] },
+          shippingOptions: [{
+            optionType: "DOMESTIC",
+            costType,
+            shippingServices: [{
+              sortOrder: 1,
+              shippingCarrierCode: carrier,
+              shippingServiceCode: serviceCode,
+              ...(costType === "FLAT" ? { shippingCost: { value: "5.00", currency: "USD" }, additionalShippingCost: { value: "0.00", currency: "USD" } } : {})
+            }]
+          }]
+        };
+        const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload)
+        });
+        const createData = await createRes.json();
+        if (!createRes.ok) throw new Error(`Fulfillment policy creation failed: ${JSON.stringify(createData)}`);
+        fulfillmentId = createData.fulfillmentPolicyId;
+      }
+    } catch (err) {
+      utils.logAudit("WARN", `Failed to create fulfillment policy: ${err.message}. Falling back to first available account policy.`);
+      try {
+        const fbRes = await ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers });
+        const fbData = await fbRes.json();
+        const firstPolicy = (fbData.fulfillmentPolicies || [])[0];
+        if (firstPolicy) {
+          fulfillmentId = firstPolicy.fulfillmentPolicyId;
+          utils.logAudit("INFO", `Using existing fulfillment policy as fallback: ${fulfillmentId} (${firstPolicy.name})`);
+        } else {
+          throw new Error("No fulfillment policies exist on this eBay account.");
+        }
+      } catch (fbErr) {
+        throw new Error(`Failed to resolve any fulfillment policy: ${fbErr.message}`);
+      }
+    }
   }
 
   // 3. Payment Policy
-  const paymentPolicyName = immediatePay ? "ListerPaymentPolicy_Immediate" : "ListerPaymentPolicy_Standard";
-  try {
-    const res = await ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US", { headers });
-    const data = await res.json();
-    const existing = (data.paymentPolicies || []).find(p => p.name === paymentPolicyName);
-    if (existing) {
-      paymentId = existing.paymentPolicyId;
-    } else {
-      const payload = {
-        name: paymentPolicyName,
-        description: `Payment managed by Auto Lister. Immediate Pay: ${immediatePay}`,
-        marketplaceId: "EBAY_US",
-        categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
-        immediatePayment: immediatePay
-      };
-      const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy", {
-        method: "POST",
-        headers,
-        body: JSON.stringify(payload)
-      });
-      const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(`Payment policy creation failed: ${JSON.stringify(createData)}`);
-      paymentId = createData.paymentPolicyId;
+  if (isPaymentCustom) {
+    paymentId = String(immediatePay);
+  } else {
+    const isImmediate = immediatePay === true || String(immediatePay) === 'true';
+    const paymentPolicyName = isImmediate ? "ListerPaymentPolicy_Immediate" : "ListerPaymentPolicy_Standard";
+    try {
+      const res = await ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US", { headers });
+      const data = await res.json();
+      const existing = (data.paymentPolicies || []).find(p => p.name === paymentPolicyName);
+      if (existing) {
+        paymentId = existing.paymentPolicyId;
+      } else {
+        const payload = {
+          name: paymentPolicyName,
+          description: `Payment managed by Auto Lister. Immediate Pay: ${isImmediate}`,
+          marketplaceId: "EBAY_US",
+          categoryTypes: [{ name: "ALL_EXCLUDING_MOTORS_VEHICLES", default: true }],
+          immediatePayment: isImmediate
+        };
+        const createRes = await ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy", {
+          method: "POST",
+          headers,
+          body: JSON.stringify(payload)
+        });
+        const createData = await createRes.json();
+        if (!createRes.ok) throw new Error(`Payment policy creation failed: ${JSON.stringify(createData)}`);
+        paymentId = createData.paymentPolicyId;
+      }
+    } catch (err) {
+      utils.logAudit("WARN", `Failed to create payment policy: ${err.message}. Falling back to first available account policy.`);
+      try {
+        const fbRes = await ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US", { headers });
+        const fbData = await fbRes.json();
+        const firstPolicy = (fbData.paymentPolicies || [])[0];
+        if (firstPolicy) {
+          paymentId = firstPolicy.paymentPolicyId;
+          utils.logAudit("INFO", `Using existing payment policy as fallback: ${paymentId} (${firstPolicy.name})`);
+        } else {
+          throw new Error("No payment policies exist on this eBay account.");
+        }
+      } catch (fbErr) {
+        throw new Error(`Failed to resolve any payment policy: ${fbErr.message}`);
+      }
     }
-  } catch (err) {
-    utils.logAudit("ERROR", `Failed to resolve payment policy: ${err.message}`);
-    throw err;
   }
 
   return { fulfillmentId, paymentId, returnId };
@@ -564,6 +635,81 @@ async function getRequiredCategoryAspects(categoryId) {
       .map(a => a.localizedAspectName);
   } catch (err) {
     return [];
+  }
+}
+
+/**
+ * Retrieves required and recommended aspects and their allowed values lists from taxonomy.
+ * @param {string} categoryId - Target category.
+ * @returns {Promise<object>} Map of aspects metadata.
+ */
+async function getItemAspectsMetadata(categoryId) {
+  try {
+    const url = `https://api.ebay.com/commerce/taxonomy/v1/category_tree/0/get_item_aspects_for_category?category_id=${categoryId}`;
+    const response = await ebayFetch(url, {
+      headers: { "Accept": "application/json" }
+    });
+    if (!response.ok) return {};
+    
+    const data = await response.json();
+    const aspects = data.aspects || [];
+    const metadata = {};
+    for (const a of aspects) {
+      const name = a.localizedAspectName;
+      const isRequired = a.aspectConstraint?.aspectRequired === true;
+      const allowedValues = (a.aspectValues || []).map(v => v.localizedValue);
+      metadata[name] = {
+        required: isRequired,
+        allowedValues: allowedValues.slice(0, 15)
+      };
+    }
+    return metadata;
+  } catch (err) {
+    return {};
+  }
+}
+
+/**
+ * Retrieves the item condition policies for a specific category.
+ * @param {string} categoryId - Target category.
+ * @returns {Promise<{conditionId: string, label: string}[]>} List of conditions.
+ */
+async function getItemConditionPolicies(categoryId) {
+  try {
+    await refreshEbayAccessToken();
+    const url = `https://api.ebay.com/sell/metadata/v1/marketplace/EBAY_US/item_condition_policy?filter=categoryIds:{${categoryId}}`;
+    const response = await ebayFetch(url, {
+      headers: { 
+        "Accept": "application/json", 
+        "Authorization": `Bearer ${ebayAccessToken}` 
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`Metadata API returned status ${response.status}`);
+    }
+    const data = await response.json();
+    const policy = (data.itemConditionPolicies || [])[0];
+    if (policy && policy.itemConditions) {
+      return policy.itemConditions.map(c => ({
+        conditionId: c.conditionId,
+        label: c.conditionDisplayName || c.conditionId
+      }));
+    }
+    return [];
+  } catch (err) {
+    utils.logAudit("WARN", `Failed to fetch condition policies for category ${categoryId}: ${err.message}`);
+    return [
+      { conditionId: "1000", label: "New" },
+      { conditionId: "1500", label: "New other (see details)" },
+      { conditionId: "1750", label: "New with defects" },
+      { conditionId: "2000", label: "Certified Refurbished" },
+      { conditionId: "2500", label: "Seller Refurbished" },
+      { conditionId: "3000", label: "Used" },
+      { conditionId: "4000", label: "Very Good" },
+      { conditionId: "5000", label: "Good" },
+      { conditionId: "6000", label: "Acceptable" },
+      { conditionId: "7000", label: "For parts or not working" }
+    ];
   }
 }
 
@@ -695,7 +841,9 @@ async function endListingOnEbay(sku, offerId = null) {
         item.status = "ENDED";
         utils.writeJsonFileSecure(config.historyPath, history);
       }
-    } catch (e) {}
+    } catch (e) {
+      utils.logAudit("WARN", `Failed to update local history file after ending listing ${sku}: ${e.message}`);
+    }
     
     return res.listingId;
   } catch (err) {
@@ -1122,15 +1270,451 @@ async function sendOffersToWatchers(itemId, discountPercentage = 10) {
   return data;
 }
 
+/**
+ * Fetches active business policies from the seller's eBay account.
+ * @returns {Promise<{fulfillment: Array, return: Array, payment: Array}>}
+ */
+async function getEbayPolicies() {
+  await refreshEbayAccessToken();
+  const [fRes, rRes, pRes] = await Promise.all([
+    ebayFetch("https://api.ebay.com/sell/account/v1/fulfillment_policy?marketplace_id=EBAY_US", { headers: { "Accept": "application/json" } }),
+    ebayFetch("https://api.ebay.com/sell/account/v1/return_policy?marketplace_id=EBAY_US", { headers: { "Accept": "application/json" } }),
+    ebayFetch("https://api.ebay.com/sell/account/v1/payment_policy?marketplace_id=EBAY_US", { headers: { "Accept": "application/json" } })
+  ]);
+
+  let fulfillment = [];
+  let returns = [];
+  let payment = [];
+
+  try {
+    if (fRes && fRes.ok) {
+      const data = await fRes.json();
+      fulfillment = data.fulfillmentPolicies || [];
+    }
+  } catch (e) {
+    utils.logAudit("WARN", `Failed to parse eBay fulfillment policies: ${e.message}`);
+  }
+
+  try {
+    if (rRes && rRes.ok) {
+      const data = await rRes.json();
+      returns = data.returnPolicies || [];
+    }
+  } catch (e) {
+    utils.logAudit("WARN", `Failed to parse eBay return policies: ${e.message}`);
+  }
+
+  try {
+    if (pRes && pRes.ok) {
+      const data = await pRes.json();
+      payment = data.paymentPolicies || [];
+    }
+  } catch (e) {
+    utils.logAudit("WARN", `Failed to parse eBay payment policies: ${e.message}`);
+  }
+
+  return { fulfillment, return: returns, payment };
+}
+
+/**
+ * Sanitizes and optimizes an eBay Inventory Item payload.
+ * Enforces title length < 80 chars, cleans bad characters, casts dimensions/weights to strict numeric values.
+ */
+function sanitizeAndOptimizeInventoryItem(item) {
+  if (!item || !item.product) return item;
+
+  // 1. Smart Title Optimization (Max 80 chars, clean characters)
+  let title = String(item.product.title || "Generic Product").trim();
+  
+  // Remove prohibited characters in eBay titles
+  title = title.replace(/[!@#$%^*()_+={}[\]|\\:;"'<>,.?/~`]/g, ' ');
+  title = title.replace(/\s+/g, ' ').trim();
+
+  if (title.length > 80) {
+    // Attempt smart truncation: try to remove filler words first
+    const fillers = ["new", "with", "for", "free", "shipping", "and", "the", "brand", "original"];
+    let words = title.split(' ');
+    words = words.filter(w => !fillers.includes(w.toLowerCase()) || words.length < 8);
+    
+    title = words.join(' ');
+    if (title.length > 80) {
+      title = title.slice(0, 77) + "...";
+    }
+  }
+  item.product.title = title;
+
+  // 2. Aspect Normalization (Title case keys & list value format)
+  if (item.product.aspects) {
+    const cleanAspects = {};
+    for (const [key, value] of Object.entries(item.product.aspects)) {
+      const cleanKey = key.trim().replace(/\w\S*/g, txt => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+      
+      let cleanVal = Array.isArray(value) ? value : [value];
+      cleanVal = cleanVal.map(v => String(v).trim()).filter(v => v.length > 0);
+      
+      if (cleanVal.length > 0) {
+        cleanAspects[cleanKey] = cleanVal;
+      }
+    }
+    item.product.aspects = cleanAspects;
+  }
+
+  // 3. Weight and Dimension Schema Cast
+  if (item.packageWeightAndSize) {
+    const dims = item.packageWeightAndSize.dimensions || {};
+    dims.length = Math.max(1, Math.round(parseFloat(dims.length) || 12));
+    dims.width = Math.max(1, Math.round(parseFloat(dims.width) || 10));
+    dims.height = Math.max(1, Math.round(parseFloat(dims.height) || 6));
+    
+    const weight = item.packageWeightAndSize.weight || {};
+    weight.value = Math.max(1, Math.round(parseFloat(weight.value) || 16));
+  }
+
+  return item;
+}
+
+/**
+ * Automatically enriches missing required aspects for a category.
+ */
+async function enrichRequiredAspects(item, categoryId) {
+  if (!item || !item.product || !categoryId) return item;
+  
+  if (!item.product.aspects) {
+    item.product.aspects = {};
+  }
+
+  try {
+    const requiredList = await getRequiredCategoryAspects(categoryId);
+    for (const reqAspect of requiredList) {
+      // Key case-insensitive check
+      const exists = Object.keys(item.product.aspects).some(k => k.toLowerCase() === reqAspect.toLowerCase());
+      if (!exists) {
+        // Populate standard default value
+        item.product.aspects[reqAspect] = ["Does Not Apply"];
+        utils.logAudit("INFO", `Auto-enriched missing required aspect "${reqAspect}" with "Does Not Apply" for category ${categoryId}`);
+      }
+    }
+  } catch (err) {
+    utils.logAudit("WARN", `Failed to auto-enrich required aspects: ${err.message}`);
+  }
+  return item;
+}
+
+/**
+ * Promotes an active eBay listing using Promoted Listings Standard campaign.
+ * Automatically finds or creates a default campaign and adds the listing/sku to it.
+ * @param {string} listingId - Active listing ID.
+ * @param {string} sku - Product SKU.
+ * @param {number} [bidPercentage=2.0] - Promotion ad rate percentage.
+ */
+async function promoteListingStandard(listingId, sku, bidPercentage = 2.0) {
+  try {
+    utils.logAudit("INFO", `Attempting to promote listing ${listingId} (SKU: ${sku}) at ${bidPercentage}%`);
+    await refreshEbayAccessToken();
+    
+    const headers = {
+      "Accept": "application/json",
+      "Content-Type": "application/json"
+    };
+    
+    // 1. Get campaigns
+    const campaignsRes = await ebayFetch("https://api.ebay.com/sell/marketing/v1/ad_campaign?campaign_status=RUNNING", { headers });
+    if (!campaignsRes.ok) {
+      utils.logAudit("WARN", `Failed to fetch running ad campaigns. Status: ${campaignsRes.status}`);
+      return;
+    }
+    
+    const campaignsData = await campaignsRes.json();
+    let campaign = (campaignsData.campaigns || []).find(c => c.campaignName === "ListAI Auto-Promote Campaign");
+    let campaignId = campaign ? campaign.campaignId : null;
+    
+    // 2. Create campaign if missing
+    if (!campaignId) {
+      const today = new Date();
+      const nextYear = new Date(today.getFullYear() + 2, today.getMonth(), today.getDate());
+      
+      const campaignPayload = {
+        campaignName: "ListAI Auto-Promote Campaign",
+        startDate: today.toISOString(),
+        endDate: nextYear.toISOString(),
+        fundingModel: {
+          fundingType: "COST_PER_SALE",
+          bidPercentage: String(parseFloat(bidPercentage) || 2.0)
+        },
+        marketplaceId: "EBAY_US"
+      };
+      
+      const createRes = await ebayFetch("https://api.ebay.com/sell/marketing/v1/ad_campaign", {
+        method: "POST",
+        headers,
+        body: JSON.stringify(campaignPayload)
+      });
+      
+      if (createRes.ok) {
+        const location = createRes.headers.get("Location");
+        if (location) {
+          campaignId = location.split("/").pop();
+        }
+      }
+      
+      if (!campaignId) {
+        utils.logAudit("WARN", "Could not create standard promoted campaign. Skipping ad placement.");
+        return;
+      }
+    }
+    
+    // 3. Create ad in the campaign
+    const adPayload = {
+      listingId: String(listingId)
+    };
+    
+    const adRes = await ebayFetch(`https://api.ebay.com/sell/marketing/v1/ad_campaign/${campaignId}/ad`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(adPayload)
+    });
+    
+    if (adRes.ok) {
+      utils.logAudit("INFO", `Successfully promoted listing ${listingId} (SKU: ${sku}) under campaign ${campaignId}`);
+    } else {
+      const errData = await adRes.json().catch(() => ({}));
+      utils.logAudit("WARN", `Failed to add ad to campaign: ${JSON.stringify(errData)}`);
+    }
+  } catch (err) {
+    utils.logAudit("ERROR", `Failed to promote listing standard: ${err.message}`);
+  }
+}
+
+/**
+ * Genericizes a branded inventory item if it matches a VeRO brand.
+ * Rewrites title to "Replacement/Compatible with [Brand] [Model]" and changes brand to "Unbranded/Generic".
+ * @param {object} item - The inventory item payload.
+ * @param {boolean} [enabled=true] - Whether to perform the genericization.
+ * @returns {object} The genericized inventory item.
+ */
+function genericizeVeroBrandListing(item, enabled = true) {
+  if (!enabled || !item || !item.product) return item;
+  
+  const brand = String(item.product.brand || '').trim();
+  if (!brand) return item;
+
+  const veroBrands = config.getVERO_BRANDS();
+  const isVero = veroBrands.includes(brand.toLowerCase());
+  
+  if (isVero) {
+    utils.logAudit("INFO", `VeRO brand genericizer matched brand: "${brand}". Rewriting item properties.`);
+    
+    item.product.brand = "Unbranded/Generic";
+    
+    let title = String(item.product.title || '').trim();
+    const brandRegex = new RegExp(`^\\b${brand}\\b`, 'i');
+    if (brandRegex.test(title)) {
+      title = title.replace(brandRegex, '').trim();
+    }
+    
+    const compatiblePrefix = `Compatible with ${brand}`;
+    if (!title.toLowerCase().includes(compatiblePrefix.toLowerCase())) {
+      title = `${compatiblePrefix} ${title}`;
+    }
+    
+    if (title.length > 80) {
+      title = title.slice(0, 77) + "...";
+    }
+    item.product.title = title;
+    
+    if (item.product.aspects) {
+      for (const key of Object.keys(item.product.aspects)) {
+        if (key.toLowerCase() === 'brand') {
+          item.product.aspects[key] = ["Unbranded/Generic"];
+        }
+      }
+    }
+  }
+  
+  return item;
+}
+
+/**
+ * Uploads a local binary image to eBay Picture Services (EPS) using the Trading API.
+ * Returns the permanent eBay-hosted URL.
+ * @param {string} imagePath - Path to local image file.
+ * @returns {Promise<string>} Permanent eBay image URL.
+ */
+async function uploadImageToEPS(imagePath) {
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    utils.logAudit("INFO", `Uploading ${path.basename(imagePath)} directly to eBay Picture Services (EPS)`);
+    await refreshEbayAccessToken();
+
+    const fileBuffer = fs.readFileSync(imagePath);
+    const base64Data = fileBuffer.toString("base64");
+    const filename = path.basename(imagePath).replace(/[^a-zA-Z0-9]/g, '');
+
+    const xmlPayload = `<?xml version="1.0" encoding="utf-8"?>
+<UploadSiteHostedPicturesRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <RequesterCredentials>
+    <eBayAuthToken>${ebayAccessToken}</eBayAuthToken>
+  </RequesterCredentials>
+  <PictureName>${filename}</PictureName>
+  <PictureSet>Supersize</PictureSet>
+  <Base64BinaryValue>${base64Data}</Base64BinaryValue>
+</UploadSiteHostedPicturesRequest>`;
+
+    const headers = {
+      "X-EBAY-API-COMPATIBILITY-LEVEL": "1081",
+      "X-EBAY-API-CALL-NAME": "UploadSiteHostedPictures",
+      "X-EBAY-API-SITEID": "0",
+      "Content-Type": "text/xml"
+    };
+
+    const response = await fetch("https://api.ebay.com/ws/api.dll", {
+      method: "POST",
+      headers,
+      body: xmlPayload
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`EPS HTTP ${response.status}: ${text}`);
+    }
+
+    const ackMatch = text.match(/<Ack>(.*?)<\/Ack>/);
+    const ack = ackMatch ? ackMatch[1] : "";
+    if (ack !== "Success" && ack !== "Warning") {
+      const errorMatch = text.match(/<LongMessage>(.*?)<\/LongMessage>/);
+      const errMsg = errorMatch ? errorMatch[1] : "Unknown EPS error";
+      throw new Error(`EPS API Error: ${errMsg}`);
+    }
+
+    const urlMatch = text.match(/<FullURL>(.*?)<\/FullURL>/);
+    if (!urlMatch) {
+      throw new Error("EPS response did not contain FullURL");
+    }
+
+    const ebayUrl = urlMatch[1];
+    utils.logAudit("INFO", `Successfully uploaded to EPS: ${ebayUrl}`);
+    return ebayUrl;
+  } catch (err) {
+    utils.logAudit("ERROR", `EPS Upload Failed: ${err.message}.`);
+    throw err;
+  }
+}
+
+/**
+ * Fetches campaign summaries from eBay marketing API.
+ * @returns {Promise<object>} Active campaigns and performance stats.
+ */
+async function getMarketingSummary() {
+  try {
+    await refreshEbayAccessToken();
+    const headers = { "Accept": "application/json" };
+    const res = await ebayFetch("https://api.ebay.com/sell/marketing/v1/ad_campaign", { headers });
+    if (!res.ok) return { campaigns: [] };
+    return await res.json();
+  } catch (err) {
+    utils.logAudit("WARN", `Failed to fetch marketing summaries: ${err.message}`);
+    return { campaigns: [] };
+  }
+}
+
+/**
+ * Fetches a single item's details from the eBay Browse API.
+ * Useful for "Sell Similar" copy-listing workflows.
+ * @param {string} itemId - The eBay Item ID (e.g., 'v1|123456789012|0' or just '123456789012').
+ * @returns {Promise<object>} Parsed product details.
+ */
+async function getItemFromBrowse(itemId) {
+  try {
+    await refreshEbayAccessToken();
+    let formattedId = itemId;
+    if (/^\d+$/.test(itemId)) {
+      formattedId = `v1|${itemId}|0`;
+    }
+    const url = `https://api.ebay.com/buy/browse/v1/item/${encodeURIComponent(formattedId)}`;
+    const headers = { "Accept": "application/json" };
+    const res = await ebayFetch(url, { headers });
+    if (!res.ok) {
+      throw new Error(`Browse API returned status ${res.status}`);
+    }
+    return await res.json();
+  } catch (err) {
+    utils.logAudit("ERROR", `Failed to get item details for copy-listing: ${err.message}`);
+    throw err;
+  }
+}
+
+/**
+ * Searches eBay for the best matching item and returns its 12-digit Item ID.
+ * @param {string} keywords - Plain text keywords (e.g. title).
+ * @returns {Promise<string|null>} 12-digit eBay Item ID or null if not found.
+ */
+async function searchItemIdByKeywords(keywords) {
+  try {
+    await refreshEbayAccessToken();
+    utils.logAudit("INFO", `Searching eBay Browse API for keywords: "${keywords}"`);
+    const url = `https://api.ebay.com/buy/browse/v1/item_summary/search?q=${encodeURIComponent(keywords)}&limit=1`;
+    const headers = {
+      "Accept": "application/json",
+      "Content-Type": "application/json"
+    };
+    const res = await ebayFetch(url, { headers });
+    // 403/401 means the refresh token doesn't have buy.browse scope — cleanly return null
+    // so the caller falls through to Gemini AI generation without throwing
+    if (res.status === 403 || res.status === 401) {
+      utils.logAudit("INFO", `Browse API returned ${res.status} for keyword search (scope not granted). Will use Gemini AI fallback.`);
+      return null;
+    }
+    if (!res.ok) {
+      throw new Error(`Browse API search returned status ${res.status}`);
+    }
+    const data = await res.json();
+    const items = data.itemSummaries || [];
+    if (items.length > 0 && items[0].itemId) {
+      const match = items[0].itemId.match(/(\d{11,13})/);
+      return match ? match[1] : null;
+    }
+    return null;
+  } catch (err) {
+    utils.logAudit("WARN", `Browse API keyword search failed for "${keywords}": ${err.message}. Gemini fallback will be used.`);
+    return null; // Always return null so caller falls back to Gemini cleanly
+  }
+}
+
+
+/**
+ * Creates or updates an inventory location (merchant ship-from address).
+ * @param {string} locationKey - Merchant location key.
+ * @param {object} locationDetails - Location payload.
+ * @returns {Promise<any>} Response.
+ */
+async function createInventoryLocation(locationKey, locationDetails) {
+  return await ebayRequest(`/location/${encodeURIComponent(locationKey)}`, "PUT", locationDetails);
+}
+
+/**
+ * Gets details of a specific inventory location.
+ * @param {string} locationKey - Merchant location key.
+ * @returns {Promise<any>} Response.
+ */
+async function getInventoryLocation(locationKey) {
+  return await ebayRequest(`/location/${encodeURIComponent(locationKey)}`, "GET");
+}
+
 module.exports = {
   getAccessToken,
   setAccessToken,
+  sanitizeAndOptimizeInventoryItem,
+  enrichRequiredAspects,
+  promoteListingStandard,
+  genericizeVeroBrandListing,
   fetchWithRetry,
   refreshEbayAccessToken,
   ebayRequest,
   listPolicies,
   getOrCreateListingPolicies,
   getRequiredCategoryAspects,
+  getItemAspectsMetadata,
   getCategorySuggestions,
   suggestCategory,
   lookupUPCOnEbay,
@@ -1142,5 +1726,14 @@ module.exports = {
   resetCircuitBreaker,
   runDailyRepricer,
   findUpcFromComps,
-  sendOffersToWatchers
+  sendOffersToWatchers,
+  getEbayPolicies,
+  uploadImageToEPS,
+  getMarketingSummary,
+  getItemFromBrowse,
+  searchItemIdByKeywords,
+  createInventoryLocation,
+  getInventoryLocation,
+  getItemConditionPolicies
 };
+

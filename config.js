@@ -95,6 +95,8 @@ module.exports = {
   getEBAY_CLIENT_SECRET: () => process.env.EBAY_CLIENT_SECRET,
   /** @returns {string|undefined} */
   getEBAY_REFRESH_TOKEN: () => process.env.EBAY_REFRESH_TOKEN,
+  /** @returns {string|undefined} */
+  getEBAY_RUNAME: () => process.env.EBAY_RUNAME,
   /** @returns {string} */
   getEBAY_LOCATION_KEY: () => process.env.EBAY_LOCATION_KEY || "default",
   /** @returns {string|undefined} */
@@ -134,7 +136,10 @@ module.exports = {
   /** @returns {string} */
   getAPI_KEY: () => process.env.API_KEY || "lister-secret-key-12345",
   /** @returns {string|undefined} */
-  getWOOCOMMERCE_URL: () => process.env.WOOCOMMERCE_URL,
+  getWOOCOMMERCE_URL: () => {
+    const url = process.env.WOOCOMMERCE_URL;
+    return url ? url.replace(/\/$/, '') : undefined;
+  },
   /** @returns {string|undefined} */
   getWOOCOMMERCE_KEY: () => process.env.WOOCOMMERCE_KEY,
   /** @returns {string|undefined} */
@@ -143,6 +148,8 @@ module.exports = {
   getETSY_SHOP_ID: () => process.env.ETSY_SHOP_ID,
   /** @returns {string|undefined} */
   getETSY_ACCESS_TOKEN: () => process.env.ETSY_ACCESS_TOKEN,
+  /** @returns {string|undefined} Etsy Open API key (falls back to EBAY_CLIENT_ID for legacy .env setups) */
+  getETSY_CLIENT_ID: () => process.env.ETSY_CLIENT_ID || process.env.EBAY_CLIENT_ID,
   /** @returns {string|undefined} */
   getWATERMARK_TEXT: () => process.env.WATERMARK_TEXT,
   // [WAVE1-C] Discogs personal access token for barcode search on music items.

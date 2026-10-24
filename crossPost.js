@@ -12,6 +12,93 @@ const ebayClient = require('./ebayClient');
 
 let shopifyLocationId = null;
 
+const VALID_PLATFORMS = ['shopify', 'woocommerce', 'etsy'];
+const MAX_DLQ_ATTEMPTS = 10;
+const CIRCUIT_LIMIT = 5;
+const DLQ_CHUNK_SIZE = 3;
+
+function getRequiredBackoffMs(attempts) {
+  const safeAttempts = Math.max(1, attempts || 1);
+  return Math.min(Math.pow(2, safeAttempts - 1) * 2 * 60 * 1000, 24 * 60 * 60 * 1000);
+}
+
+function sanitizeListingForDlq(listing) {
+  if (!listing || typeof listing !== 'object') {
+    throw new Error('Invalid listing payload for DLQ');
+  }
+  const title = String(listing.title || 'Untitled').replace(/\s+/g, ' ').trim().slice(0, 200);
+  const description = String(listing.description || '').slice(0, 50000);
+  const suggestedPrice = parseFloat(listing.suggestedPrice);
+  if (isNaN(suggestedPrice) || suggestedPrice <= 0) {
+    throw new Error('Invalid suggestedPrice for DLQ entry');
+  }
+  return {
+    title,
+    description,
+    suggestedPrice,
+    brand: String(listing.brand || 'Generic').slice(0, 100),
+    model: String(listing.model || 'Product').slice(0, 100),
+    condition: String(listing.condition || 'NEW').slice(0, 50)
+  };
+}
+
+function sanitizeImageUrlsForDlq(imageUrls) {
+  if (!Array.isArray(imageUrls)) return [];
+  return imageUrls
+    .filter(url => typeof url === 'string' && /^https?:\/\//i.test(url.trim()))
+    .map(url => url.trim())
+    .slice(0, 24);
+}
+
+function assertValidPlatform(platform) {
+  if (!VALID_PLATFORMS.includes(platform)) {
+    throw new Error(`Invalid platform: ${platform}`);
+  }
+}
+
+function assertValidSku(sku) {
+  if (!sku || typeof sku !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(sku)) {
+    throw new Error('Invalid SKU format');
+  }
+}
+
+function enrichDlqJob(job, now = Date.now()) {
+  const attempts = job.attempts || 1;
+  const jobAge = now - new Date(job.timestamp).getTime();
+  const requiredBackoff = getRequiredBackoffMs(attempts);
+  const retryInMs = Math.max(0, requiredBackoff - jobAge);
+  let status = 'ready';
+  if (job.exhausted || attempts >= MAX_DLQ_ATTEMPTS) {
+    status = 'exhausted';
+  } else if (jobAge < requiredBackoff) {
+    status = 'backing_off';
+  }
+  return {
+    ...job,
+    status,
+    retryInMs,
+    retryAt: status === 'backing_off' ? new Date(now + retryInMs).toISOString() : null,
+    maxAttempts: MAX_DLQ_ATTEMPTS
+  };
+}
+
+async function getDlqEntries() {
+  const dlq = await utils.readJsonFileSecureAsync(config.dlqPath, []);
+  const now = Date.now();
+  return dlq.map(job => enrichDlqJob(job, now));
+}
+
+async function getDlqSummary() {
+  const entries = await getDlqEntries();
+  return {
+    total: entries.length,
+    ready: entries.filter(e => e.status === 'ready').length,
+    backingOff: entries.filter(e => e.status === 'backing_off').length,
+    exhausted: entries.filter(e => e.status === 'exhausted').length,
+    maxAttempts: MAX_DLQ_ATTEMPTS
+  };
+}
+
 /**
  * Direct Shopify cross-post without automatic DLQ handling.
  */
@@ -39,6 +126,16 @@ async function crossPostToShopifyDirect(finalListing, imageUrls, sku) {
     variantPayload.compare_at_price = String(wave1aMsrp);
   }
 
+  const safeImages = sanitizeImageUrlsForDlq(imageUrls);
+
+  const aspectTags = Object.entries(finalListing.aspects || {})
+    .map(([key, val]) => {
+      const displayVal = Array.isArray(val) ? val[0] : val;
+      return displayVal ? displayVal.trim() : null;
+    })
+    .filter(val => val && val.length > 0 && val.length <= 40);
+  const uniqueTags = [...new Set(aspectTags)];
+
   const payload = {
     product: {
       title: finalListing.title,
@@ -46,10 +143,10 @@ async function crossPostToShopifyDirect(finalListing, imageUrls, sku) {
       vendor: finalListing.brand || "Generic",
       product_type: finalListing.model || "Product",
       status: "active",
-      // [WAVE1-A] Seller-entered keywords become Shopify tags.
-      tags: wave1aKeywords.join(', '),
+      // [WAVE1-A] Seller-entered keywords become Shopify tags, merged with aspect-derived tags.
+      tags: [...new Set([...wave1aKeywords, ...uniqueTags])].join(', '),
       variants: [variantPayload],
-      images: imageUrls.map(url => ({ src: url }))
+      images: safeImages.map(url => ({ src: url }))
     }
   };
 
@@ -146,6 +243,22 @@ async function crossPostToWooCommerceDirect(finalListing, imageUrls, sku) {
     wave1aDescription += `\n<p><strong>Original MSRP:</strong> $${Number(finalListing.msrp).toFixed(2)}</p>`;
   }
 
+  const safeImages = sanitizeImageUrlsForDlq(imageUrls);
+
+  const wcAttributes = Object.entries(finalListing.aspects || {})
+    .map(([key, val]) => {
+      const optionsArray = Array.isArray(val) ? val : [val];
+      const cleanOptions = optionsArray.map(o => String(o).trim()).filter(o => o.length > 0);
+      if (cleanOptions.length === 0) return null;
+      return {
+        name: key,
+        visible: true,
+        variation: false,
+        options: cleanOptions
+      };
+    })
+    .filter(attr => attr !== null);
+
   const wcPayload = {
     name: finalListing.title,
     type: "simple",
@@ -157,7 +270,8 @@ async function crossPostToWooCommerceDirect(finalListing, imageUrls, sku) {
     sku: sku,
     // [WAVE1-A] Seller-entered keywords become WooCommerce tags.
     tags: wave1aKeywords.map(name => ({ name })),
-    images: imageUrls.map(url => ({ src: url }))
+    attributes: wcAttributes,
+    images: safeImages.map(url => ({ src: url }))
   };
 
   const auth = Buffer.from(`${wcKey}:${wcSecret}`).toString('base64');
@@ -181,10 +295,13 @@ async function crossPostToWooCommerceDirect(finalListing, imageUrls, sku) {
 async function crossPostToEtsyDirect(finalListing, sku) {
   const etsyShopId = config.getETSY_SHOP_ID();
   const etsyToken = config.getETSY_ACCESS_TOKEN();
-  const etsyClientId = config.getEBAY_CLIENT_ID();
+  const etsyClientId = config.getETSY_CLIENT_ID();
 
   if (!etsyShopId || !etsyToken) {
     throw new Error("Etsy configuration missing.");
+  }
+  if (!etsyClientId) {
+    throw new Error("Etsy API key missing. Set ETSY_CLIENT_ID in your .env file.");
   }
 
   // [WAVE1-A] Strip private-only fields (internalNotes, costOfGoods) before building the payload.
@@ -197,24 +314,35 @@ async function crossPostToEtsyDirect(finalListing, sku) {
   }
 
   const cleanTitle = (finalListing.title || "No Title").replace(/\s+/g, ' ').trim().slice(0, 140);
+  const conditionStr = String(finalListing.condition || "").toUpperCase();
+  const isUsedOrVintage = conditionStr.includes("USED") || conditionStr.includes("PREOWNED") || conditionStr.includes("PRE-OWNED") || cleanTitle.toLowerCase().includes("vintage") || (finalListing.description || "").toLowerCase().includes("vintage");
+
+  const whoMade = isUsedOrVintage ? "someone_else" : "i_did";
+  const whenMade = isUsedOrVintage ? "before_2007" : "made_to_order";
+
+  const aspectTags = Object.values(finalListing.aspects || {})
+    .flat()
+    .map(t => String(t).trim())
+    .filter(t => t.length > 0 && t.length <= 20 && /^[a-zA-Z0-9\s-]+$/.test(t));
+  const uniqueTags = [...new Set(aspectTags)].slice(0, 13);
 
   const etsyPayload = {
     quantity: 1,
     title: cleanTitle,
     description: wave1aDescription,
     price: finalListing.suggestedPrice,
-    who_made: "i_did",
-    when_made: "made_to_order",
+    who_made: whoMade,
+    when_made: whenMade,
     taxonomy_id: 1,
     is_personalizable: false,
-    // [WAVE1-A] Seller-entered keywords become Etsy tags.
-    tags: wave1aKeywords.slice(0, 13)
+    // [WAVE1-A] Seller-entered keywords become Etsy tags, topped up with aspect-derived tags (Etsy caps: 13 tags, 20 chars each).
+    tags: [...new Set([...wave1aKeywords, ...uniqueTags])].map(t => String(t).trim()).filter(t => t.length > 0 && t.length <= 20).slice(0, 13)
   };
 
   const etsyRes = await ebayClient.fetchWithRetry(`https://api.etsy.com/v3/application/shops/${etsyShopId}/listings`, {
     method: "POST",
     headers: {
-      "x-api-key": etsyClientId || "mock-etsy-client-id",
+      "x-api-key": etsyClientId,
       "Authorization": `Bearer ${etsyToken}`,
       "Content-Type": "application/json"
     },
@@ -226,22 +354,59 @@ async function crossPostToEtsyDirect(finalListing, sku) {
   return etsyData.listing_id;
 }
 
+async function executeDlqRetry(job) {
+  if (job.platform === 'shopify') {
+    return crossPostToShopifyDirect(job.listing, job.imageUrls, job.sku);
+  }
+  if (job.platform === 'woocommerce') {
+    return crossPostToWooCommerceDirect(job.listing, job.imageUrls, job.sku);
+  }
+  if (job.platform === 'etsy') {
+    return crossPostToEtsyDirect(job.listing, job.sku);
+  }
+  throw new Error(`Unsupported platform: ${job.platform}`);
+}
+
+async function markDlqRetrySuccess(job, successId) {
+  const history = await utils.readJsonFileSecureAsync(config.historyPath, []);
+  const item = history.find(i => i.sku === job.sku);
+  if (!item) return;
+
+  if (job.platform === 'shopify') item.shopifyId = String(successId);
+  else if (job.platform === 'woocommerce') item.woocommerceId = String(successId);
+  else if (job.platform === 'etsy') item.etsyId = String(successId);
+
+  await utils.writeJsonFileSecureAsync(config.historyPath, history);
+}
+
 /**
  * Add a failed cross-post job to the DLQ.
  */
-function addToDlq(platform, sku, listing, imageUrls, error) {
+async function addToDlq(platform, sku, listing, imageUrls, error) {
   try {
-    const dlq = utils.readJsonFileSecure(config.dlqPath, []);
+    assertValidPlatform(platform);
+    assertValidSku(sku);
+
+    const sanitizedListing = sanitizeListingForDlq(listing);
+    const sanitizedImages = sanitizeImageUrlsForDlq(imageUrls);
+    const safeError = String(error || 'Unknown error').slice(0, 500);
+
+    const dlq = await utils.readJsonFileSecureAsync(config.dlqPath, []);
     const existingIndex = dlq.findIndex(item => item.sku === sku && item.platform === platform);
-    
+    const previousAttempts = existingIndex !== -1 ? (dlq[existingIndex].attempts || 1) : 0;
+
     const entry = {
+      id: existingIndex !== -1 && dlq[existingIndex].id
+        ? dlq[existingIndex].id
+        : `${platform}-${sku}-${Date.now()}`,
       timestamp: new Date().toISOString(),
       platform,
       sku,
-      listing,
-      imageUrls,
-      attempts: existingIndex !== -1 ? dlq[existingIndex].attempts + 1 : 1,
-      lastError: error
+      listing: sanitizedListing,
+      imageUrls: sanitizedImages,
+      attempts: previousAttempts + 1,
+      lastError: safeError,
+      exhausted: previousAttempts + 1 >= MAX_DLQ_ATTEMPTS
     };
 
     if (existingIndex !== -1) {
@@ -250,10 +415,74 @@ function addToDlq(platform, sku, listing, imageUrls, error) {
       dlq.push(entry);
     }
 
-    utils.writeJsonFileSecure(config.dlqPath, dlq);
-    utils.logAudit("INFO", `Logged failed cross-post to DLQ. Platform: ${platform}, SKU: ${sku}, Error: ${error}`);
+    await utils.writeJsonFileSecureAsync(config.dlqPath, dlq);
+    utils.logAudit("INFO", `Logged failed cross-post to DLQ. Platform: ${platform}, SKU: ${sku}, Error: ${safeError}`);
+    return entry;
   } catch (err) {
     utils.logAudit("ERROR", `Failed to add to DLQ: ${err.message}`);
+    throw err;
+  }
+}
+
+async function removeFromDlq(sku, platform) {
+  assertValidSku(sku);
+  assertValidPlatform(platform);
+
+  const dlq = await utils.readJsonFileSecureAsync(config.dlqPath, []);
+  const next = dlq.filter(item => !(item.sku === sku && item.platform === platform));
+  if (next.length === dlq.length) return false;
+
+  await utils.writeJsonFileSecureAsync(config.dlqPath, next);
+  utils.logAudit("INFO", `Removed DLQ entry for SKU ${sku} on ${platform}`);
+  return true;
+}
+
+async function clearDlq() {
+  const dlq = await utils.readJsonFileSecureAsync(config.dlqPath, []);
+  const count = dlq.length;
+  await utils.writeJsonFileSecureAsync(config.dlqPath, []);
+  utils.logAudit("INFO", `Cleared DLQ (${count} entries removed)`);
+  return count;
+}
+
+async function retryDlqJob(sku, platform, options = {}) {
+  assertValidSku(sku);
+  assertValidPlatform(platform);
+
+  const dlq = await utils.readJsonFileSecureAsync(config.dlqPath, []);
+  const index = dlq.findIndex(item => item.sku === sku && item.platform === platform);
+  if (index === -1) {
+    throw new Error('DLQ job not found');
+  }
+
+  const job = dlq[index];
+  const enriched = enrichDlqJob(job);
+
+  if (enriched.status === 'exhausted' && !options.force) {
+    throw new Error(`Maximum retry attempts (${MAX_DLQ_ATTEMPTS}) reached. Dismiss or force retry.`);
+  }
+  if (enriched.status === 'backing_off' && !options.force) {
+    throw new Error(`Job is in backoff. Retry available in ${Math.ceil(enriched.retryInMs / 1000)}s or use force retry.`);
+  }
+
+  job.attempts = (job.attempts || 1) + 1;
+  job.timestamp = new Date().toISOString();
+  job.exhausted = false;
+
+  try {
+    const successId = await executeDlqRetry(job);
+    dlq.splice(index, 1);
+    await utils.writeJsonFileSecureAsync(config.dlqPath, dlq);
+    await markDlqRetrySuccess(job, successId);
+    utils.logAudit("INFO", `Manual DLQ retry succeeded for SKU ${sku} on ${platform}. ID: ${successId}`);
+    return { success: true, id: successId, platform, sku };
+  } catch (err) {
+    job.lastError = err.message;
+    job.exhausted = job.attempts >= MAX_DLQ_ATTEMPTS;
+    dlq[index] = job;
+    await utils.writeJsonFileSecureAsync(config.dlqPath, dlq);
+    utils.logAudit("WARN", `Manual DLQ retry failed for SKU ${sku} on ${platform}: ${err.message}`);
+    throw err;
   }
 }
 
@@ -265,7 +494,7 @@ async function crossPostToShopify(finalListing, imageUrls, sku) {
     return await crossPostToShopifyDirect(finalListing, imageUrls, sku);
   } catch (err) {
     utils.logAudit("ERROR", `Shopify Cross-posting failed: ${err.message}`);
-    addToDlq("shopify", sku, finalListing, imageUrls, err.message);
+    await addToDlq("shopify", sku, finalListing, imageUrls, err.message);
     utils.appendNotification("cross-post", `Shopify cross-post failed for SKU ${sku} (queued for retry): ${err.message}`); // [WAVE1-B]
     return null;
   }
@@ -279,7 +508,7 @@ async function crossPostToWooCommerce(finalListing, imageUrls, sku) {
     return await crossPostToWooCommerceDirect(finalListing, imageUrls, sku);
   } catch (err) {
     utils.logAudit("ERROR", `WooCommerce Cross-posting failed: ${err.message}`);
-    addToDlq("woocommerce", sku, finalListing, imageUrls, err.message);
+    await addToDlq("woocommerce", sku, finalListing, imageUrls, err.message);
     utils.appendNotification("cross-post", `WooCommerce cross-post failed for SKU ${sku} (queued for retry): ${err.message}`); // [WAVE1-B]
     return null;
   }
@@ -293,7 +522,7 @@ async function crossPostToEtsy(finalListing, sku) {
     return await crossPostToEtsyDirect(finalListing, sku);
   } catch (err) {
     utils.logAudit("ERROR", `Etsy Cross-posting failed: ${err.message}`);
-    addToDlq("etsy", sku, finalListing, [], err.message);
+    await addToDlq("etsy", sku, finalListing, [], err.message);
     utils.appendNotification("cross-post", `Etsy cross-post failed for SKU ${sku} (queued for retry): ${err.message}`); // [WAVE1-B]
     return null;
   }
@@ -303,54 +532,88 @@ async function crossPostToEtsy(finalListing, sku) {
  * Processes all jobs inside the Dead-Letter Queue (DLQ).
  */
 async function processPendingSyncsDlq() {
-  let dlq = utils.readJsonFileSecure(config.dlqPath, []);
+  let dlq = await utils.readJsonFileSecureAsync(config.dlqPath, []);
   if (dlq.length === 0) {
-    return;
+    return { processed: 0, succeeded: 0, remaining: 0, exhausted: 0 };
   }
-  
+
   utils.logAudit("INFO", `Starting DLQ retry processing for ${dlq.length} items...`);
 
+  const now = Date.now();
+  const activeJobs = [];
   const remaining = [];
+  const circuitBreaker = { shopify: 0, woocommerce: 0, etsy: 0 };
+
   for (const job of dlq) {
-    utils.logAudit("INFO", `Retrying cross-post for SKU ${job.sku} on ${job.platform} (Attempt #${job.attempts})...`);
-    
-    job.attempts++;
-    job.timestamp = new Date().toISOString();
-
-    let successId = null;
-    try {
-      if (job.platform === 'shopify') {
-        successId = await crossPostToShopifyDirect(job.listing, job.imageUrls, job.sku);
-      } else if (job.platform === 'woocommerce') {
-        successId = await crossPostToWooCommerceDirect(job.listing, job.imageUrls, job.sku);
-      } else if (job.platform === 'etsy') {
-        successId = await crossPostToEtsyDirect(job.listing, job.sku);
-      }
-    } catch (err) {
-      job.lastError = err.message;
-      utils.logAudit("WARN", `Retry failed for SKU ${job.sku} on ${job.platform}: ${err.message}`);
-      // [WAVE1-B] Surface repeated cross-post retry failures to the user.
-      utils.appendNotification("cross-post-retry", `${job.platform} cross-post retry failed for SKU ${job.sku}: ${err.message}`);
-    }
-
-    if (successId) {
-      utils.logAudit("INFO", `Retry succeeded for SKU ${job.sku} on ${job.platform}. ID: ${successId}`);
-      
-      const history = utils.readJsonFileSecure(config.historyPath, []);
-      const item = history.find(i => i.sku === job.sku);
-      if (item) {
-        if (job.platform === 'shopify') item.shopifyId = String(successId);
-        else if (job.platform === 'woocommerce') item.woocommerceId = String(successId);
-        else if (job.platform === 'etsy') item.etsyId = String(successId);
-        utils.writeJsonFileSecure(config.historyPath, history);
-      }
-    } else {
+    const enriched = enrichDlqJob(job, now);
+    if (enriched.status === 'exhausted' || enriched.status === 'backing_off') {
       remaining.push(job);
+      continue;
     }
+    activeJobs.push(job);
   }
 
-  utils.writeJsonFileSecure(config.dlqPath, remaining);
-  utils.logAudit("INFO", `DLQ retry processing finished. ${dlq.length - remaining.length} succeeded, ${remaining.length} remaining.`);
+  if (activeJobs.length === 0) {
+    return {
+      processed: 0,
+      succeeded: 0,
+      remaining: remaining.length,
+      exhausted: remaining.filter(j => j.exhausted || (j.attempts || 1) >= MAX_DLQ_ATTEMPTS).length
+    };
+  }
+
+  utils.logAudit("INFO", `Found ${activeJobs.length} DLQ items ready for retry (passed backoff interval).`);
+
+  let succeeded = 0;
+
+  for (let i = 0; i < activeJobs.length; i += DLQ_CHUNK_SIZE) {
+    const chunk = activeJobs.slice(i, i + DLQ_CHUNK_SIZE);
+
+    await Promise.all(chunk.map(async (job) => {
+      if (circuitBreaker[job.platform] >= CIRCUIT_LIMIT) {
+        utils.logAudit("WARN", `Circuit breaker tripped for ${job.platform}. Skipping SKU ${job.sku}.`);
+        remaining.push(job);
+        return;
+      }
+
+      utils.logAudit("INFO", `Retrying cross-post for SKU ${job.sku} on ${job.platform} (Attempt #${job.attempts})...`);
+
+      job.attempts = (job.attempts || 1) + 1;
+      job.timestamp = new Date().toISOString();
+
+      let successId = null;
+      try {
+        successId = await executeDlqRetry(job);
+        if (circuitBreaker[job.platform] > 0) circuitBreaker[job.platform]--;
+      } catch (err) {
+        job.lastError = err.message;
+        job.exhausted = job.attempts >= MAX_DLQ_ATTEMPTS;
+        circuitBreaker[job.platform]++;
+        utils.logAudit("WARN", `Retry failed for SKU ${job.sku} on ${job.platform}: ${err.message}`);
+        // [WAVE1-B] Surface repeated cross-post retry failures to the user.
+        utils.appendNotification("cross-post-retry", `${job.platform} cross-post retry failed for SKU ${job.sku}: ${err.message}`);
+      }
+
+      if (successId) {
+        succeeded++;
+        utils.logAudit("INFO", `Retry succeeded for SKU ${job.sku} on ${job.platform}. ID: ${successId}`);
+        await markDlqRetrySuccess(job, successId);
+      } else {
+        remaining.push(job);
+      }
+    }));
+  }
+
+  await utils.writeJsonFileSecureAsync(config.dlqPath, remaining);
+  const exhaustedCount = remaining.filter(j => j.exhausted || (j.attempts || 1) >= MAX_DLQ_ATTEMPTS).length;
+  utils.logAudit("INFO", `DLQ retry processing finished. ${succeeded} succeeded, ${remaining.length} remaining (${exhaustedCount} exhausted).`);
+
+  return {
+    processed: activeJobs.length,
+    succeeded,
+    remaining: remaining.length,
+    exhausted: exhaustedCount
+  };
 }
 
 module.exports = {
@@ -361,5 +624,13 @@ module.exports = {
   crossPostToWooCommerceDirect,
   crossPostToEtsyDirect,
   addToDlq,
-  processPendingSyncsDlq
+  removeFromDlq,
+  clearDlq,
+  retryDlqJob,
+  getDlqEntries,
+  getDlqSummary,
+  processPendingSyncsDlq,
+  MAX_DLQ_ATTEMPTS,
+  VALID_PLATFORMS
 };
+
