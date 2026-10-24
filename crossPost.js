@@ -110,6 +110,22 @@ async function crossPostToShopifyDirect(finalListing, imageUrls, sku) {
     throw new Error("Shopify credentials missing.");
   }
 
+  // [WAVE1-A] Strip private-only fields (internalNotes, costOfGoods) before building the payload.
+  finalListing = utils.sanitizeListingForMarketplace(finalListing);
+  // [WAVE1-A] Thread keywords -> Shopify tags; MSRP -> variant compare-at price.
+  const wave1aKeywords = Array.isArray(finalListing.keywords) ? finalListing.keywords : [];
+  const wave1aMsrp = finalListing.msrp ? Number(finalListing.msrp) : null;
+
+  const variantPayload = {
+    price: String(finalListing.suggestedPrice),
+    sku: sku,
+    inventory_management: "shopify",
+    inventory_policy: "deny"
+  };
+  if (wave1aMsrp && wave1aMsrp > 0) {
+    variantPayload.compare_at_price = String(wave1aMsrp);
+  }
+
   const safeImages = sanitizeImageUrlsForDlq(imageUrls);
 
   const aspectTags = Object.entries(finalListing.aspects || {})
@@ -119,7 +135,6 @@ async function crossPostToShopifyDirect(finalListing, imageUrls, sku) {
     })
     .filter(val => val && val.length > 0 && val.length <= 40);
   const uniqueTags = [...new Set(aspectTags)];
-  const tagsString = uniqueTags.join(', ');
 
   const payload = {
     product: {
@@ -128,13 +143,9 @@ async function crossPostToShopifyDirect(finalListing, imageUrls, sku) {
       vendor: finalListing.brand || "Generic",
       product_type: finalListing.model || "Product",
       status: "active",
-      tags: tagsString,
-      variants: [{
-        price: String(finalListing.suggestedPrice),
-        sku: sku,
-        inventory_management: "shopify",
-        inventory_policy: "deny"
-      }],
+      // [WAVE1-A] Seller-entered keywords become Shopify tags, merged with aspect-derived tags.
+      tags: [...new Set([...wave1aKeywords, ...uniqueTags])].join(', '),
+      variants: [variantPayload],
       images: safeImages.map(url => ({ src: url }))
     }
   };
@@ -223,6 +234,15 @@ async function crossPostToWooCommerceDirect(finalListing, imageUrls, sku) {
     throw new Error("WooCommerce configuration missing.");
   }
 
+  // [WAVE1-A] Strip private-only fields (internalNotes, costOfGoods) before building the payload.
+  finalListing = utils.sanitizeListingForMarketplace(finalListing);
+  // [WAVE1-A] Thread keywords -> WooCommerce tags; MSRP -> description footer line.
+  const wave1aKeywords = Array.isArray(finalListing.keywords) ? finalListing.keywords : [];
+  let wave1aDescription = finalListing.description || "";
+  if (finalListing.msrp && !wave1aDescription.includes("Original MSRP")) {
+    wave1aDescription += `\n<p><strong>Original MSRP:</strong> $${Number(finalListing.msrp).toFixed(2)}</p>`;
+  }
+
   const safeImages = sanitizeImageUrlsForDlq(imageUrls);
 
   const wcAttributes = Object.entries(finalListing.aspects || {})
@@ -243,11 +263,13 @@ async function crossPostToWooCommerceDirect(finalListing, imageUrls, sku) {
     name: finalListing.title,
     type: "simple",
     regular_price: String(finalListing.suggestedPrice),
-    description: finalListing.description,
+    description: wave1aDescription,
     short_description: "Multichannel listing from eBay Lister",
     manage_stock: true,
     stock_quantity: 1,
     sku: sku,
+    // [WAVE1-A] Seller-entered keywords become WooCommerce tags.
+    tags: wave1aKeywords.map(name => ({ name })),
     attributes: wcAttributes,
     images: safeImages.map(url => ({ src: url }))
   };
@@ -282,6 +304,15 @@ async function crossPostToEtsyDirect(finalListing, sku) {
     throw new Error("Etsy API key missing. Set ETSY_CLIENT_ID in your .env file.");
   }
 
+  // [WAVE1-A] Strip private-only fields (internalNotes, costOfGoods) before building the payload.
+  finalListing = utils.sanitizeListingForMarketplace(finalListing);
+  // [WAVE1-A] Thread keywords -> Etsy tags (max 13); MSRP -> description footer line.
+  const wave1aKeywords = Array.isArray(finalListing.keywords) ? finalListing.keywords : [];
+  let wave1aDescription = finalListing.description || "";
+  if (finalListing.msrp && !wave1aDescription.includes("Original MSRP")) {
+    wave1aDescription += `\nOriginal MSRP: $${Number(finalListing.msrp).toFixed(2)}`;
+  }
+
   const cleanTitle = (finalListing.title || "No Title").replace(/\s+/g, ' ').trim().slice(0, 140);
   const conditionStr = String(finalListing.condition || "").toUpperCase();
   const isUsedOrVintage = conditionStr.includes("USED") || conditionStr.includes("PREOWNED") || conditionStr.includes("PRE-OWNED") || cleanTitle.toLowerCase().includes("vintage") || (finalListing.description || "").toLowerCase().includes("vintage");
@@ -298,13 +329,14 @@ async function crossPostToEtsyDirect(finalListing, sku) {
   const etsyPayload = {
     quantity: 1,
     title: cleanTitle,
-    description: finalListing.description || "",
+    description: wave1aDescription,
     price: finalListing.suggestedPrice,
     who_made: whoMade,
     when_made: whenMade,
     taxonomy_id: 1,
     is_personalizable: false,
-    tags: uniqueTags
+    // [WAVE1-A] Seller-entered keywords become Etsy tags, topped up with aspect-derived tags (Etsy caps: 13 tags, 20 chars each).
+    tags: [...new Set([...wave1aKeywords, ...uniqueTags])].map(t => String(t).trim()).filter(t => t.length > 0 && t.length <= 20).slice(0, 13)
   };
 
   const etsyRes = await ebayClient.fetchWithRetry(`https://api.etsy.com/v3/application/shops/${etsyShopId}/listings`, {
@@ -463,6 +495,7 @@ async function crossPostToShopify(finalListing, imageUrls, sku) {
   } catch (err) {
     utils.logAudit("ERROR", `Shopify Cross-posting failed: ${err.message}`);
     await addToDlq("shopify", sku, finalListing, imageUrls, err.message);
+    utils.appendNotification("cross-post", `Shopify cross-post failed for SKU ${sku} (queued for retry): ${err.message}`); // [WAVE1-B]
     return null;
   }
 }
@@ -476,6 +509,7 @@ async function crossPostToWooCommerce(finalListing, imageUrls, sku) {
   } catch (err) {
     utils.logAudit("ERROR", `WooCommerce Cross-posting failed: ${err.message}`);
     await addToDlq("woocommerce", sku, finalListing, imageUrls, err.message);
+    utils.appendNotification("cross-post", `WooCommerce cross-post failed for SKU ${sku} (queued for retry): ${err.message}`); // [WAVE1-B]
     return null;
   }
 }
@@ -489,6 +523,7 @@ async function crossPostToEtsy(finalListing, sku) {
   } catch (err) {
     utils.logAudit("ERROR", `Etsy Cross-posting failed: ${err.message}`);
     await addToDlq("etsy", sku, finalListing, [], err.message);
+    utils.appendNotification("cross-post", `Etsy cross-post failed for SKU ${sku} (queued for retry): ${err.message}`); // [WAVE1-B]
     return null;
   }
 }
@@ -555,6 +590,8 @@ async function processPendingSyncsDlq() {
         job.exhausted = job.attempts >= MAX_DLQ_ATTEMPTS;
         circuitBreaker[job.platform]++;
         utils.logAudit("WARN", `Retry failed for SKU ${job.sku} on ${job.platform}: ${err.message}`);
+        // [WAVE1-B] Surface repeated cross-post retry failures to the user.
+        utils.appendNotification("cross-post-retry", `${job.platform} cross-post retry failed for SKU ${job.sku}: ${err.message}`);
       }
 
       if (successId) {

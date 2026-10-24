@@ -368,7 +368,46 @@
     }
     .icon-btn:hover { background: var(--surface-2); border-color: var(--border-2); color: var(--text); }
 
-    /* ── User chip ───────────────────────────────────── */
+    /* [WAVE1-B] ── Notification bell ─────────────────────────── */
+    .notif-bell { position: relative; }
+    .notif-badge {
+      position: absolute; top: -6px; right: -6px;
+      min-width: 18px; height: 18px; padding: 0 4px;
+      border-radius: 99px; background: var(--red, #ef4444);
+      color: #fff; font-size: 0.65rem; font-weight: 800;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .notif-panel {
+      position: absolute; top: 46px; right: 0; width: 340px; max-height: 420px;
+      overflow-y: auto; z-index: 200;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius-lg, 12px); box-shadow: var(--shadow, 0 12px 32px rgba(0,0,0,0.35));
+      display: none;
+    }
+    .notif-panel.open { display: block; }
+    .notif-panel__header {
+      padding: 10px 14px; font-weight: 800; font-size: 0.8rem;
+      border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .notif-item { padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 0.78rem; }
+    .notif-item:last-child { border-bottom: none; }
+    .notif-item__task { font-weight: 700; color: var(--amber, #f59e0b); font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; }
+    .notif-item__msg { color: var(--text); margin: 4px 0; word-break: break-word; }
+    .notif-item__meta { color: var(--text-muted); font-size: 0.68rem; display: flex; justify-content: space-between; align-items: center; }
+    .notif-empty { padding: 20px; text-align: center; color: var(--text-muted); font-size: 0.8rem; }
+
+    /* [WAVE1-B] ── Bulk action bar (history view) ─────────────── */
+    .bulk-bar {
+      display: none; align-items: center; gap: 10px; flex-wrap: wrap;
+      padding: 10px 14px; margin-bottom: 12px;
+      background: var(--surface); border: 1px solid var(--border);
+      border-radius: var(--radius, 10px); font-size: 0.82rem;
+    }
+    .bulk-bar.visible { display: flex; }
+    .bulk-bar__count { font-weight: 800; color: var(--text); }
+
+    /* ── User chip ────────────────────────────────── */
     .user-chip {
       display: flex;
       align-items: center;
@@ -923,7 +962,40 @@
     .comps-canvas-wrap { margin-top: 8px; }
     #compsChart { display: none; width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--bg-2); }
 
-    /* ── Table ───────────────────────────────────────── */
+    /* <!-- [WAVE1-C] --> Take-home pricing panel */
+    .takehome-panel { margin-top: 10px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-2); padding: 10px 12px; font-size: 0.82rem; }
+    .takehome-panel .th-title { font-weight: 700; color: var(--text); margin-bottom: 6px; }
+    .takehome-panel .th-sub { color: var(--text-dim); font-size: 0.72rem; margin-bottom: 8px; }
+    .takehome-panel table { width: 100%; border-collapse: collapse; }
+    .takehome-panel th, .takehome-panel td { padding: 6px 8px; text-align: right; border-bottom: 1px solid var(--border); white-space: nowrap; }
+    .takehome-panel th:first-child, .takehome-panel td:first-child { text-align: left; }
+    .takehome-panel th { color: var(--text-dim); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border-2); }
+    .takehome-panel td.tier-name { font-weight: 700; color: var(--text); }
+    .takehome-panel td .gross { font-weight: 700; color: var(--green); }
+    .takehome-panel td .net { color: var(--text-dim); font-size: 0.76rem; }
+    .takehome-panel .th-use { cursor: pointer; background: var(--brand-dim); border: 1px solid var(--brand); color: var(--brand-light); border-radius: 6px; padding: 3px 8px; font-size: 0.72rem; font-weight: 700; }
+    .takehome-panel .th-use:hover { background: var(--brand); color: #fff; }
+    .takehome-panel .th-note { color: var(--text-dim); font-size: 0.68rem; margin-top: 8px; }
+    /* <!-- [WAVE1-C] --> Comp listing links */
+    .comp-links { margin-top: 8px; font-size: 0.78rem; }
+    .comp-links .cl-title { color: var(--text-dim); font-weight: 700; margin-bottom: 4px; }
+    .comp-links ul { list-style: none; margin: 0; padding: 0; }
+    .comp-links li { margin: 2px 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .comp-links a { color: var(--brand-light); text-decoration: none; }
+    .comp-links a:hover { text-decoration: underline; }
+    .comp-links .cl-price { color: var(--green); font-weight: 700; margin-right: 6px; }
+    /* <!-- [WAVE1-C] --> Uncertainty badges */
+    .wave1c-badge { display: inline-block; font-size: 0.66rem; font-weight: 700; color: #fbbf24; background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.45); border-radius: 6px; padding: 1px 7px; margin-left: 8px; vertical-align: middle; }
+    .wave1c-needs-review { outline: 2px solid rgba(251,191,36,0.55) !important; outline-offset: 1px; }
+    /* <!-- [WAVE1-C] --> Enhance-with-AI button */
+    .enhance-btn { cursor: pointer; background: transparent; border: 1px solid var(--border-2); color: var(--text-dim); border-radius: 6px; padding: 2px 8px; font-size: 0.7rem; font-weight: 700; margin-left: 8px; }
+    .enhance-btn:hover:not(:disabled) { border-color: var(--brand); color: var(--brand-light); }
+    .enhance-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .enhance-btn.undoing { border-color: var(--amber); color: var(--amber); }
+
+    /* ══════════════════════════════════════════════════
+       HISTORY / TABLE VIEW
+    ══════════════════════════════════════════════════ */
     .table-wrap { overflow-x: auto; }
     table { width: 100%; border-collapse: collapse; }
     thead th {
@@ -1401,6 +1473,11 @@
       Listing History
       <span class="nav-badge" id="historyCountBadge">0</span>
     </button>
+    <!-- [WAVE1-D] Team seats (Power Seller workspaces) -->
+    <button class="nav-item" id="nav-team" onclick="switchView('team')">
+      <span class="nav-icon" aria-hidden="true">👥</span>
+      Team Seats
+    </button>
     <button class="nav-item" id="nav-dlq" onclick="switchView('dlq')">
       <span class="nav-icon" aria-hidden="true">⟳</span>
       Sync Queue
@@ -1456,6 +1533,11 @@
       <div class="status-badge" id="apiStatusBadge" role="status" aria-live="polite">
         <span class="dot" id="apiStatusDot"></span>
         <span id="apiStatusText">Checking…</span>
+      </div>
+      <!-- [WAVE1-B] Background-task error notifications -->
+      <div style="position:relative;">
+        <button class="icon-btn notif-bell" id="notifBell" onclick="toggleNotifPanel(event)" title="Notifications" aria-label="Notifications">🔔<span class="notif-badge" id="notifBadge" style="display:none">0</span></button>
+        <div class="notif-panel" id="notifPanel" role="dialog" aria-label="Background task notifications"></div>
       </div>
       <button class="icon-btn" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle color theme">🌓</button>
       <div id="userTopbarWidget"></div>
@@ -1645,6 +1727,10 @@
             <select id="listingTemplateSelect" onchange="loadTemplateSelected()" disabled style="font-size: 0.72rem; padding: 4px 8px; width: auto; height: auto;">
               <option value="">-- Load Template --</option>
             </select>
+            <!-- [WAVE1-A] Template picker (applies a saved template's fields to the form) -->
+            <select id="templateSelect" style="max-width:230px;font-size:0.78rem;" onchange="applyTemplate(this.value)" title="Prefill the form from a saved template">
+              <option value="">📋 New from template…</option>
+            </select>
             <button class="btn btn--secondary btn--xs" onclick="saveAsTemplate()" id="saveTemplateBtn" disabled>Save As Preset</button>
           </div>
         </div>
@@ -1676,6 +1762,8 @@
             <div class="field-label">
               <label for="title">SEO Title</label>
               <span class="field-meta" id="titleCharCount">0 / 80</span>
+              <!-- [WAVE1-C] AI enhancement mode: text polish, separate from the photo->listing flow -->
+              <button class="enhance-btn" id="enhanceBtnTitle" onclick="enhanceListingText()" disabled title="Polish title & description with AI (one click undoes)">✨ Enhance with AI</button>
             </div>
             <input type="text" id="title" maxlength="80" disabled oninput="updateTitleCharCount(); updateCompletenessIndicator();" autocomplete="off" />
           </div>
@@ -1713,6 +1801,10 @@
               <div class="comps-canvas-wrap">
                 <canvas id="compsChart" width="400" height="140" aria-label="Market price comparison chart"></canvas>
               </div>
+              <!-- [WAVE1-C] Clickable comp listing links -->
+              <div class="comp-links" id="compLinks" style="display:none"></div>
+              <!-- [WAVE1-C] Take-home pricing panel (tiers x marketplaces, gross + net) -->
+              <div class="takehome-panel" id="takeHomePanel" style="display:none" aria-label="Take-home pricing panel"></div>
               <!-- Presets -->
               <div class="preset-group" role="group" aria-label="Price presets">
                 <button class="preset-btn" id="presetFastBtn" onclick="applyPricePreset(0.9)" disabled>Fast (−10%利润)</button>
@@ -1734,6 +1826,8 @@
               <div class="field-label"><label for="quantity">Quantity</label></div>
               <input type="number" id="quantity" min="1" value="1" disabled oninput="updateCompletenessIndicator()" />
             </div>
+            <!-- [WAVE1-C] AI enhancement mode: text polish, separate from the photo->listing flow -->
+            <button class="enhance-btn" id="enhanceBtnDesc" onclick="enhanceListingText()" disabled title="Polish title & description with AI (one click undoes)">✨ Enhance with AI</button>
           </div>
 
           <!-- Brand + Model -->
@@ -1751,6 +1845,28 @@
         </div>
 
         <!-- Section 3: Shipping -->
+        <!-- [WAVE1-A] Keywords / MSRP / Cost of Goods / Internal Notes -->
+        <div class="grid-2">
+          <div class="form-group">
+            <div class="field-label"><label for="keywords">Keywords / Tags</label><span class="field-meta">comma-separated</span></div>
+            <input type="text" id="keywords" placeholder="vintage, leather, mid century" disabled autocomplete="off" />
+          </div>
+          <div class="form-group">
+            <div class="field-label"><label for="msrp">MSRP</label><span class="field-meta">original retail $</span></div>
+            <input type="number" id="msrp" placeholder="0.00" min="0" step="0.01" disabled />
+          </div>
+        </div>
+        <div class="grid-2">
+          <div class="form-group">
+            <div class="field-label"><label for="costOfGoods">Cost of Goods</label><span class="field-meta">$ paid for the item</span></div>
+            <input type="number" id="costOfGoods" placeholder="0.00" min="0" step="0.01" disabled />
+          </div>
+          <div class="form-group">
+            <div class="field-label"><label for="internalNotes">Internal Notes</label><span class="field-meta">private — never sent to marketplaces</span></div>
+            <textarea id="internalNotes" rows="2" placeholder="Sourcing, defects, reminders…" disabled></textarea>
+          </div>
+        </div>
+
         <div id="sec-shipping" class="form-section">
           <!-- Weight + Dimensions -->
           <div class="grid-2">
@@ -1909,6 +2025,10 @@
           <button class="btn btn--secondary" id="draftBtn" disabled onclick="saveDraft()" style="flex:1;">
             📝 Save Draft
           </button>
+          <!-- [WAVE1-A] -->
+          <button class="btn btn--ghost" id="templateBtn" disabled onclick="saveAsTemplate()" style="flex:1;" title="Save the current form fields as a reusable template">
+            📋 Save as Template
+          </button>
         </div>
       </div>
     </div>
@@ -1943,13 +2063,14 @@
         <h1 class="section-title">Listing History</h1>
         <p class="section-subtitle">All listings across every channel, synced in real-time</p>
       </div>
-      <div style="display:flex; gap:10px;">
-        <button class="btn btn--secondary btn--sm" id="runRepricerBtn" onclick="runRepricerImmediately()">
-          📉 Run Repricer
-        </button>
-        <button class="btn btn--secondary btn--sm" id="syncBtn" onclick="syncPortfolio()">
-          🔄 Sync from eBay
-        </button>
+      <div style="display:flex;gap:8px;">
+        <!-- [WAVE1-B] CSV export of full inventory -->
+        <button class="btn btn--secondary btn--sm" id="exportCsvBtn" onclick="exportCsv()">📥 Export CSV</button>
+        <!-- [WAVE1-D] CSV import: upload inventory rows, batch-create drafts -->
+        <button class="btn btn--secondary btn--sm" id="importCsvBtn" onclick="document.getElementById('importCsvFile').click()">📤 Import CSV</button>
+        <input type="file" id="importCsvFile" accept=".csv,text/csv,text/plain" style="display:none" onchange="importCsvFile(this)" aria-label="Import listings CSV" />
+        <button class="btn btn--secondary btn--sm" id="runRepricerBtn" onclick="runRepricerImmediately()">📉 Run Repricer</button>
+        <button class="btn btn--secondary btn--sm" id="syncBtn" onclick="syncPortfolio()">🔄 Sync from eBay</button>
       </div>
     </div>
 
@@ -2008,6 +2129,13 @@
 
     <!-- Table card -->
     <div class="card">
+      <!-- [WAVE1-B] Bulk action bar (visible when rows are selected) -->
+      <div class="bulk-bar" id="bulkBar" aria-live="polite">
+        <span class="bulk-bar__count" id="bulkCount">0 selected</span>
+        <button class="btn btn--primary btn--xs" onclick="bulkSetStatus('SOLD')">Mark sold</button>
+        <button class="btn btn--secondary btn--xs" onclick="bulkSetStatus('ACTIVE')">Mark listed</button>
+        <button class="btn btn--ghost btn--xs" onclick="clearBulkSelection()">Clear</button>
+      </div>
       <div class="filter-bar">
         <input type="text" id="historySearch" placeholder="Search by SKU, title, listing ID…" oninput="filterHistoryTable()" aria-label="Search listings" />
         <select id="historyStatusFilter" onchange="filterHistoryTable()" aria-label="Filter by status">
@@ -2015,6 +2143,8 @@
           <option value="ACTIVE">Active</option>
           <option value="DRAFT">Drafts</option>
           <option value="ENDED">Ended</option>
+          <!-- [WAVE1-B] Bulk "Mark sold" status -->
+          <option value="SOLD">Sold</option>
         </select>
       </div>
       <div class="table-wrap" id="historyTableContainer">
@@ -2022,6 +2152,22 @@
           <div class="empty-state__icon">📦</div>
           Loading listing database…
         </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- [WAVE1-D] Team seats view (Power Seller workspaces) -->
+  <main class="content" id="team-view" style="display:none;" aria-label="Team seats">
+    <div class="section-header">
+      <div class="section-header__left">
+        <h1 class="section-title">👥 Team Seats</h1>
+        <p class="section-subtitle">Power Seller workspaces include 3 seats — everyone shares the same listings</p>
+      </div>
+    </div>
+    <div id="teamContainer">
+      <div class="empty-state">
+        <div class="empty-state__icon">👥</div>
+        Loading team…
       </div>
     </div>
   </main>
@@ -2503,6 +2649,8 @@
   let initialPrice        = 0;
   let allHistoryData      = [];
   let shopifyShopName     = null;
+  // [WAVE1-B] Persistent bulk-selection set (survives table re-renders).
+  const bulkSelectedSkus  = new Set();
   let woocommerceUrl      = null;
   let etsyShopId          = null;
   let currentView         = 'create';
@@ -2828,11 +2976,12 @@
   function switchView(view) {
     closeSidebar();
     currentView = view;
-    const titles = { create: 'New Listing', history: 'Listing History', dlq: 'Sync Queue' };
+    const titles = { create: 'New Listing', history: 'Listing History', team: 'Team Seats', dlq: 'Sync Queue' };
     document.getElementById('topbarTitle').textContent = titles[view] || view;
 
     document.getElementById('create-view').style.display  = view === 'create'  ? 'block' : 'none';
     document.getElementById('history-view').style.display = view === 'history' ? 'block' : 'none';
+    document.getElementById('team-view').style.display    = view === 'team'    ? 'block' : 'none'; // [WAVE1-D]
     document.getElementById('dlq-view').style.display      = view === 'dlq'     ? 'block' : 'none';
 
     document.querySelectorAll('.nav-item').forEach(b => {
@@ -2843,6 +2992,7 @@
     if (btn) { btn.classList.add('active'); btn.setAttribute('aria-current','page'); }
 
     if (view === 'history') loadHistory();
+    if (view === 'team') loadTeam(); // [WAVE1-D]
     if (view === 'dlq') loadDlqQueue(true);
   }
 
@@ -3389,10 +3539,13 @@
     });
     document.getElementById('publishBtn').disabled = false;
     document.getElementById('draftBtn').disabled   = false;
+    document.getElementById('templateBtn').disabled = false; // [WAVE1-A]
     document.getElementById('addAspectBtn').disabled = false;
     document.getElementById('presetFastBtn').disabled    = false;
     document.getElementById('presetMarketBtn').disabled  = false;
     document.getElementById('presetPremiumBtn').disabled = false;
+    document.getElementById('enhanceBtnTitle').disabled  = false; // <!-- [WAVE1-C] -->
+    document.getElementById('enhanceBtnDesc').disabled   = false; // <!-- [WAVE1-C] -->
     document.getElementById('descEditTab').disabled = false;
     document.getElementById('descPreviewTab').disabled = false;
     document.querySelectorAll('.tab-pill').forEach(b => b.disabled = false);
@@ -3435,8 +3588,14 @@
     document.getElementById('dimW').value     = data.packageWidth  || 8;
     document.getElementById('dimH').value     = data.packageHeight || 6;
     document.getElementById('description').value = data.description || '';
+    // [WAVE1-A] Prefill Wave 1A fields (keywords may arrive as an array).
+    document.getElementById('keywords').value     = Array.isArray(data.keywords) ? data.keywords.join(', ') : (data.keywords || '');
+    document.getElementById('msrp').value         = (data.msrp != null && data.msrp !== '') ? data.msrp : '';
+    document.getElementById('costOfGoods').value   = (data.costOfGoods != null && data.costOfGoods !== '') ? data.costOfGoods : '';
+    document.getElementById('internalNotes').value= data.internalNotes || '';
     document.getElementById('quantity').value = data.quantity || 1;
     updateTitleCharCount();
+    applyConfidenceBadges(data._confidence); // <!-- [WAVE1-C] --> no-op when _confidence is absent
 
     const sel = document.getElementById('categoryId');
     sel.innerHTML = '';
@@ -3509,6 +3668,7 @@
 
   // Bind input listener for real-time brand input VeRO checking + load eBay policies
   document.addEventListener('DOMContentLoaded', () => {
+    loadTemplates(); // [WAVE1-A]
     fetchVeroBrands();
     loadEbayPolicies();
     updateSidebarStatusBadges();
@@ -3585,7 +3745,7 @@
   /* ── Comps ─────────────────────────────────────── */
   function handleComps(comps) {
     const bar = document.getElementById('compsBar');
-    if (!comps) { bar.classList.remove('visible'); document.getElementById('compsChart').style.display='none'; return; }
+    if (!comps) { bar.classList.remove('visible'); document.getElementById('compsChart').style.display='none'; renderCompLinks(null); renderTakeHomePanel(null); return; }
     bar.classList.add('visible');
     document.getElementById('compMin').textContent = '$' + comps.minPrice.toFixed(2);
     document.getElementById('compMax').textContent = '$' + comps.maxPrice.toFixed(2);
@@ -3594,6 +3754,8 @@
     avgEl.dataset.val = comps.avgPrice;
     avgEl.onclick = () => setPriceToCompAvg();
     drawCompsChart(comps.minPrice, comps.avgPrice, comps.maxPrice, comps.avgPrice);
+    renderCompLinks(comps);      // <!-- [WAVE1-C] -->
+    renderTakeHomePanel(comps);  // <!-- [WAVE1-C] -->
   }
   function setPriceToCompAvg() {
     const avg = parseFloat(document.getElementById('compAvg').dataset.val);
@@ -3672,6 +3834,176 @@
     ctx.font = 'bold 10px Inter,sans-serif'; ctx.textAlign = 'center';
     ctx.fillText('Your Price', xSel, yPeak - 18);
     ctx.fillText('$' + selected.toFixed(2), xSel, yPeak - 6);
+  }
+
+  /* <!-- [WAVE1-C] --> Take-home pricing panel + comp links + uncertainty badges + AI enhance */
+  // Fee estimates as of Oct 2026 — review periodically. Source of truth: MARKETPLACE_FEES in utils.js.
+  const WAVE1C_FEE_TABLE = {
+    ebay:     { label: 'eBay',     percent: 0.1325, fixed: 0.30 },
+    mercari:  { label: 'Mercari',  percent: 0.10,   fixed: 0, paymentPercent: 0.029 },
+    poshmark: { label: 'Poshmark', percent: 0.20,   fixed: 0, flatUnder15: 2.95 },
+    etsy:     { label: 'Etsy',     percent: 0.065,  fixed: 0.20, paymentPercent: 0.03, paymentFixed: 0.25 },
+    shopify:  { label: 'Shopify',  percent: 0.029,  fixed: 0.30 }
+  };
+  const WAVE1C_MARKETS = Object.keys(WAVE1C_FEE_TABLE);
+
+  function wave1cEstimateFee(market, gross) {
+    const f = WAVE1C_FEE_TABLE[market];
+    if (!f || !(gross > 0)) return 0;
+    if (f.flatUnder15 && gross < 15) return f.flatUnder15;
+    let fee = gross * f.percent + (f.fixed || 0);
+    if (f.paymentPercent) fee += gross * f.paymentPercent;
+    if (f.paymentFixed) fee += f.paymentFixed;
+    return Math.round(fee * 100) / 100;
+  }
+
+  function wave1cPercentile(sortedAsc, p) {
+    if (!sortedAsc.length) return 0;
+    const idx = (sortedAsc.length - 1) * p;
+    const lo = Math.floor(idx), hi = Math.ceil(idx), w = idx - lo;
+    return Math.round((sortedAsc[lo] * (1 - w) + sortedAsc[hi] * w) * 100) / 100;
+  }
+
+  function wave1cComputeTiers(prices) {
+    const clean = (Array.isArray(prices) ? prices : [])
+      .map(Number).filter(n => !isNaN(n) && n > 0).sort((a, b) => a - b);
+    if (!clean.length) return null;
+    return {
+      sellFast: wave1cPercentile(clean, 0.25),
+      market:   wave1cPercentile(clean, 0.50),
+      patient:  wave1cPercentile(clean, 0.75),
+      sampleSize: clean.length
+    };
+  }
+
+  // Render clickable links to the actual comparable listings under the comp chart.
+  function renderCompLinks(comps) {
+    const box = document.getElementById('compLinks');
+    if (!box) return;
+    const items = (comps && Array.isArray(comps.items)) ? comps.items.filter(i => i && i.itemUrl) : [];
+    if (!items.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'block';
+    const rows = items.map(i => {
+      const price = (typeof i.price === 'number' && i.price > 0) ? `<span class="cl-price">$${i.price.toFixed(2)}</span>` : '';
+      return `<li>${price}<a href="${escHtml(i.itemUrl)}" target="_blank" rel="noopener noreferrer" title="Open on eBay (new tab)">${escHtml(i.title || i.itemId)}</a></li>`;
+    }).join('');
+    box.innerHTML = `<div class="cl-title">Comparable listings</div><ul>${rows}</ul>`;
+  }
+
+  // Render the take-home pricing panel: three tiers x marketplaces, gross + net-after-fees.
+  function renderTakeHomePanel(comps) {
+    const panel = document.getElementById('takeHomePanel');
+    if (!panel) return;
+    if (!comps) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+    let prices = (Array.isArray(comps.items) ? comps.items : [])
+      .map(i => i && i.price).filter(p => typeof p === 'number' && p > 0);
+    if (!prices.length && comps.minPrice > 0) prices = [comps.minPrice, comps.avgPrice, comps.maxPrice];
+    const tiers = wave1cComputeTiers(prices);
+    if (!tiers) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+
+    const tierDefs = [
+      { key: 'sellFast', label: 'Sell fast' },
+      { key: 'market',   label: 'Market' },
+      { key: 'patient',  label: 'Patient' }
+    ];
+    const head = WAVE1C_MARKETS.map(m => `<th>${escHtml(WAVE1C_FEE_TABLE[m].label)}</th>`).join('');
+    const body = tierDefs.map(t => {
+      const gross = tiers[t.key];
+      const cells = WAVE1C_MARKETS.map(m => {
+        const net = Math.round((gross - wave1cEstimateFee(m, gross)) * 100) / 100;
+        return `<td><div class="gross">$${gross.toFixed(2)}</div><div class="net">net $${net.toFixed(2)}</div></td>`;
+      }).join('');
+      return `<tr><td class="tier-name">${t.label}</td>${cells}<td><button class="th-use" onclick="useTierPrice(${gross})" title="Set listing price to $${gross.toFixed(2)}">Use</button></td></tr>`;
+    }).join('');
+
+    panel.style.display = 'block';
+    panel.innerHTML =
+      `<div class="th-title">Take-home pricing</div>` +
+      `<div class="th-sub">Net = gross minus estimated marketplace fees. Based on ${tiers.sampleSize} comp${tiers.sampleSize === 1 ? '' : 's'}.</div>` +
+      `<div style="overflow-x:auto"><table><thead><tr><th>Tier</th>${head}<th></th></tr></thead><tbody>${body}</tbody></table></div>` +
+      `<div class="th-note">Fee rates are estimates as of Oct 2026 and change over time.</div>`;
+  }
+
+  // "Use this price" — sets the listing price field to the chosen tier gross.
+  function useTierPrice(gross) {
+    const v = parseFloat(gross);
+    if (!v || v <= 0) return;
+    document.getElementById('price').value = v.toFixed(2);
+    initialPrice = v;
+    const min = parseFloat(document.getElementById('compMin').textContent.replace('$',''));
+    const max = parseFloat(document.getElementById('compMax').textContent.replace('$',''));
+    const avg = parseFloat(document.getElementById('compAvg').dataset.val);
+    if (!isNaN(min) && !isNaN(max)) drawCompsChart(min, avg, max, v);
+    showToast('success', 'Price set', `Listing price set to $${v.toFixed(2)}`, 3000);
+  }
+
+  // Uncertainty UI: fields the AI rated below 0.8 confidence get a "review" badge.
+  // Fields >= 0.8 show nothing. Older listings without _confidence are ignored.
+  function applyConfidenceBadges(conf) {
+    document.querySelectorAll('.wave1c-badge').forEach(b => b.remove());
+    document.querySelectorAll('.wave1c-needs-review').forEach(el => el.classList.remove('wave1c-needs-review'));
+    if (!conf || typeof conf !== 'object') return;
+    const fieldMap = {
+      title: ['title'],
+      specifics: ['brand', 'model'],
+      price: ['price']
+    };
+    Object.keys(fieldMap).forEach(key => {
+      const v = Number(conf[key]);
+      if (isNaN(v) || v >= 0.8) return; // confident (or missing) -> no badge, no noise
+      fieldMap[key].forEach(fieldId => {
+        const input = document.getElementById(fieldId);
+        if (input) input.classList.add('wave1c-needs-review');
+        const label = document.querySelector(`label[for="${fieldId}"]`);
+        const labelRow = label ? label.closest('.field-label') : null;
+        if (labelRow && !labelRow.querySelector('.wave1c-badge')) {
+          const badge = document.createElement('span');
+          badge.className = 'wave1c-badge';
+          badge.title = `AI confidence ${(v * 100).toFixed(0)}% — please review`;
+          badge.textContent = '⚠ review';
+          labelRow.appendChild(badge);
+        }
+      });
+    });
+  }
+
+  // AI enhancement mode: polish title+description; one more click undoes it.
+  // Distinct from the photo->listing generation flow (/api/analyze).
+  let preEnhanceBackup = null;
+  async function enhanceListingText() {
+    const titleEl = document.getElementById('title');
+    const descEl = document.getElementById('description');
+    const btns = document.querySelectorAll('.enhance-btn');
+    if (preEnhanceBackup) {
+      titleEl.value = preEnhanceBackup.title;
+      descEl.value = preEnhanceBackup.description;
+      preEnhanceBackup = null;
+      btns.forEach(b => { b.classList.remove('undoing'); b.textContent = '✨ Enhance with AI'; });
+      updateTitleCharCount();
+      showToast('info', 'Enhance undone', 'Restored your original text.', 3000);
+      return;
+    }
+    preEnhanceBackup = { title: titleEl.value, description: descEl.value };
+    btns.forEach(b => { b.disabled = true; });
+    try {
+      const res = await fetch('/api/enhance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: titleEl.value, description: descEl.value })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Enhancement failed');
+      titleEl.value = data.title || titleEl.value;
+      descEl.value = data.description || descEl.value;
+      btns.forEach(b => { b.classList.add('undoing'); b.textContent = '↩ Undo enhance'; });
+      updateTitleCharCount();
+      showToast('success', 'Enhanced', 'Title & description polished — click again to undo.', 5000);
+    } catch (err) {
+      preEnhanceBackup = null;
+      showToast('error', 'Enhance failed', err.message, 0);
+    } finally {
+      btns.forEach(b => { b.disabled = false; });
+    }
   }
 
   /* ── Stock photos ─────────────────────────────── */
@@ -3888,7 +4220,6 @@
   }
 
   /* ── Category Type-Ahead ─────────────────────── */
-  let categorySearchTimer = null;
   function debounceCategorySearch() {
     if (categorySearchTimer) clearTimeout(categorySearchTimer);
     categorySearchTimer = setTimeout(runCategorySearch, 400);
@@ -4062,7 +4393,7 @@
     }
   }
 
-  async function saveAsTemplate() {
+  async function saveAsPreset() { // [merge] Master preset-save: dormant — /api/templates serves Wave field templates; kept for a future /api/presets endpoint. Formerly shadowed the Wave saveAsTemplate below.
     const name = prompt("Enter a name for this listing preset:");
     if (!name) return;
     
@@ -4431,6 +4762,56 @@
     }
   }
 
+  /* ── [WAVE1-A] Listing templates ─────────────────── */
+  async function loadTemplates() {
+    try {
+      const res  = await fetch('/api/templates');
+      const data = await res.json();
+      const sel  = document.getElementById('templateSelect');
+      if (!sel) return;
+      sel.querySelectorAll('option[data-tpl]').forEach(o => o.remove());
+      (data.templates || []).forEach((tpl, idx) => {
+        const opt = document.createElement('option');
+        opt.value = String(idx);
+        opt.textContent = tpl.name;
+        opt.dataset.tpl = '1';
+        sel.appendChild(opt);
+      });
+      window._templates = data.templates || [];
+    } catch (e) { /* templates unavailable — the rest of the form still works */ }
+  }
+  async function saveAsTemplate() {
+    const name = prompt('Template name:');
+    if (!name || !name.trim()) return;
+    const aspects    = collectAspects();
+    const categoryId = document.getElementById('categoryId').value;
+    const fields     = buildListingPayload(categoryId, aspects);
+    try {
+      const res  = await fetch('/api/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), fields })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Save failed');
+      showToast('success', 'Template saved', data.name, 3000);
+      loadTemplates();
+    } catch (err) {
+      showToast('error', 'Template save failed', err.message, 0);
+    }
+  }
+  function applyTemplate(idx) {
+    if (idx === '' || idx == null) return;
+    const tpl = (window._templates || [])[Number(idx)];
+    if (!tpl || !tpl.fields) return;
+    enableForm();
+    populateForm(tpl.fields, []);
+    document.getElementById('formContainer').dataset.editingSku = '';
+    document.getElementById('draftSkuLabel').textContent = '';
+    document.getElementById('templateSelect').value = '';
+    showToast('info', 'Template applied', tpl.name, 2500);
+  }
+
   /* ── Helpers ──────────────────────────────────── */
   function collectAspects() {
     const aspects = {};
@@ -4455,6 +4836,11 @@
       packageWidth:  parseInt(document.getElementById('dimW').value)||8,
       packageHeight: parseInt(document.getElementById('dimH').value)||6,
       description:   document.getElementById('description').value,
+      // [WAVE1-A] New listing fields (server normalizes into listingDetails).
+      keywords:      document.getElementById('keywords').value,
+      msrp:          parseFloat(document.getElementById('msrp').value) || null,
+      costOfGoods:   parseFloat(document.getElementById('costOfGoods').value) || null,
+      internalNotes: document.getElementById('internalNotes').value,
       quantity:      parseInt(document.getElementById('quantity').value)||1,
       shippingType:  document.getElementById('shippingType').value,
       aspects
@@ -4468,6 +4854,12 @@
     document.getElementById('previewContainer').innerHTML = '';
     document.getElementById('notesInput').value = '';
     document.getElementById('upcInput').value   = '';
+    // [WAVE1-A]
+    document.getElementById('keywords').value = '';
+    document.getElementById('msrp').value = '';
+    document.getElementById('costOfGoods').value = '';
+    document.getElementById('internalNotes').value = '';
+    document.getElementById('templateSelect').value = '';
     document.getElementById('pipeline').classList.remove('visible');
     document.getElementById('pipelineSpinner').style.display = '';
     document.getElementById('formContainer').style.opacity = '0.55';
@@ -4593,7 +4985,7 @@
       const date    = new Date(item.timestamp).toLocaleDateString();
       const st      = item.status || 'ACTIVE';
       const isEnded = st === 'ENDED', isDraft = st === 'DRAFT';
-      const pill    = isDraft ? 'draft' : isEnded ? 'ended' : 'active';
+      const pill    = isDraft ? 'draft' : (isEnded || st === 'SOLD') ? 'ended' : 'active'; // [WAVE1-B] SOLD reuses ended styling
       const pillTxt = st.charAt(0) + st.slice(1).toLowerCase();
       const lid     = item.listingId || `<span style="color:var(--text-dim)">Draft</span>`;
       const viewBtn = item.listingId ? `<a href="https://www.ebay.com/itm/${item.listingId}" target="_blank" rel="noopener" class="btn btn--ghost btn--xs">View</a>` : '';
@@ -4644,6 +5036,7 @@
       }
 
       return `<tr>
+        <td><input type="checkbox" class="row-select" data-sku="${escHtml(item.sku)}" ${bulkSelectedSkus.has(item.sku) ? 'checked' : ''} onchange="toggleBulkSelection('${escHtml(item.sku)}', this.checked)" aria-label="Select listing ${escHtml(item.sku)}" /></td>
         <td style="color:var(--text-muted);white-space:nowrap;">${date}</td>
         <td><span class="sku-mono">${escHtml(item.sku)}</span></td>
         <td><span class="sku-mono">${lid}</span></td>
@@ -4655,13 +5048,215 @@
     }).join('');
     cnt.innerHTML = `<table role="table">
       <thead><tr>
+        <th scope="col"><input type="checkbox" id="bulkSelectAll" onclick="toggleBulkSelectAll(this.checked)" aria-label="Select all listings" /></th>
         <th scope="col">Date</th><th scope="col">SKU</th><th scope="col">Listing ID</th>
         <th scope="col">Title</th><th scope="col">Price</th>
         <th scope="col">Status</th><th scope="col">Actions</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;
+    updateBulkBar(); // [WAVE1-B]
   }
+
+  /* [WAVE1-B] ── Bulk selection & actions ─────────────────── */
+  function toggleBulkSelection(sku, checked) {
+    if (checked) bulkSelectedSkus.add(sku); else bulkSelectedSkus.delete(sku);
+    updateBulkBar();
+  }
+  function toggleBulkSelectAll(checked) {
+    document.querySelectorAll('.row-select').forEach(box => {
+      box.checked = checked;
+      const sku = box.getAttribute('data-sku');
+      if (!sku) return;
+      if (checked) bulkSelectedSkus.add(sku); else bulkSelectedSkus.delete(sku);
+    });
+    updateBulkBar();
+  }
+  function clearBulkSelection() {
+    bulkSelectedSkus.clear();
+    document.querySelectorAll('.row-select').forEach(box => { box.checked = false; });
+    const all = document.getElementById('bulkSelectAll');
+    if (all) all.checked = false;
+    updateBulkBar();
+  }
+  function updateBulkBar() {
+    const bar = document.getElementById('bulkBar');
+    const cnt = document.getElementById('bulkCount');
+    if (!bar || !cnt) return;
+    const n = bulkSelectedSkus.size;
+    cnt.textContent = `${n} selected`;
+    bar.classList.toggle('visible', n > 0);
+  }
+  async function bulkSetStatus(status) {
+    const skus = [...bulkSelectedSkus];
+    if (skus.length === 0) return;
+    const label = status === 'SOLD' ? 'sold' : 'listed';
+    try {
+      const res = await fetch('/api/listings/bulk-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skus, status })
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || 'Bulk update failed');
+      const failed = (d.results || []).filter(r => !r.ok);
+      clearBulkSelection();
+      if (failed.length === 0) {
+        showToast('success', `Marked ${label}`, `${d.updated} listing${d.updated === 1 ? '' : 's'} updated.`, 4000);
+      } else {
+        showToast('warn', 'Partial update',
+          `${d.updated}/${d.total} marked ${label}. Failed: ${failed.map(f => f.sku).join(', ')}.`, 0);
+      }
+      loadHistory();
+    } catch (err) {
+      showToast('error', 'Bulk update failed', err.message, 0);
+    }
+  }
+
+  /* [WAVE1-B] ── CSV export (browser download) ─────────────── */
+  function exportCsv() {
+    window.location.href = '/api/listings/export.csv';
+  }
+
+  /* [WAVE1-D] ── CSV import: upload inventory rows, batch-create drafts ── */
+  async function importCsvFile(input) {
+    const file = input.files && input.files[0];
+    input.value = '';
+    if (!file) return;
+    let text;
+    try {
+      text = await file.text();
+    } catch (e) {
+      showToast('error', 'Import failed', 'Could not read the file.', 4000);
+      return;
+    }
+    async function postImport(dryRun) {
+      const res = await fetch('/api/listings/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv: text, dryRun })
+      });
+      return res.json();
+    }
+    try {
+      // Validate first (dry run), then confirm before writing anything.
+      const check = await postImport(true);
+      if (!check.success) throw new Error(check.error || 'Validation failed');
+      const bad = (check.results || []).filter(r => !r.ok);
+      const preview = bad.slice(0, 5).map(r => `Row ${r.row}: ${r.error}`).join('\n');
+      const msg = `Import check: ${check.valid} of ${check.total} rows valid` +
+        (bad.length ? `, ${bad.length} with errors:\n${preview}${bad.length > 5 ? `\n…+${bad.length - 5} more` : ''}` : '.') +
+        `\n\nCreate ${check.valid} draft listing(s)? (Columns: sku, title, price; optional: msrp, keywords, costOfGoods, internalNotes, categoryId. Keywords separated by semicolons.)`;
+      if (check.valid === 0 || !window.confirm(msg)) {
+        if (check.valid === 0) showToast('error', 'Import check', 'No valid rows — nothing to import.', 5000);
+        return;
+      }
+      const done = await postImport(false);
+      if (!done.success) throw new Error(done.error || 'Import failed');
+      showToast('success', 'CSV import complete', `${done.imported} draft(s) created${done.failed ? `, ${done.failed} row(s) rejected` : ''}.`, 5000);
+      loadHistory();
+    } catch (err) {
+      showToast('error', 'Import failed', err.message, 6000);
+    }
+  }
+
+  /* [WAVE1-B] ── Background-task error notifications ──────── */
+  const knownNotifIds = new Set();
+  let notifPollInitialized = false;
+  let lastNotifList = [];
+  async function pollNotifications() {
+    try {
+      const res = await fetch('/api/notifications');
+      if (!res.ok) return;
+      const data = await res.json();
+      const list = data.notifications || [];
+      lastNotifList = list;
+      const badge = document.getElementById('notifBadge');
+      if (badge) {
+        const unread = data.unread || 0;
+        badge.style.display = unread > 0 ? 'flex' : 'none';
+        badge.textContent = unread > 99 ? '99+' : String(unread);
+      }
+      const fresh = list.filter(n => !knownNotifIds.has(n.id));
+      fresh.forEach(n => knownNotifIds.add(n.id));
+      if (notifPollInitialized && fresh.length > 0) {
+        if (fresh.length === 1) {
+          showToast('warn', 'Background task error', `[${fresh[0].task}] ${fresh[0].message}`, 0);
+        } else {
+          showToast('warn', `${fresh.length} background task errors`,
+            `[${fresh[0].task}] ${fresh[0].message} (+${fresh.length - 1} more — see the bell)`, 0);
+        }
+      }
+      notifPollInitialized = true;
+      renderNotifPanel(list);
+    } catch { /* poll failures stay silent */ }
+  }
+  function toggleNotifPanel(ev) {
+    if (ev) ev.stopPropagation();
+    document.getElementById('notifPanel').classList.toggle('open');
+  }
+  function renderNotifPanel(list) {
+    const panel = document.getElementById('notifPanel');
+    if (!panel) return;
+    if (list.length === 0) {
+      panel.innerHTML = `<div class="notif-panel__header"><span>Notifications</span></div>
+        <div class="notif-empty">All clear — no background task errors. 🎉</div>`;
+      return;
+    }
+    panel.innerHTML = `<div class="notif-panel__header"><span>Notifications</span>
+        <button class="btn btn--ghost btn--xs" onclick="dismissAllNotifs(event)">Clear all</button></div>` +
+      list.map(n => `<div class="notif-item">
+        <div class="notif-item__task">${escHtml(n.task)}</div>
+        <div class="notif-item__msg">${escHtml(n.message)}</div>
+        <div class="notif-item__meta">
+          <span>${escHtml(new Date(n.ts).toLocaleString())}</span>
+          <button class="btn btn--ghost btn--xs" onclick="dismissNotif('${escHtml(n.id)}')">Dismiss</button>
+        </div>
+      </div>`).join('');
+  }
+  async function dismissNotif(id) {
+    try {
+      await fetch('/api/notifications/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
+      });
+      knownNotifIds.delete(id);
+      lastNotifList = lastNotifList.filter(n => n.id !== id);
+      renderNotifPanel(lastNotifList);
+      const badge = document.getElementById('notifBadge');
+      if (badge) {
+        badge.style.display = lastNotifList.length > 0 ? 'flex' : 'none';
+        badge.textContent = lastNotifList.length > 99 ? '99+' : String(lastNotifList.length);
+      }
+    } catch { /* silent */ }
+  }
+  async function dismissAllNotifs(ev) {
+    if (ev) ev.stopPropagation();
+    const ids = lastNotifList.map(n => n.id);
+    await Promise.all(ids.map(id => fetch('/api/notifications/dismiss', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id })
+    }).catch(() => null)));
+    lastNotifList = [];
+    renderNotifPanel([]);
+    const badge = document.getElementById('notifBadge');
+    if (badge) badge.style.display = 'none';
+  }
+  // Close the panel on outside click (registered once).
+  if (!window.__wave1bNotifClickBound) {
+    window.__wave1bNotifClickBound = true;
+    document.addEventListener('click', (ev) => {
+      const panel = document.getElementById('notifPanel');
+      const bell = document.getElementById('notifBell');
+      if (panel && panel.classList.contains('open') && bell &&
+          !panel.contains(ev.target) && !bell.contains(ev.target)) {
+        panel.classList.remove('open');
+      }
+    });
+  }
+  // [WAVE1-B] Poll notifications every 30s; immediate first poll.
+  pollNotifications();
+  setInterval(pollNotifications, 30000);
 
   /* ── Sync ──────────────────────────────────────── */
   async function syncPortfolio() {
@@ -5331,6 +5926,94 @@
   async function logout() {
     await fetch('/api/auth/logout', { method:'POST' });
     location.reload();
+  }
+
+  /* [WAVE1-D] ── Team seats ───────────────────────── */
+  async function loadTeam() {
+    const box = document.getElementById('teamContainer');
+    try {
+      const res = await fetch('/api/team');
+      if (res.status === 401) {
+        box.innerHTML = `<div class="empty-state"><div class="empty-state__icon">🔒</div>Sign in to manage team seats.</div>`;
+        return;
+      }
+      const t = await res.json();
+      if (t.role === 'none') {
+        const upsell = t.plan === 'power_seller'
+          ? 'Your subscription is not active — seats are dormant until billing is current.'
+          : 'Team seats are a Power Seller feature (3 seats per workspace).';
+        box.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state__icon">👥</div>
+            <div style="font-weight:600;margin-bottom:6px;">No team workspace yet</div>
+            <div style="font-size:0.85rem;color:var(--text-dim);max-width:420px;">${escHtml(upsell)}</div>
+            ${t.plan !== 'power_seller' ? `<button class="btn btn--primary btn--sm" style="margin-top:12px;" onclick="upgradeToPremium()">Upgrade to Power Seller</button>` : ''}
+          </div>`;
+        return;
+      }
+      const used = t.usedSeats || 0;
+      const max = t.maxSeats || 3;
+      const rows = (t.members || []).map(m => `
+        <tr>
+          <td>${escHtml(m.email)}</td>
+          <td><span class="pill ${m.status === 'active' ? 'pill--active' : 'pill--draft'}" style="font-size:0.65rem;">${escHtml(m.status)}</span></td>
+          <td style="font-size:0.75rem;color:var(--text-dim);">${escHtml(m.addedAt ? m.addedAt.slice(0,10) : '')}</td>
+          <td>${t.role === 'owner' ? `<button class="btn btn--ghost btn--xs" onclick="removeTeamMember('${escHtml(m.email)}')">Remove</button>` : ''}</td>
+        </tr>`).join('');
+      box.innerHTML = `
+        <div class="metrics-grid" style="margin-bottom:16px;">
+          <div class="metric-card"><span class="metric-label">Workspace</span><span class="metric-value" style="font-size:1rem;">${escHtml(t.owner)}</span><span class="metric-sub">your role: ${escHtml(t.role)}</span></div>
+          <div class="metric-card"><span class="metric-label">Seats used</span><span class="metric-value">${used} / ${max}</span><span class="metric-sub">Power Seller plan</span></div>
+        </div>
+        ${t.role === 'owner' ? `
+        <div style="display:flex;gap:8px;margin-bottom:16px;max-width:520px;">
+          <input id="teamInviteEmail" type="email" placeholder="teammate@example.com" aria-label="Invite email"
+                 style="flex:1;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);" />
+          <button class="btn btn--primary btn--sm" onclick="inviteTeamMember()">Invite</button>
+        </div>` : `
+        <div style="margin-bottom:16px;"><button class="btn btn--ghost btn--sm" onclick="leaveTeam()">Leave workspace</button></div>`}
+        <div class="table-wrap"><table>
+          <thead><tr><th scope="col">Email</th><th scope="col">Status</th><th scope="col">Added</th><th scope="col"></th></tr></thead>
+          <tbody>${rows || '<tr><td colspan="4" style="text-align:center;color:var(--text-dim);">No seats used yet.</td></tr>'}</tbody>
+        </table></div>
+        <p style="font-size:0.75rem;color:var(--text-dim);margin-top:12px;">Invites are pending until the teammate signs in — every seat shares this workspace's listings.</p>`;
+    } catch (err) {
+      box.innerHTML = `<div class="empty-state"><div class="empty-state__icon">⚠️</div>Could not load team: ${escHtml(err.message)}</div>`;
+    }
+  }
+
+  async function inviteTeamMember() {
+    const email = (document.getElementById('teamInviteEmail').value || '').trim();
+    if (!email) { showToast('error', 'Invite', 'Enter an email address.', 3000); return; }
+    try {
+      const res = await fetch('/api/team/invite', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Invite failed');
+      showToast('success', 'Invite sent', `${email} can now sign in to join.`, 4000);
+      loadTeam();
+    } catch (err) { showToast('error', 'Invite failed', err.message, 5000); }
+  }
+
+  async function removeTeamMember(email) {
+    if (!window.confirm(`Remove ${email} from the team?`)) return;
+    try {
+      const res = await fetch('/api/team/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email }) });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Remove failed');
+      showToast('success', 'Removed', `${email} was removed.`, 4000);
+      loadTeam();
+    } catch (err) { showToast('error', 'Remove failed', err.message, 5000); }
+  }
+
+  async function leaveTeam() {
+    if (!window.confirm('Leave this workspace?')) return;
+    try {
+      const res = await fetch('/api/team/leave', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Leave failed');
+      showToast('success', 'Left workspace', 'You are no longer on the team.', 4000);
+      loadTeam();
+    } catch (err) { showToast('error', 'Leave failed', err.message, 5000); }
   }
 
   /* ── Utility ───────────────────────────────────── */

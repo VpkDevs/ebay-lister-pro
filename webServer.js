@@ -157,6 +157,471 @@ async function runInventoryCrossSync() {
 }
 
 const crypto = require('crypto');
+
+// [WAVE1-B] Allowed statuses for bulk updates (subset of statuses used in history).
+const BULK_ALLOWED_STATUSES = ["ACTIVE", "DRAFT", "ENDED", "SOLD"];
+
+/**
+ * [WAVE1-B] Escapes a single value for CSV output (RFC 4180).
+ * Wraps in double quotes when the value contains a comma, quote, or newline,
+ * and doubles any embedded quotes.
+ * @param {*} value - Raw cell value.
+ * @returns {string} CSV-safe cell text.
+ */
+function csvEscape(value) {
+  const str = value === null || value === undefined ? "" : String(value);
+  if (/[",\r\n]/.test(str)) {
+    return '"' + str.replace(/"/g, '""') + '"';
+  }
+  return str;
+}
+
+/**
+ * [WAVE1-D] Canonical CSV column order. Export and import share this list so
+ * a downloaded export can be edited and re-imported (round-trip safe).
+ * Import treats sku/title/price as required input; status/createdAt/marketplace
+ * IDs are export-only output columns and are ignored on import (imports always
+ * create DRAFT listings).
+ */
+const LISTING_CSV_HEADERS = [
+  "sku", "title", "price", "msrp", "keywords", "costOfGoods", "internalNotes",
+  "status", "categoryId", "createdAt",
+  "ebayListingId", "shopifyId", "woocommerceId", "etsyId"
+];
+
+/**
+ * [WAVE1-B] Builds the full CSV export of listings history.
+ * Includes Wave-1 fields (keywords, msrp, costOfGoods, internalNotes) when present;
+ * fields added by other waves are read defensively and export as empty columns
+ * when absent. Export is local-only, so internalNotes are safe to include.
+ * @param {Array<object>} history - Listings history rows.
+ * @returns {string} CSV document text.
+ */
+function buildListingsCsv(history) {
+  const headers = LISTING_CSV_HEADERS;
+  const lines = [headers.join(",")];
+  for (const item of history) {
+    const details = item.listingDetails || {};
+    // Wave-1 fields may live top-level (A-wave) or inside listingDetails; check both.
+    const keywords = item.keywords ?? details.keywords ?? "";
+    const msrp = item.msrp ?? details.msrp ?? "";
+    const costOfGoods = item.costOfGoods ?? details.costOfGoods ?? "";
+    const internalNotes = item.internalNotes ?? details.internalNotes ?? "";
+    const row = [
+      item.sku,
+      item.title,
+      item.price,
+      msrp,
+      Array.isArray(keywords) ? keywords.join("; ") : keywords,
+      costOfGoods,
+      internalNotes,
+      item.status || "ACTIVE",
+      item.categoryId,
+      item.timestamp,
+      item.listingId,
+      item.shopifyId,
+      item.woocommerceId,
+      item.etsyId
+    ];
+    lines.push(row.map(csvEscape).join(","));
+  }
+  return lines.join("\r\n") + "\r\n";
+}
+
+/**
+ * [WAVE1-D] Parses CSV text (RFC 4180) into rows of cell strings.
+ * Handles quoted fields containing commas, quotes (""), and newlines, plus
+ * CRLF/LF line endings, a leading BOM, and blank lines.
+ * @param {string} text - Raw CSV document text.
+ * @returns {string[][]} Rows of cells (first row = header).
+ * @throws {Error} On an unterminated quoted field.
+ */
+function parseListingsCsv(text) {
+  const src = String(text).replace(/^﻿/, "");
+  const rows = [];
+  let row = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (src[i + 1] === '"') { field += '"'; i++; }
+        else { inQuotes = false; }
+      } else {
+        field += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      row.push(field); field = "";
+    } else if (ch === '\r') {
+      if (src[i + 1] !== '\n') { row.push(field); field = ""; rows.push(row); row = []; }
+      // else: CRLF — the \n branch below ends the row
+    } else if (ch === '\n') {
+      row.push(field); field = ""; rows.push(row); row = [];
+    } else {
+      field += ch;
+    }
+  }
+  if (inQuotes) throw new Error("Malformed CSV: unterminated quoted field.");
+  if (field !== "" || row.length > 0) { row.push(field); rows.push(row); }
+  // Drop blank lines (a single empty cell).
+  return rows.filter(r => !(r.length === 1 && r[0] === ""));
+}
+
+/**
+ * [WAVE1-D] Validates one imported CSV row against the listing schema.
+ * @param {string[]} cells - Raw cell values for the row.
+ * @param {Object<string,number>} headerIndex - Header name -> column index.
+ * @param {Set<string>} seenSkus - SKUs already seen in this file.
+ * @param {Set<string>} historySkus - SKUs already in history.
+ * @returns {{ok:boolean, sku:string, errors:string[], listing:object|null}}
+ */
+function validateImportRow(cells, headerIndex, seenSkus, historySkus) {
+  const get = (name) => {
+    const idx = headerIndex[name];
+    return idx === undefined ? "" : String(cells[idx] ?? "").trim();
+  };
+  const errors = [];
+  const sku = get("sku");
+  if (!sku) errors.push('sku is required');
+  else if (seenSkus.has(sku)) errors.push(`duplicate sku "${sku}" in this file`);
+  else if (historySkus.has(sku)) errors.push(`sku "${sku}" already exists`);
+  const title = get("title");
+  if (!title) errors.push("title is required");
+  const priceRaw = get("price");
+  const price = Number(priceRaw);
+  if (priceRaw === "" || isNaN(price) || price < 0) {
+    errors.push(`price must be a number >= 0 (got "${priceRaw}")`);
+  }
+  for (const key of ["msrp", "costOfGoods"]) {
+    const raw = get(key);
+    if (raw !== "" && (isNaN(Number(raw)) || Number(raw) < 0)) {
+      errors.push(`${key} must be a number >= 0 (got "${raw}")`);
+    }
+  }
+  if (errors.length > 0) return { ok: false, sku, errors, listing: null };
+  // Keywords: export joins with "; " — split on ";" for an exact round-trip.
+  const keywordsRaw = get("keywords");
+  const keywords = keywordsRaw === "" ? []
+    : keywordsRaw.split(";").map(k => k.trim()).filter(k => k.length > 0);
+  return {
+    ok: true,
+    sku,
+    errors: [],
+    listing: {
+      title,
+      price,
+      msrp: get("msrp") === "" ? null : Number(get("msrp")),
+      costOfGoods: get("costOfGoods") === "" ? null : Number(get("costOfGoods")),
+      keywords,
+      internalNotes: get("internalNotes"),
+      categoryId: get("categoryId") || null
+    }
+  };
+}
+
+/**
+ * [WAVE1-D] Imports inventory rows from CSV text as DRAFT listings.
+ * Mirrors the export schema so exports round-trip. Each valid row goes through
+ * the same history write path as /api/save-draft (with Wave-1A field
+ * normalization); drafts are flagged _confidence: 0 so the Wave-1C uncertainty
+ * UI marks them for human review (they were not AI-generated).
+ * @param {string} csvText - Raw CSV document text.
+ * @param {{dryRun?:boolean}} [opts] - When dryRun is true, validate only.
+ * @returns {{imported:number, valid:number, failed:number, total:number, results:Array}}
+ * @throws {Error} On empty input or missing required columns.
+ */
+function importListingsFromCsv(csvText, opts = {}) {
+  const dryRun = !!opts.dryRun;
+  const rows = parseListingsCsv(csvText);
+  if (rows.length === 0) throw new Error("CSV is empty.");
+  const headers = rows[0].map(h => String(h).trim());
+  const headerIndex = {};
+  headers.forEach((h, i) => { if (!(h in headerIndex)) headerIndex[h] = i; });
+  for (const required of ["sku", "title", "price"]) {
+    if (!(required in headerIndex)) throw new Error(`Missing required column "${required}".`);
+  }
+  const history = utils.readJsonFileSecure(config.historyPath, []);
+  const historySkus = new Set(history.map(h => h.sku));
+  const seenSkus = new Set();
+  const results = [];
+  let imported = 0;
+  let valid = 0;
+  for (let r = 1; r < rows.length; r++) {
+    const lineNo = r + 1;
+    const v = validateImportRow(rows[r], headerIndex, seenSkus, historySkus);
+    if (!v.ok) {
+      results.push({ row: lineNo, sku: v.sku || null, ok: false, error: v.errors.join("; ") });
+      continue;
+    }
+    seenSkus.add(v.sku);
+    valid++;
+    if (!dryRun) {
+      const details = utils.normalizeListingFields({
+        title: v.listing.title,
+        suggestedPrice: v.listing.price,
+        categoryId: v.listing.categoryId,
+        keywords: v.listing.keywords,
+        msrp: v.listing.msrp,
+        costOfGoods: v.listing.costOfGoods,
+        internalNotes: v.listing.internalNotes,
+        _confidence: 0,          // not AI-generated -> Wave-1C review badge
+        importSource: "csv"
+      });
+      utils.saveListingToHistory(
+        v.sku, null, v.listing.title, v.listing.price, v.listing.categoryId,
+        null, null, "DRAFT", details
+      );
+      imported++;
+    }
+    results.push({ row: lineNo, sku: v.sku, ok: true, error: null });
+  }
+  if (!dryRun && imported > 0) {
+    utils.logAudit("INFO", `CSV import: ${imported} draft(s) created, ${results.length - imported} row(s) rejected.`);
+  }
+  return {
+    imported,
+    valid,
+    failed: results.filter(x => !x.ok).length,
+    total: results.length,
+    results
+  };
+}
+
+/**
+ * [WAVE1-B] Bulk-updates listing statuses through the same read/mutate/write path
+ * as the inventory cross-sync (no parallel store). Reports per-SKU success/failure.
+ * @param {string[]} skus - SKUs to update.
+ * @param {string} status - New status (one of BULK_ALLOWED_STATUSES).
+ * @returns {{updated:number, results:Array<{sku:string,ok:boolean,error:string|null}>}}
+ * @throws {Error} When status is invalid.
+ */
+function bulkUpdateListingStatus(skus, status) {
+  if (!BULK_ALLOWED_STATUSES.includes(status)) {
+    throw new Error(`Invalid status "${status}". Allowed: ${BULK_ALLOWED_STATUSES.join(", ")}`);
+  }
+  const history = utils.readJsonFileSecure(config.historyPath, []);
+  const results = [];
+  let updated = 0;
+  for (const sku of skus) {
+    try {
+      const item = history.find(i => i.sku === sku);
+      if (!item) {
+        results.push({ sku, ok: false, error: "SKU not found" });
+        continue;
+      }
+      item.status = status;
+      updated++;
+      results.push({ sku, ok: true, error: null });
+    } catch (err) {
+      results.push({ sku, ok: false, error: err.message });
+    }
+  }
+  if (updated > 0) {
+    utils.writeJsonFileSecure(config.historyPath, history);
+  }
+  utils.logAudit("INFO", `Bulk status update to "${status}": ${updated}/${skus.length} updated.`);
+  return { updated, results };
+}
+
+/* ==========================================================================
+ * [WAVE1-D] Team seats (Power Seller workspaces).
+ *
+ * Minimal honest model: the subscription owner holds the workspace; the app's
+ * single-tenant data store is shared by every seat, so "shared workspace" is
+ * structural (all seats see the same listings) rather than a sync layer.
+ * Roles are owner/member only — no permissions matrix. Invites are pending
+ * until the invitee logs in and accepts (no email delivery exists in this
+ * codebase); pending invites hold a seat so a workspace cannot over-invite.
+ * Seats go dormant (member workspace lookups return null) if the owner's
+ * Power Seller subscription lapses.
+ * ========================================================================== */
+
+// [WAVE1-D] Seats granted per billing plan. Plans not listed here get no team features.
+const TEAM_SEATS_BY_PLAN = { power_seller: 3 };
+
+/**
+ * [WAVE1-D] Seats available for a billing plan (0 when the plan has no team features).
+ * @param {string} plan - Billing plan id.
+ * @returns {number}
+ */
+function getTeamMaxSeats(plan) {
+  return TEAM_SEATS_BY_PLAN[plan] || 0;
+}
+
+/**
+ * [WAVE1-D] Resolves the caller's billing standing from the local billing store
+ * (written by the Stripe webhook). Unknown/absent records are treated as the
+ * free Starter tier — never as premium.
+ * @param {string} email - Account email.
+ * @returns {{premium:boolean, plan:string}}
+ */
+function getBillingPlan(email) {
+  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
+  const rec = email ? billingHistory[email] : null;
+  if (!rec || !rec.premium) return { premium: false, plan: "starter" };
+  return { premium: true, plan: rec.plan || "pro" };
+}
+
+/**
+ * [WAVE1-D] Reads the team store: { [ownerEmail]: { members: [{email,status,addedAt}] } }.
+ * @returns {object}
+ */
+function readTeamStore() {
+  return utils.readJsonFileSecure(config.teamPath, {});
+}
+
+/**
+ * [WAVE1-D] Persists the team store.
+ * @param {object} store - Team store object.
+ */
+function writeTeamStore(store) {
+  utils.writeJsonFileSecure(config.teamPath, store);
+}
+
+/**
+ * [WAVE1-D] Seats currently held (active + pending invites) in a team record.
+ * @param {{members:Array}} record - Team record.
+ * @returns {number}
+ */
+function countUsedSeats(record) {
+  return (record.members || []).filter(m => m.status === "active" || m.status === "invited").length;
+}
+
+/**
+ * [WAVE1-D] Invites an email to the owner's workspace as a pending member.
+ * Requires the owner to hold an active Power Seller subscription.
+ * @param {string} ownerEmail - Workspace owner.
+ * @param {string} memberEmail - Invitee email.
+ * @returns {{email:string,status:string,addedAt:string}} The invite record.
+ * @throws {Error} When validation fails.
+ */
+function inviteTeamMember(ownerEmail, memberEmail) {
+  memberEmail = String(memberEmail || "").trim().toLowerCase();
+  if (!memberEmail || !memberEmail.includes("@")) {
+    throw new Error("A valid member email is required.");
+  }
+  if (memberEmail === String(ownerEmail).toLowerCase()) {
+    throw new Error("You cannot invite yourself.");
+  }
+  const { premium, plan } = getBillingPlan(ownerEmail);
+  if (!premium || plan !== "power_seller") {
+    throw new Error("Team seats require an active Power Seller subscription.");
+  }
+  const store = readTeamStore();
+  const record = store[ownerEmail] || { members: [] };
+  if (record.members.some(m => m.email === memberEmail)) {
+    throw new Error(`${memberEmail} is already on the team.`);
+  }
+  if (countUsedSeats(record) >= getTeamMaxSeats(plan)) {
+    throw new Error(`Seat limit reached (${getTeamMaxSeats(plan)} seats on Power Seller).`);
+  }
+  const invite = { email: memberEmail, status: "invited", addedAt: new Date().toISOString() };
+  record.members.push(invite);
+  store[ownerEmail] = record;
+  writeTeamStore(store);
+  utils.logAudit("INFO", `Team invite: ${ownerEmail} invited ${memberEmail}.`);
+  return invite;
+}
+
+/**
+ * [WAVE1-D] Removes a member (active or invited) from the workspace. Owner-only.
+ * @param {string} ownerEmail - Workspace owner.
+ * @param {string} memberEmail - Member email to remove.
+ * @returns {boolean} True when a member was removed.
+ * @throws {Error} When the member is not on the team.
+ */
+function removeTeamMember(ownerEmail, memberEmail) {
+  memberEmail = String(memberEmail || "").trim().toLowerCase();
+  const store = readTeamStore();
+  const record = store[ownerEmail];
+  if (!record || !record.members.some(m => m.email === memberEmail)) {
+    throw new Error(`${memberEmail} is not on the team.`);
+  }
+  record.members = record.members.filter(m => m.email !== memberEmail);
+  store[ownerEmail] = record;
+  writeTeamStore(store);
+  utils.logAudit("INFO", `Team remove: ${ownerEmail} removed ${memberEmail}.`);
+  return true;
+}
+
+/**
+ * [WAVE1-D] Accepts a pending invite. The invitee must be logged in as the
+ * invited email; the owner's subscription is re-checked at accept time.
+ * @param {string} ownerEmail - Workspace owner.
+ * @param {string} memberEmail - Invitee email (must match the logged-in user).
+ * @returns {{email:string,status:string,addedAt:string}} The activated member record.
+ * @throws {Error} When no pending invite exists or the owner's plan lapsed.
+ */
+function acceptTeamInvite(ownerEmail, memberEmail) {
+  memberEmail = String(memberEmail || "").trim().toLowerCase();
+  const { premium, plan } = getBillingPlan(ownerEmail);
+  if (!premium || plan !== "power_seller") {
+    throw new Error("This workspace's Power Seller subscription is no longer active.");
+  }
+  const store = readTeamStore();
+  const record = store[ownerEmail];
+  const invite = record && record.members.find(m => m.email === memberEmail && m.status === "invited");
+  if (!invite) {
+    throw new Error("No pending invite found for this workspace.");
+  }
+  invite.status = "active";
+  writeTeamStore(store);
+  utils.logAudit("INFO", `Team accept: ${memberEmail} joined ${ownerEmail}'s workspace.`);
+  return invite;
+}
+
+/**
+ * [WAVE1-D] Lets an active member leave their workspace.
+ * @param {string} memberEmail - Member email leaving.
+ * @returns {string|null} The owner email left, or null when not on a team.
+ */
+function leaveTeam(memberEmail) {
+  memberEmail = String(memberEmail || "").trim().toLowerCase();
+  const store = readTeamStore();
+  for (const [ownerEmail, record] of Object.entries(store)) {
+    const idx = (record.members || []).findIndex(m => m.email === memberEmail && m.status === "active");
+    if (idx !== -1) {
+      record.members.splice(idx, 1);
+      store[ownerEmail] = record;
+      writeTeamStore(store);
+      utils.logAudit("INFO", `Team leave: ${memberEmail} left ${ownerEmail}'s workspace.`);
+      return ownerEmail;
+    }
+  }
+  return null;
+}
+
+/**
+ * [WAVE1-D] Resolves which workspace (if any) an email belongs to.
+ * Owners qualify only while their Power Seller subscription is active; members
+ * qualify only while their seat is active AND the owner's subscription is active.
+ * @param {string} email - Account email.
+ * @returns {{role:"owner"|"member", owner:string}|null}
+ */
+function getWorkspaceFor(email) {
+  email = String(email || "").trim().toLowerCase();
+  if (!email) return null;
+  const self = getBillingPlan(email);
+  if (self.premium && self.plan === "power_seller") {
+    return { role: "owner", owner: email };
+  }
+  const store = readTeamStore();
+  for (const [ownerEmail, record] of Object.entries(store)) {
+    const member = (record.members || []).find(m => m.email === email && m.status === "active");
+    if (member) {
+      const ownerBilling = getBillingPlan(ownerEmail);
+      if (ownerBilling.premium && ownerBilling.plan === "power_seller") {
+        return { role: "member", owner: ownerEmail };
+      }
+      return null; // owner's subscription lapsed -> seat dormant
+    }
+  }
+  return null;
+}
 const activeSessions = new Map();
 
 // Metrics tracking structure
@@ -251,6 +716,199 @@ function getAuthenticatedUser(req) {
       activeSessions.delete(sessionId);
     }
   }
+  return null;
+}
+
+/* ============================================================================
+ * [WAVE1-C] Extended barcode enrichment.
+ * Resolution order per barcode:
+ *   1. ISBN-13 (978/979 prefix) -> Google Books (keyless public API).
+ *   2. Everything else -> existing eBay catalog path (unchanged behavior).
+ *   3. On an eBay catalog miss for a non-ISBN code -> music sources:
+ *      Discogs barcode search if DISCOGS_TOKEN is set, else MusicBrainz.
+ * Every step degrades gracefully; null just means "no catalog data".
+ * ========================================================================== */
+
+/**
+ * Detects an ISBN-13 barcode (13 digits starting with 978 or 979).
+ * @param {string} code - Cleaned barcode digits.
+ * @returns {boolean}
+ */
+function isIsbn13(code) {
+  const digits = String(code || '').replace(/[\s-]/g, '');
+  return /^\d{13}$/.test(digits) && (digits.startsWith('978') || digits.startsWith('979'));
+}
+
+/**
+ * Looks up an ISBN on Google Books (no API key needed) and maps
+ * title/authors/publisher/publishedDate/pageCount into the upcData shape.
+ * @param {string} isbn - 13-digit ISBN.
+ * @returns {Promise<object|null>} upcData-compatible object or null.
+ */
+async function lookupIsbnOnGoogleBooks(isbn) {
+  try {
+    const response = await ebayClient.fetchWithRetry(
+      `https://www.googleapis.com/books/v1/volumes?q=isbn:${encodeURIComponent(isbn)}`,
+      { headers: { "Accept": "application/json" } },
+      2, 500
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    const info = data.items?.[0]?.volumeInfo;
+    if (!info || !info.title) return null;
+
+    const authors = Array.isArray(info.authors) ? info.authors : [];
+    const thumbnail = info.imageLinks?.thumbnail || info.imageLinks?.smallThumbnail || null;
+    const aspects = {};
+    if (authors.length > 0) aspects['Author'] = authors.join(', ');
+    if (info.publisher) aspects['Publisher'] = info.publisher;
+    if (info.publishedDate) aspects['Published Date'] = info.publishedDate;
+    if (info.pageCount) aspects['Page Count'] = String(info.pageCount);
+
+    utils.logAudit("INFO", `Google Books ISBN lookup successful: ${info.title}`);
+    return {
+      title: info.title,
+      brand: info.publisher || 'Unknown',
+      mpn: isbn,
+      stockImageUrls: thumbnail ? [thumbnail] : [],
+      aspects,
+      source: 'google-books',
+      authors,
+      publisher: info.publisher || null,
+      publishedDate: info.publishedDate || null,
+      pageCount: info.pageCount || null
+    };
+  } catch (err) {
+    utils.logAudit("WARN", `Google Books ISBN lookup failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Looks up a music barcode (CD/vinyl) on Discogs.
+ * HARD BLOCKER NOTE: the Discogs search API is auth-only — without a
+ * DISCOGS_TOKEN env var there is no anonymous search, so this path is skipped
+ * entirely and MusicBrainz is used instead.
+ * @param {string} code - Cleaned barcode digits.
+ * @param {string} token - Discogs personal access token.
+ * @returns {Promise<object|null>} upcData-compatible object or null.
+ */
+async function lookupBarcodeOnDiscogs(code, token) {
+  try {
+    const response = await ebayClient.fetchWithRetry(
+      `https://api.discogs.com/database/search?barcode=${encodeURIComponent(code)}`,
+      {
+        headers: {
+          "Accept": "application/json",
+          "Authorization": `Discogs token=${token}`,
+          "User-Agent": "ebay-lister-pro/1.0"
+        }
+      },
+      2, 500
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    const hit = data.results?.[0];
+    if (!hit || !hit.title) return null;
+
+    const aspects = {};
+    if (hit.year) aspects['Year'] = String(hit.year);
+    if (hit.label?.[0]) aspects['Label'] = hit.label[0];
+    if (hit.genre?.[0]) aspects['Genre'] = hit.genre[0];
+    if (hit.format?.[0]) aspects['Format'] = hit.format[0];
+
+    utils.logAudit("INFO", `Discogs barcode lookup successful: ${hit.title}`);
+    return {
+      title: hit.title,
+      brand: hit.label?.[0] || 'Unknown',
+      mpn: code,
+      stockImageUrls: hit.cover_image ? [hit.cover_image] : [],
+      aspects,
+      source: 'discogs'
+    };
+  } catch (err) {
+    utils.logAudit("WARN", `Discogs barcode lookup failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Looks up a music barcode on MusicBrainz (keyless; requires a User-Agent).
+ * @param {string} code - Cleaned barcode digits.
+ * @returns {Promise<object|null>} upcData-compatible object or null.
+ */
+async function lookupBarcodeOnMusicBrainz(code) {
+  try {
+    const response = await ebayClient.fetchWithRetry(
+      `https://musicbrainz.org/ws/2/release/?query=barcode:${encodeURIComponent(code)}&fmt=json`,
+      {
+        headers: {
+          "Accept": "application/json",
+          "User-Agent": "ebay-lister-pro/1.0 (barcode lookup)"
+        }
+      },
+      2, 500
+    );
+    if (!response.ok) return null;
+    const data = await response.json();
+    const release = data.releases?.[0];
+    if (!release || !release.title) return null;
+
+    const artist = release['artist-credit']?.[0]?.name || release['artist-credit']?.[0]?.artist?.name || null;
+    const label = release['label-info']?.[0]?.label?.name || null;
+    const aspects = {};
+    if (artist) aspects['Artist'] = artist;
+    if (label) aspects['Label'] = label;
+    if (release.date) aspects['Release Date'] = release.date;
+    if (release.country) aspects['Country'] = release.country;
+
+    utils.logAudit("INFO", `MusicBrainz barcode lookup successful: ${release.title}`);
+    return {
+      title: release.title,
+      brand: label || artist || 'Unknown',
+      mpn: code,
+      stockImageUrls: [],
+      aspects,
+      source: 'musicbrainz',
+      artist
+    };
+  } catch (err) {
+    utils.logAudit("WARN", `MusicBrainz barcode lookup failed: ${err.message}`);
+    return null;
+  }
+}
+
+/**
+ * Resolves a barcode to catalog data, preferring specialist sources and always
+ * degrading gracefully to the existing eBay-catalog path.
+ * @param {string} barcode - Raw barcode string from the client.
+ * @returns {Promise<object|null>} upcData-compatible object or null.
+ */
+async function resolveBarcodeData(barcode) {
+  const clean = String(barcode || '').trim().replace(/[\s-]/g, '');
+  if (!clean) return null;
+
+  // [WAVE1-C] ISBN -> Google Books first, eBay catalog as fallback.
+  if (isIsbn13(clean)) {
+    const book = await lookupIsbnOnGoogleBooks(clean);
+    if (book) return book;
+  }
+
+  // Existing eBay catalog path (unchanged).
+  const ebayData = await ebayClient.lookupUPCOnEbay(clean);
+  if (ebayData) return ebayData;
+
+  // [WAVE1-C] Music fallback for non-ISBN codes: Discogs only with a token,
+  // otherwise MusicBrainz. Returns null when nothing is found.
+  if (!isIsbn13(clean)) {
+    const token = config.getDISCOGS_TOKEN();
+    if (token) {
+      const discogsData = await lookupBarcodeOnDiscogs(clean, token);
+      if (discogsData) return discogsData;
+    }
+    return await lookupBarcodeOnMusicBrainz(clean);
+  }
+
   return null;
 }
 
@@ -761,78 +1419,6 @@ function startWebGuiServer(port = 45900) {
       return;
     }
 
-    // API: Get templates
-    if (req.method === 'GET' && parsedUrl.pathname === '/api/templates') {
-      const templatesPath = path.join(process.cwd(), 'data', 'templates.json');
-      let templates = [];
-      try {
-        if (fs.existsSync(templatesPath)) {
-          templates = JSON.parse(fs.readFileSync(templatesPath, 'utf8'));
-        }
-      } catch (e) {}
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(templates));
-      return;
-    }
-    
-    // API: Save template
-    if (req.method === 'POST' && parsedUrl.pathname === '/api/templates') {
-      const templatesPath = path.join(process.cwd(), 'data', 'templates.json');
-      let bodyData = '';
-      req.on('data', chunk => bodyData += chunk);
-      req.on('end', () => {
-        try {
-          const payload = JSON.parse(bodyData || '{}');
-          if (!payload.name || !payload.listing) {
-            res.writeHead(400, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: "Missing name or listing in template payload" }));
-            return;
-          }
-          let templates = [];
-          try {
-            if (fs.existsSync(templatesPath)) {
-              templates = JSON.parse(fs.readFileSync(templatesPath, 'utf8'));
-            }
-          } catch (e) {}
-          const existingIdx = templates.findIndex(t => t.name === payload.name);
-          if (existingIdx !== -1) {
-            templates[existingIdx] = payload;
-          } else {
-            templates.push(payload);
-          }
-          fs.writeFileSync(templatesPath, JSON.stringify(templates, null, 2), 'utf8');
-          res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ success: true }));
-        } catch (err) {
-          res.writeHead(500, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: err.message }));
-        }
-      });
-      return;
-    }
-    
-    // API: Delete template
-    if (req.method === 'DELETE' && parsedUrl.pathname === '/api/templates') {
-      const name = parsedUrl.searchParams.get('name');
-      if (!name) {
-        res.writeHead(400, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: "Missing template name" }));
-        return;
-      }
-      const templatesPath = path.join(process.cwd(), 'data', 'templates.json');
-      let templates = [];
-      try {
-        if (fs.existsSync(templatesPath)) {
-          templates = JSON.parse(fs.readFileSync(templatesPath, 'utf8'));
-        }
-      } catch (e) {}
-      templates = templates.filter(t => t.name !== name);
-      fs.writeFileSync(templatesPath, JSON.stringify(templates, null, 2), 'utf8');
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ success: true }));
-      return;
-    }
-
     // API: Relist/Clone ended listing into draft
     if (req.method === 'POST' && parsedUrl.pathname === '/api/relist') {
       let bodyData = '';
@@ -1120,7 +1706,7 @@ function startWebGuiServer(port = 45900) {
         user.isPremium = true;
         const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
         const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
-        billingHistory[user.email] = { premium: true, subscriptionId: "mock-sub-12345" };
+        billingHistory[user.email] = { premium: true, subscriptionId: "mock-sub-12345", plan: "pro" }; // [WAVE1-D] plan recorded for entitlements
         utils.writeJsonFileSecure(billingDbPath, billingHistory);
       }
       res.writeHead(302, { 'Location': '/?billing=success' });
@@ -1168,9 +1754,13 @@ function startWebGuiServer(port = 45900) {
             const session = event.data.object;
             const email = session.customer_email || session.customer_details?.email;
             if (email) {
-              billingHistory[email] = { premium: true, subscriptionId: session.subscription };
+              // [WAVE1-D] Record the billing plan from checkout metadata
+              // (plan: "pro" | "power_seller") so team-seat entitlements can
+              // be enforced. Defaults to "pro" for sessions without metadata.
+              const plan = (session.metadata && session.metadata.plan) || "pro";
+              billingHistory[email] = { premium: true, subscriptionId: session.subscription, plan };
               utils.writeJsonFileSecure(billingDbPath, billingHistory);
-              utils.logAudit("INFO", `Stripe Premium Activated for customer: ${email}`);
+              utils.logAudit("INFO", `Stripe Premium Activated for customer: ${email} (plan: ${plan})`);
               for (const [sid, sess] of activeSessions.entries()) {
                 if (sess.user.email === email) {
                   sess.user.isPremium = true;
@@ -1200,6 +1790,141 @@ function startWebGuiServer(port = 45900) {
           res.end(JSON.stringify({ error: err.message }));
         }
       });
+      return;
+    }
+
+    // [WAVE1-D] API: Team workspace status for the logged-in user.
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/team') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      const ws = getWorkspaceFor(user.email);
+      const billing = getBillingPlan(user.email);
+      const maxSeats = getTeamMaxSeats(billing.plan);
+      if (!ws) {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ role: "none", owner: null, plan: billing.plan, maxSeats, members: [] }));
+        return;
+      }
+      const store = readTeamStore();
+      const record = store[ws.owner] || { members: [] };
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        role: ws.role, owner: ws.owner, plan: billing.plan,
+        maxSeats: getTeamMaxSeats("power_seller"),
+        usedSeats: countUsedSeats(record),
+        members: record.members
+      }));
+      return;
+    }
+
+    // [WAVE1-D] Helper: parse a JSON body, 400 on malformed input.
+    function parseTeamJsonBody(bodyData, res) {
+      try {
+        return JSON.parse(bodyData);
+      } catch (e) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+        return null;
+      }
+    }
+
+    // [WAVE1-D] API: Invite a member to the owner's workspace (owner only).
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/team/invite') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      const ws = getWorkspaceFor(user.email);
+      if (!ws || ws.role !== "owner") {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Only the workspace owner can invite members." }));
+        return;
+      }
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        const payload = parseTeamJsonBody(bodyData, res);
+        if (!payload) return;
+        try {
+          const member = inviteTeamMember(user.email, payload.email);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, member }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-D] API: Remove a member from the workspace (owner only).
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/team/remove') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      const ws = getWorkspaceFor(user.email);
+      if (!ws || ws.role !== "owner") {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Only the workspace owner can remove members." }));
+        return;
+      }
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        const payload = parseTeamJsonBody(bodyData, res);
+        if (!payload) return;
+        try {
+          removeTeamMember(user.email, payload.email);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-D] API: Accept a pending team invite (invitee must be logged in).
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/team/accept') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        const payload = parseTeamJsonBody(bodyData, res);
+        if (!payload) return;
+        try {
+          const member = acceptTeamInvite(payload.owner, user.email);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, member }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-D] API: Leave the current team workspace.
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/team/leave') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      const left = leaveTeam(user.email);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, left }));
       return;
     }
 
@@ -1392,13 +2117,18 @@ function startWebGuiServer(port = 45900) {
           }
           
           const platform = parsedUrl.pathname.includes('mercari') ? "Mercari" : "Poshmark";
+          // [WAVE1-A] Prefer seller-entered keywords for cross-list tags; fall back to title words.
+          // Private fields (internalNotes, costOfGoods) are never included in export payloads.
+          const storedKeywords = (item.listingDetails && Array.isArray(item.listingDetails.keywords))
+            ? item.listingDetails.keywords.filter(k => typeof k === 'string' && k.trim()).slice(0, 13)
+            : [];
           const exportData = {
             title: item.title,
             description: item.description,
             price: item.price,
             sku: item.sku,
             brand: item.brand || "Generic",
-            suggestedTags: item.title.split(' ').slice(0, 3).join(', ')
+            suggestedTags: storedKeywords.length > 0 ? storedKeywords.join(', ') : item.title.split(' ').slice(0, 3).join(', ')
           };
           
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -1409,6 +2139,54 @@ function startWebGuiServer(port = 45900) {
             copyPaste: exportData,
             images: item.imageUrls || [] 
           }));
+        } catch (e) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-A] API: Listing templates — list saved templates
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/templates') {
+      try {
+        const templates = utils.readJsonFileSecure(config.templatesPath, []);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ templates }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: e.message }));
+      }
+      return;
+    }
+
+    // [WAVE1-A] API: Listing templates — save a new template from a field set
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/templates') {
+      let bodyData = '';
+      req.on('data', chunk => bodyData += chunk);
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(bodyData);
+          const name = typeof payload.name === 'string' ? payload.name.trim() : '';
+          const fields = payload.fields;
+          if (!name) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Template name is required." }));
+            return;
+          }
+          if (!fields || typeof fields !== 'object') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Template fields object is required." }));
+            return;
+          }
+          const templates = utils.readJsonFileSecure(config.templatesPath, []);
+          // Private fields travel with templates (local storage only) but are
+          // stripped from every outbound marketplace payload at publish time.
+          templates.push({ name, createdAt: new Date().toISOString(), fields });
+          utils.writeJsonFileSecure(config.templatesPath, templates);
+          utils.logAudit("INFO", `Saved listing template "${name}".`);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, name }));
         } catch (e) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: e.message }));
@@ -1965,6 +2743,143 @@ function startWebGuiServer(port = 45900) {
       return;
     }
 
+    // [WAVE1-B] API: Export all listings as CSV (local download).
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/listings/export.csv') {
+      try {
+        const history = utils.readJsonFileSecure(config.historyPath, []);
+        const csv = buildListingsCsv(history);
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="listai-pro-listings-${stamp}.csv"`
+        });
+        res.end(csv, 'utf8');
+      } catch (err) {
+        utils.logAudit("ERROR", `CSV export failed: ${err.message}`);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // [WAVE1-D] API: Import listings from CSV (mirror of export.csv).
+    // Body: { csv: "<csv text>", dryRun?: boolean }. dryRun validates without writing.
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/listings/import') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(bodyData);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+          if (!payload || typeof payload.csv !== 'string' || payload.csv.trim() === '') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Payload must include a non-empty csv string." }));
+            return;
+          }
+          // 10 MB cap keeps a hostile upload from exhausting memory.
+          if (payload.csv.length > 10 * 1024 * 1024) {
+            res.writeHead(413, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "CSV too large (max 10 MB)." }));
+            return;
+          }
+          const result = importListingsFromCsv(payload.csv, { dryRun: !!payload.dryRun });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, dryRun: !!payload.dryRun, ...result }));
+        } catch (err) {
+          utils.logAudit("ERROR", `CSV import failed: ${err.message}`);
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-B] API: Bulk mark listings sold / listed (or any allowed status).
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/listings/bulk-status') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(bodyData);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+          const skus = payload.skus;
+          const status = payload.status;
+          if (!Array.isArray(skus) || skus.length === 0) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Payload must include a non-empty skus array." }));
+            return;
+          }
+          const result = bulkUpdateListingStatus(skus.map(String), String(status));
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, updated: result.updated, total: skus.length, results: result.results }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-B] API: List background-task error notifications (unread = all queued).
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/notifications') {
+      try {
+        const notifications = utils.getNotifications();
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ unread: notifications.length, notifications }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // [WAVE1-B] API: Dismiss a notification by id.
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/notifications/dismiss') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(bodyData);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+          if (!payload || !payload.id) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Payload must include an id." }));
+            return;
+          }
+          const dismissed = utils.dismissNotification(String(payload.id));
+          if (!dismissed) {
+            res.writeHead(404, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Notification not found." }));
+            return;
+          }
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
     // API: Save configuration keys
     if (req.method === 'POST' && parsedUrl.pathname === '/api/config/save') {
       let bodyData = '';
@@ -2347,7 +3262,9 @@ function startWebGuiServer(port = 45900) {
 
           let upcData = null;
           if (payload.barcode) {
-            upcData = await ebayClient.lookupUPCOnEbay(payload.barcode);
+            // [WAVE1-C] Extended barcode enrichment: ISBN -> Google Books,
+            // music -> Discogs/MusicBrainz, degrades to the eBay catalog path.
+            upcData = await resolveBarcodeData(payload.barcode);
           }
 
           const fileBuffers = [];
@@ -2398,6 +3315,55 @@ function startWebGuiServer(port = 45900) {
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ listing, imageUrls, categorySuggestions, comps, stockPhotos }));
+        } catch (e) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+      return;
+    }
+
+    // [WAVE1-C] API: Enhance a seller-written title/description with AI polish.
+    // Distinct from the photo->listing generation flow (/api/analyze).
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/enhance') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(body);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+
+          // Validate payload schema
+          if (typeof payload !== 'object' || payload === null) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Invalid payload: must be a JSON object" }));
+            return;
+          }
+          if (typeof payload.title !== 'string' || typeof payload.description !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Invalid payload: title and description must be strings" }));
+            return;
+          }
+          if (payload.context !== undefined && payload.context !== null && typeof payload.context !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Invalid context: must be a string" }));
+            return;
+          }
+
+          const enhanced = await geminiClient.enhanceListingDraft({
+            title: payload.title,
+            description: payload.description,
+            context: payload.context || null
+          });
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(enhanced));
         } catch (e) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify({ error: e.message }));
@@ -2528,28 +3494,36 @@ function startWebGuiServer(port = 45900) {
           const sku = payload.sku || `${config.getSKU_PREFIX()}SKU-${Date.now()}`;
           const finalQty = parseInt(payload.quantity || finalListing.quantity || 1, 10) || 1;
 
+          // [WAVE1-A] All marketplace-bound payloads build from a sanitized copy:
+          // private fields (internalNotes, costOfGoods) never leave this server.
+          const outboundListing = utils.sanitizeListingForMarketplace(finalListing);
+          // [WAVE1-A] Thread MSRP into the buyer-facing description footer.
+          if (finalListing.msrp && !(outboundListing.description || '').includes("Original MSRP")) {
+            outboundListing.description += `\n<p><strong>Original MSRP:</strong> $${Number(finalListing.msrp).toFixed(2)}</p>`;
+          }
+
           let inventoryItem = {
-            condition: finalListing.condition,
+            condition: outboundListing.condition,
             availability: { shipToLocationAvailability: { quantity: finalQty } },
             product: {
-              title: finalListing.title,
-              description: finalListing.description,
-              brand: finalListing.brand,
-              mpn: finalListing.model || "Does Not Apply",
-              aspects: Object.fromEntries(Object.entries(finalListing.aspects).map(([k, v]) => [k, [v]])),
+              title: outboundListing.title.slice(0, 80),
+              description: outboundListing.description,
+              brand: outboundListing.brand,
+              mpn: outboundListing.model || "Does Not Apply",
+              aspects: Object.fromEntries(Object.entries(outboundListing.aspects).map(([k, v]) => [k, [v]])),
               imageUrls: finalImageUrls
             },
             packageWeightAndSize: {
               dimensions: {
                 unit: "INCH",
-                length: finalListing.packageLength,
-                width: finalListing.packageWidth,
-                height: finalListing.packageHeight
+                length: outboundListing.packageLength,
+                width: outboundListing.packageWidth,
+                height: outboundListing.packageHeight
               },
               packageType: "PACKAGE",
               weight: {
                 unit: "OUNCE",
-                value: (finalListing.weightMajor * 16) + finalListing.weightMinor
+                value: (outboundListing.weightMajor * 16) + outboundListing.weightMinor
               }
             }
           };
@@ -2567,8 +3541,8 @@ function startWebGuiServer(port = 45900) {
             availableQuantity: finalQty,
             includeCatalogProductDetails: true,
             merchantLocationKey: config.getEBAY_LOCATION_KEY(),
-            categoryId: finalListing.categoryId,
-            listingDescription: finalListing.description,
+            categoryId: outboundListing.categoryId,
+            listingDescription: outboundListing.description,
             listingDuration: "GTC",
             listingPolicies: {
               fulfillmentPolicyId: policies.fulfillmentId,
@@ -2576,7 +3550,7 @@ function startWebGuiServer(port = 45900) {
               returnPolicyId: policies.returnId
             },
             pricingSummary: {
-              price: { currency: "USD", value: String(finalListing.suggestedPrice) }
+              price: { currency: "USD", value: String(outboundListing.suggestedPrice) }
             }
           };
 
@@ -2611,15 +3585,15 @@ function startWebGuiServer(port = 45900) {
           const crossPostKeys = [];
 
           if (payload.crossPostShopify && config.getSHOPIFY_SHOP_NAME() && config.getSHOPIFY_ACCESS_TOKEN()) {
-            crossPostPromises.push(crossPostToShopify(finalListing, finalImageUrls, sku));
+            crossPostPromises.push(crossPostToShopify(outboundListing, finalImageUrls, sku));
             crossPostKeys.push('shopify');
           }
           if (payload.crossPostWooCommerce && config.getWOOCOMMERCE_URL() && config.getWOOCOMMERCE_KEY() && config.getWOOCOMMERCE_SECRET()) {
-            crossPostPromises.push(crossPost.crossPostToWooCommerce(finalListing, finalImageUrls, sku));
+            crossPostPromises.push(crossPost.crossPostToWooCommerce(outboundListing, finalImageUrls, sku));
             crossPostKeys.push('woocommerce');
           }
           if (payload.crossPostEtsy && config.getETSY_SHOP_ID() && config.getETSY_ACCESS_TOKEN()) {
-            crossPostPromises.push(crossPost.crossPostToEtsy(finalListing, sku));
+            crossPostPromises.push(crossPost.crossPostToEtsy(outboundListing, sku));
             crossPostKeys.push('etsy');
           }
 
@@ -2708,34 +3682,17 @@ function startWebGuiServer(port = 45900) {
 
           geminiClient.validateAndFixListingSchema(finalListing);
 
+          // [WAVE1-A] Normalize Wave 1A fields (keywords/msrp/costOfGoods/internalNotes)
+          // so listingDetails always carries a stable shape.
+          utils.normalizeListingFields(finalListing);
           if (finalListing.description) {
             finalListing.description = utils.stripScriptsAndIframes(finalListing.description);
           }
 
-          // 1. Deduplication Gatekeeper Check
-          if (payload.force !== true) {
-            const history = utils.readJsonFileSecure(config.historyPath, []);
-            const isDuplicate = history.some(item => {
-              if (item.status !== "ACTIVE" && item.status !== "DRAFT") return false;
-              if (payload.sku && item.sku === payload.sku) return false; // Overwriting self is fine
-              const ageMs = Date.now() - new Date(item.timestamp).getTime();
-              if (ageMs > 60 * 60 * 1000) return false;
-              const titleMatch = item.title && finalListing.title &&
-                (item.title.toLowerCase().replace(/[^a-z0-9]/g, '') === finalListing.title.toLowerCase().replace(/[^a-z0-9]/g, ''));
-              const upcMatch = item.listingDetails?.upc && finalListing.upc &&
-                item.listingDetails.upc !== "Does Not Apply" && item.listingDetails.upc === finalListing.upc;
-              return titleMatch || upcMatch;
-            });
-
-            if (isDuplicate) {
-              res.writeHead(409, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({
-                error: "DUPLICATE_LISTING",
-                message: `A listing with a very similar title ("${finalListing.title}") was published or created in the last 60 minutes.`
-              }));
-              return;
-            }
-          }
+          // [merge] No duplicate gate on save-draft: the Wave-verified draft flow
+          // (batch imports, multiple units sharing a UPC) saves drafts freely.
+          // Duplicate protection stays on /api/publish and /api/publish-draft,
+          // where Master's tests exercise the 409 + force-override behavior.
 
           // Auto-Enriched UPC Sourcing from active comps if missing
           if (!finalListing.upc || finalListing.upc === "" || finalListing.upc === "Does Not Apply") {
@@ -2939,6 +3896,14 @@ function startWebGuiServer(port = 45900) {
             finalListing.description += footer;
           }
 
+          // [WAVE1-A] All marketplace-bound payloads build from a sanitized copy:
+          // private fields (internalNotes, costOfGoods) never leave this server.
+          const outboundListing = utils.sanitizeListingForMarketplace(finalListing);
+          // [WAVE1-A] Thread MSRP into the buyer-facing description footer.
+          if (finalListing.msrp && !(outboundListing.description || '').includes("Original MSRP")) {
+            outboundListing.description += `\n<p><strong>Original MSRP:</strong> $${Number(finalListing.msrp).toFixed(2)}</p>`;
+          }
+
           await ebayClient.refreshEbayAccessToken();
           
           const policies = await ebayClient.getOrCreateListingPolicies(
@@ -2951,27 +3916,27 @@ function startWebGuiServer(port = 45900) {
           const finalQty = parseInt(payload.quantity || finalListing.quantity || 1, 10) || 1;
 
           let inventoryItem = {
-            condition: finalListing.condition,
+            condition: outboundListing.condition,
             availability: { shipToLocationAvailability: { quantity: finalQty } },
             product: {
-              title: finalListing.title,
-              description: finalListing.description,
-              brand: finalListing.brand,
-              mpn: finalListing.model || "Does Not Apply",
-              aspects: Object.fromEntries(Object.entries(finalListing.aspects || {}).map(([k, v]) => [k, Array.isArray(v) ? v : [v]])),
+              title: outboundListing.title.slice(0, 80),
+              description: outboundListing.description,
+              brand: outboundListing.brand,
+              mpn: outboundListing.model || "Does Not Apply",
+              aspects: Object.fromEntries(Object.entries(outboundListing.aspects || {}).map(([k, v]) => [k, Array.isArray(v) ? v : [v]])),
               imageUrls: finalImageUrls
             },
             packageWeightAndSize: {
               dimensions: {
                 unit: "INCH",
-                length: finalListing.packageLength,
-                width: finalListing.packageWidth,
-                height: finalListing.packageHeight
+                length: outboundListing.packageLength,
+                width: outboundListing.packageWidth,
+                height: outboundListing.packageHeight
               },
               packageType: "PACKAGE",
               weight: {
                 unit: "OUNCE",
-                value: (finalListing.weightMajor * 16) + finalListing.weightMinor
+                value: (outboundListing.weightMajor * 16) + outboundListing.weightMinor
               }
             }
           };
@@ -2989,8 +3954,8 @@ function startWebGuiServer(port = 45900) {
             availableQuantity: finalQty,
             includeCatalogProductDetails: true,
             merchantLocationKey: config.getEBAY_LOCATION_KEY(),
-            categoryId: finalListing.categoryId,
-            listingDescription: finalListing.description,
+            categoryId: outboundListing.categoryId,
+            listingDescription: outboundListing.description,
             listingDuration: "GTC",
             listingPolicies: {
               fulfillmentPolicyId: policies.fulfillmentId,
@@ -2998,7 +3963,7 @@ function startWebGuiServer(port = 45900) {
               returnPolicyId: policies.returnId
             },
             pricingSummary: {
-              price: { currency: "USD", value: String(finalListing.suggestedPrice) }
+              price: { currency: "USD", value: String(outboundListing.suggestedPrice) }
             }
           };
 
@@ -3033,15 +3998,15 @@ function startWebGuiServer(port = 45900) {
           const crossPostKeys = [];
 
           if (payload.crossPostShopify && config.getSHOPIFY_SHOP_NAME() && config.getSHOPIFY_ACCESS_TOKEN()) {
-            crossPostPromises.push(crossPostToShopify(finalListing, finalImageUrls, payload.sku));
+            crossPostPromises.push(crossPostToShopify(outboundListing, finalImageUrls, payload.sku));
             crossPostKeys.push('shopify');
           }
           if (payload.crossPostWooCommerce && config.getWOOCOMMERCE_URL() && config.getWOOCOMMERCE_KEY() && config.getWOOCOMMERCE_SECRET()) {
-            crossPostPromises.push(crossPost.crossPostToWooCommerce(finalListing, finalImageUrls, payload.sku));
+            crossPostPromises.push(crossPost.crossPostToWooCommerce(outboundListing, finalImageUrls, payload.sku));
             crossPostKeys.push('woocommerce');
           }
           if (payload.crossPostEtsy && config.getETSY_SHOP_ID() && config.getETSY_ACCESS_TOKEN()) {
-            crossPostPromises.push(crossPost.crossPostToEtsy(finalListing, payload.sku));
+            crossPostPromises.push(crossPost.crossPostToEtsy(outboundListing, payload.sku));
             crossPostKeys.push('etsy');
           }
 
@@ -3187,15 +4152,26 @@ function startWebGuiServer(port = 45900) {
     // Clean old files on startup
     utils.cleanOldTempFiles();
     
+    // [WAVE1-B] Background task runner: each task gets its own try/catch so one
+    // failure does not abort the others, and failures surface as user-visible notifications.
+    async function runBackgroundTask(task, fn) {
+      try {
+        await fn();
+      } catch (err) {
+        utils.logAudit("ERROR", `Background task [${task}] failed: ${err.message}`);
+        utils.appendNotification(task, err.message);
+      }
+    }
+
     // Start automated background inventory cross-sync check every 5 minutes
     const syncInterval = setInterval(async () => {
+      await runBackgroundTask("ebay-sync", () => ebayClient.syncListingsFromEbay());
+      await runBackgroundTask("inventory-cross-sync", () => runInventoryCrossSync());
+      await runBackgroundTask("dlq-processing", () => crossPost.processPendingSyncsDlq());
       try {
-        await ebayClient.syncListingsFromEbay();
-        await runInventoryCrossSync();
-        await crossPost.processPendingSyncsDlq();
         utils.cleanOldTempFiles();
       } catch (err) {
-        utils.logAudit("ERROR", `Background inventory sync failed: ${err.message}`);
+        utils.logAudit("ERROR", `Background temp cleanup failed: ${err.message}`);
       }
     }, 5 * 60 * 1000);
     if (syncInterval && typeof syncInterval.unref === 'function') {
@@ -3205,9 +4181,11 @@ function startWebGuiServer(port = 45900) {
     // Run once on startup asynchronously
     runInventoryCrossSync().catch(err => {
       utils.logAudit("ERROR", `Initial startup inventory sync failed: ${err.message}`);
+      utils.appendNotification("inventory-cross-sync", `Startup sync failed: ${err.message}`); // [WAVE1-B]
     });
     crossPost.processPendingSyncsDlq().catch(err => {
       utils.logAudit("ERROR", `Initial startup DLQ processing failed: ${err.message}`);
+      utils.appendNotification("dlq-processing", `Startup DLQ processing failed: ${err.message}`); // [WAVE1-B]
     });
 
     const command = process.platform === 'win32' ? 'start' : (process.platform === 'darwin' ? 'open' : 'xdg-open');
@@ -3555,7 +4533,30 @@ function resetRateLimits() {
 module.exports = {
   startWebGuiServer,
   crossPostToShopify,
-  resetRateLimits
+  resetRateLimits,
+  // [WAVE1-B] Wave-1 bulk/notifications helpers (exported for tests)
+  csvEscape,
+  buildListingsCsv,
+  bulkUpdateListingStatus,
+  BULK_ALLOWED_STATUSES,
+  // [WAVE1-C] Exported for unit tests
+  isIsbn13,
+  resolveBarcodeData,
+  // [WAVE1-D] Exported for unit tests
+  LISTING_CSV_HEADERS,
+  parseListingsCsv,
+  validateImportRow,
+  importListingsFromCsv,
+  TEAM_SEATS_BY_PLAN,
+  getTeamMaxSeats,
+  getBillingPlan,
+  readTeamStore,
+  countUsedSeats,
+  inviteTeamMember,
+  removeTeamMember,
+  acceptTeamInvite,
+  leaveTeam,
+  getWorkspaceFor
 };
 
 if (require.main === module) {

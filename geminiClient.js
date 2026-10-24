@@ -267,8 +267,19 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
       },
       "detectedDefects": [
          // Array of string descriptions of physical defects or wear found in the photos.
-      ]
+      ],
+      "_confidence": {
+        "title": 0.9,
+        "specifics": 0.85,
+        "price": 0.75
+      }
     }
+
+    Also include a "_confidence" object with your own HONEST self-rating (0.0 to 1.0) of:
+    - "title": how confident you are the title keywords are accurate,
+    - "specifics": how confident you are the brand/model/aspects are correct,
+    - "price": how confident you are suggestedPrice matches the current market.
+    Rate below 0.8 whenever you are guessing from the photos alone. Do NOT default to 1.0.
     
     Copywriting Vibe Rules: ${personaPrompt}
     HTML Formatting Rules: ${templatePrompt}
@@ -311,6 +322,15 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
         type: "ARRAY",
         items: { type: "STRING" },
         description: "Wear/flaws found in images."
+      },
+      // [WAVE1-C] AI self-rated confidence (0.0-1.0) per field. Optional: absent on older listings.
+      _confidence: {
+        type: "OBJECT",
+        properties: {
+          title: { type: "NUMBER", description: "Confidence the title keywords are accurate (0.0-1.0)." },
+          specifics: { type: "NUMBER", description: "Confidence brand/model/aspects are correct (0.0-1.0)." },
+          price: { type: "NUMBER", description: "Confidence suggestedPrice matches the market (0.0-1.0)." }
+        }
       }
     },
     required: [
@@ -466,6 +486,121 @@ function validateAndFixListingSchema(data) {
     if (!data.description) data.description = "";
     data.description += defectBlock;
   }
+
+  // [WAVE1-C] Normalize the AI's self-rated confidence (0..1 per field).
+  // Older listings without _confidence are left untouched: no badge, no crash.
+  if (data._confidence !== undefined && data._confidence !== null) {
+    if (typeof data._confidence === 'object' && !Array.isArray(data._confidence)) {
+      const clean = {};
+      for (const key of ['title', 'specifics', 'price']) {
+        const v = Number(data._confidence[key]);
+        if (!isNaN(v)) {
+          clean[key] = Math.min(1, Math.max(0, Math.round(v * 100) / 100));
+        }
+      }
+      if (Object.keys(clean).length > 0) {
+        data._confidence = clean;
+      } else {
+        delete data._confidence;
+      }
+    } else {
+      delete data._confidence;
+    }
+  }
+}
+
+/**
+ * Builds the polish prompt for AI listing enhancement mode.
+ * Kept as a separate pure function so its output shape is unit-testable.
+ * @param {string} title - The seller's current title.
+ * @param {string} description - The seller's current description (may be HTML).
+ * @param {string|null} [context] - Optional extra context (e.g. category, condition notes).
+ * @returns {string} The prompt text sent to Gemini.
+ */
+function buildEnhancePrompt(title, description, context = null) {
+  return `
+    You are polishing an eBay seller's draft listing. The seller wrote the text below; improve it without changing what they meant.
+
+    STRICT RULES:
+    - Fix grammar, spelling, and awkward phrasing.
+    - Add missing specifics (brand, model, size, condition notes) ONLY when they are clearly implied by the existing text. NEVER invent facts, measurements, brands, materials, or condition claims.
+    - Keep the seller's own voice and tone.
+    - Keep the title under 80 characters and keyword-rich for eBay search.
+    - Return the description as clean HTML (same structure the seller used: <p>, <ul>, <li>, <strong>).
+
+    ${context ? `Extra context from the seller: "${context}"` : ''}
+
+    Current title:
+    ${title}
+
+    Current description:
+    ${description}
+
+    Output ONLY raw JSON conforming exactly to this schema:
+    {
+      "title": "polished title under 80 characters",
+      "description": "polished description as clean HTML"
+    }
+  `;
+}
+
+/**
+ * Polishes a seller-written title/description with Gemini.
+ * This is a TEXT-ONLY enhancement flow, distinct from the photo->listing generation flow.
+ * @param {object} draft - { title: string, description: string, context?: string|null }
+ * @returns {Promise<{title:string, description:string}>} The polished title and description.
+ * @throws {Error} If parameters are invalid or the Gemini API call fails.
+ */
+async function enhanceListingDraft({ title, description, context = null }) {
+  if (typeof title !== 'string' || typeof description !== 'string') {
+    throw new Error("Validation Error: title and description must be strings.");
+  }
+  if (context !== null && context !== undefined && typeof context !== 'string') {
+    throw new Error("Validation Error: context must be a string or null.");
+  }
+
+  const geminiKey = config.getGEMINI_API_KEY();
+  if (!geminiKey) {
+    throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");
+  }
+
+  const enhanceSchema = {
+    type: "OBJECT",
+    properties: {
+      title: {
+        type: "STRING",
+        description: "Polished title under 80 characters, keyword-rich, seller's voice kept."
+      },
+      description: {
+        type: "STRING",
+        description: "Polished description as clean HTML. No invented facts."
+      }
+    },
+    required: ["title", "description"]
+  };
+
+  const response = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ parts: [{ text: buildEnhancePrompt(title, description, context) }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: enhanceSchema
+      }
+    })
+  });
+
+  const res = await response.json();
+  if (!response.ok || !res.candidates?.[0]?.content?.parts?.[0]?.text) {
+    throw new Error(`Enhance generation failed: ${JSON.stringify(res)}`);
+  }
+
+  const polished = parseSafeJsonString(res.candidates[0].content.parts[0].text);
+  return {
+    title: typeof polished.title === 'string' && polished.title.trim() ? polished.title : title,
+    description: typeof polished.description === 'string' && polished.description.trim() ? polished.description : description
+  };
 }
 
 /**
@@ -566,5 +701,8 @@ module.exports = {
   runAIOrchestration,
   parseSafeJsonString,
   validateAndFixListingSchema,
+  // [WAVE1-C] AI listing enhancement mode (text polish, separate from photo->listing generation)
+  buildEnhancePrompt,
+  enhanceListingDraft,
   generateListingFromKeywords
 };

@@ -7,6 +7,7 @@
   "scripts": {
     "bootstrap": "node bootstrap.js",
     "start": "node start.js",
+    "dev": "node start.js",
     "test": "node test-suite.js"
   },
   "engines": {
