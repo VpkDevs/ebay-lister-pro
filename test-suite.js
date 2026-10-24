@@ -2628,7 +2628,7 @@ test('Additional maximal coverage and edge cases', async (t) => {
       if (urlStr.includes('/buy/browse/v1/item_summary/search')) {
         return { status: 403, ok: false, json: async () => ({ error: "Forbidden" }), text: async () => "Forbidden" };
       }
-      if (urlStr.includes('/v1beta/models/gemini-2.5-flash:generateContent')) {
+      if (urlStr.includes('/v1beta/models/') && urlStr.includes(':generateContent')) {
         const geminiText = JSON.stringify({
           title: "Gemini Generated Prevagen Listing",
           brand: "Prevagen",

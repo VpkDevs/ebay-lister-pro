@@ -113,12 +113,15 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
   
   let pass1Prompt = `
     Analyze these product photo(s). Check all images to see if there is a visible product barcode or UPC number.
-    If you find a barcode, extract its numeric digits.
+    A barcode is a printed graphic of vertical black bars with a row of digits directly beneath it.
+    Only report a UPC if you can clearly see an actual barcode in an image and can read the digits printed under its bars.
+    Numbers printed anywhere else on the product or packaging — such as card or serial numbers, jersey numbers, prices, or years — are NOT a UPC; never report them as one.
+    If no barcode is clearly visible, return an empty string for detectedUPC. Never guess, infer, or invent a UPC.
     Also, scan the image(s) for any physical flaws, defects, wear, scratches, scuffs, tears, chips, or stains.
-    Provide only a raw JSON containing: 
+    Provide only a raw JSON containing:
     {
       "title": "Optimized keywords title under 80 characters containing brand name, model, size/color, and condition",
-      "detectedUPC": "numeric digits as a string, or null if no barcode is visible",
+      "detectedUPC": "digits printed under a clearly visible barcode as a string, or an empty string if no barcode is visible",
       "detectedDefects": ["list of wear, flaw, or defect strings, or empty array if none"]
     }
   `;
@@ -143,9 +146,9 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
         type: "STRING", 
         description: "Optimized keywords title under 80 characters containing brand name, model, size/color, and condition" 
       },
-      detectedUPC: { 
-        type: "STRING", 
-        description: "numeric digits as a string, or null/empty if no barcode is visible" 
+      detectedUPC: {
+        type: "STRING",
+        description: "Digits printed beneath a barcode that is clearly visible in the photo(s); empty string when no barcode is visible. Never a guessed, inferred, or non-barcode number."
       },
       detectedDefects: {
         type: "ARRAY",
@@ -156,7 +159,7 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
     required: ["title", "detectedUPC", "detectedDefects"]
   };
 
-  const response1 = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+  const response1 = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${config.getGEMINI_MODEL()}:generateContent?key=${geminiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -166,9 +169,11 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
           ...imageParts
         ]
       }],
-      generationConfig: { 
+      generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: pass1Schema
+        responseSchema: pass1Schema,
+        // Cap billed output: pass 1 returns a tiny JSON object; anything longer is runaway text.
+        maxOutputTokens: 1024
       }
     })
   });
@@ -280,7 +285,8 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
     - "specifics": how confident you are the brand/model/aspects are correct,
     - "price": how confident you are suggestedPrice matches the current market.
     Rate below 0.8 whenever you are guessing from the photos alone. Do NOT default to 1.0.
-    
+    Write each confidence value with at most 2 decimal places (e.g. 0.85).
+
     Copywriting Vibe Rules: ${personaPrompt}
     HTML Formatting Rules: ${templatePrompt}
     ${compsPrompt}
@@ -327,9 +333,9 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
       _confidence: {
         type: "OBJECT",
         properties: {
-          title: { type: "NUMBER", description: "Confidence the title keywords are accurate (0.0-1.0)." },
-          specifics: { type: "NUMBER", description: "Confidence brand/model/aspects are correct (0.0-1.0)." },
-          price: { type: "NUMBER", description: "Confidence suggestedPrice matches the market (0.0-1.0)." }
+          title: { type: "NUMBER", description: "Confidence the title keywords are accurate (0.0-1.0), at most 2 decimal places (e.g. 0.85)." },
+          specifics: { type: "NUMBER", description: "Confidence brand/model/aspects are correct (0.0-1.0), at most 2 decimal places (e.g. 0.85)." },
+          price: { type: "NUMBER", description: "Confidence suggestedPrice matches the market (0.0-1.0), at most 2 decimal places (e.g. 0.85)." }
         }
       }
     },
@@ -340,7 +346,7 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
     ]
   };
 
-  const response2 = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+  const response2 = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${config.getGEMINI_MODEL()}:generateContent?key=${geminiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -350,9 +356,12 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
           ...imageParts
         ]
       }],
-      generationConfig: { 
+      generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: pass2Schema
+        responseSchema: pass2Schema,
+        // Cap billed output so a runaway field (e.g. a _confidence decimal that
+        // expands for hundreds of digits) cannot burn paid output tokens.
+        maxOutputTokens: 8192
       }
     })
   });
@@ -579,14 +588,15 @@ async function enhanceListingDraft({ title, description, context = null }) {
     required: ["title", "description"]
   };
 
-  const response = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+  const response = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${config.getGEMINI_MODEL()}:generateContent?key=${geminiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ parts: [{ text: buildEnhancePrompt(title, description, context) }] }],
       generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: enhanceSchema
+        responseSchema: enhanceSchema,
+        maxOutputTokens: 2048
       }
     })
   });
@@ -662,16 +672,17 @@ async function generateListingFromKeywords(keywords) {
     Provide only a raw JSON matching the schema.
   `;
 
-  const response = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiKey}`, {
+  const response = await ebayClient.fetchWithRetry(`https://generativelanguage.googleapis.com/v1beta/models/${config.getGEMINI_MODEL()}:generateContent?key=${geminiKey}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{
         parts: [{ text: prompt }]
       }],
-      generationConfig: { 
+      generationConfig: {
         responseMimeType: "application/json",
-        responseSchema: schema
+        responseSchema: schema,
+        maxOutputTokens: 8192
       }
     })
   });
