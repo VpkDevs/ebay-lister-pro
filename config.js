@@ -89,6 +89,8 @@ module.exports = {
   runDiagnostics,
   /** @returns {string|undefined} */
   getGEMINI_API_KEY: () => process.env.GEMINI_API_KEY,
+  /** @returns {string} Gemini model for AI generation. GEMINI_MODEL env override; gemini-2.5-flash is closed to new API users (404), so the default is a current Flash model. */
+  getGEMINI_MODEL: () => (process.env.GEMINI_MODEL || "").trim() || "gemini-3.8-flash",
   /** @returns {string|undefined} */
   getEBAY_CLIENT_ID: () => process.env.EBAY_CLIENT_ID,
   /** @returns {string|undefined} */
