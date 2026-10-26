@@ -16,6 +16,10 @@ process.env.GEMINI_API_KEY = "test-gemini-key";
 process.env.EBAY_CLIENT_ID = "test-client-id";
 process.env.EBAY_CLIENT_SECRET = "test-client-secret";
 process.env.EBAY_REFRESH_TOKEN = "test-refresh-token";
+// [HARDENING] The suite deliberately CONFIGURES the operator API key (the
+// same value the header-based tests below present). There is no shipped
+// default anymore — a configured key or nothing.
+process.env.API_KEY = "lister-secret-key-12345";
 
 const utils = require('./utils');
 const ebayClient = require('./ebayClient');
@@ -476,7 +480,9 @@ test('Web Server local GUI routing', async (t) => {
     try {
       const res = await fetch(`http://127.0.0.1:${testPort}/api/analyze`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        // [HARDENING] Generation requires an identity — this suite acts as
+        // the operator via the suite-configured API key.
+        headers: { 'Content-Type': 'application/json', 'X-Lister-API-Key': 'lister-secret-key-12345' },
         body: JSON.stringify({
           images: ['/uploads/processed/analyze-local.png'],
           notes: 'local upload path test'
@@ -2654,10 +2660,12 @@ test('Additional maximal coverage and edge cases', async (t) => {
 
     try {
       const url = `http://127.0.0.1:${serverPort}/api/ebay/import?itemIdOrUrl=prevagen%20extra%20str%2060%20caps`;
-      const res = await REAL_FETCH(url);
+      // [HARDENING] The Gemini fallback is a generation and requires an
+      // identity — act as the operator via the suite-configured API key.
+      const res = await REAL_FETCH(url, { headers: { 'X-Lister-API-Key': 'lister-secret-key-12345' } });
       assert.strictEqual(res.status, 200);
       const data = await res.json();
-      
+
       assert.strictEqual(data.title, "Gemini Generated Prevagen Listing");
       assert.strictEqual(data.brand, "Prevagen");
       assert.strictEqual(data.model, "PREV-60-AI");
@@ -4467,6 +4475,11 @@ test('Wave 1D: bulk CSV import and Power Seller team seats', async (t) => {
     const testPort = 45921;
     const server = webServer.startWebGuiServer(testPort);
     resetBilling({});
+    // [HARDENING] Webhook events must be signature-verified — this test now
+    // signs like Stripe does (it previously posted unsigned, which is the
+    // exact forgery the hardening pass closes).
+    const savedWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    process.env.STRIPE_WEBHOOK_SECRET = 'whsec_w1d_test';
     try {
       const eventObj = {
         id: 'evt_w1d',
@@ -4477,10 +4490,14 @@ test('Wave 1D: bulk CSV import and Power Seller team seats', async (t) => {
           metadata: { plan: 'power_seller' }
         } }
       };
+      const payloadStr = JSON.stringify(eventObj);
+      const timestamp = Math.floor(Date.now() / 1000);
+      const signature = crypto.createHmac('sha256', 'whsec_w1d_test')
+        .update(`${timestamp}.${payloadStr}`).digest('hex');
       const res = await fetch(`http://127.0.0.1:${testPort}/api/billing/webhook`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(eventObj)
+        headers: { 'Content-Type': 'application/json', 'Stripe-Signature': `t=${timestamp},v1=${signature}` },
+        body: payloadStr
       });
       assert.strictEqual(res.status, 200);
       const billing = utils.readJsonFileSecure(billingDbPath, {});
@@ -4488,6 +4505,8 @@ test('Wave 1D: bulk CSV import and Power Seller team seats', async (t) => {
       assert.strictEqual(billing['ps-buyer@test.com'].plan, 'power_seller');
       assert.deepStrictEqual(webServer.getWorkspaceFor('ps-buyer@test.com'), { role: 'owner', owner: 'ps-buyer@test.com' });
     } finally {
+      if (savedWebhookSecret === undefined) delete process.env.STRIPE_WEBHOOK_SECRET;
+      else process.env.STRIPE_WEBHOOK_SECRET = savedWebhookSecret;
       await new Promise((resolve) => server.close(resolve));
     }
   });
@@ -5372,4 +5391,417 @@ test('BYOK: key storage, generation routing, and the overflow valve', async (t) 
   else delete process.env.GOOGLE_CLIENT_ID;
   if (hadGoogleClientSecret) process.env.GOOGLE_CLIENT_SECRET = savedGoogleClientSecret;
   else delete process.env.GOOGLE_CLIENT_SECRET;
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [HARDENING] Sale-stopper regression suite (audit fixes 1–7):
+//  - No free premium: the mock-success route is gone, the webhook verifies
+//    signatures and rejects everything unverifiable (including when no
+//    secret is configured), no shipped default API key exists, and
+//    unconfigured Google login fails closed instead of minting a premium
+//    "local admin" session.
+//  - Checkout is built from the real plan config with plan metadata and
+//    APP_URL-based success URLs; without a Stripe key it fails closed.
+//  - /api/analyze no longer depends on eBay token refresh.
+//  - The webhook syncs the full subscription lifecycle (grant → past-due →
+//    plan sync → delete/revoke) and cancel/portal endpoints exist.
+//  - Anonymous generation is refused (401 LOGIN_REQUIRED) at both
+//    generation handlers.
+// ═══════════════════════════════════════════════════════════════════════════
+test('Hardening: free-premium paths closed, checkout/webhook correct, analyze decoupled', async (t) => {
+  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingBackup = fs.existsSync(billingDbPath) ? fs.readFileSync(billingDbPath, 'utf8') : null;
+  const teamBackup = fs.existsSync(config.teamPath) ? fs.readFileSync(config.teamPath, 'utf8') : null;
+  const originalUsagePath = config.usagePath;
+  const usageSandbox = fs.mkdtempSync(path.join(config.scratchDir, 'hardening-usage-'));
+  config.usagePath = path.join(usageSandbox, 'usage_by_user.json');
+
+  const savedEnv = {};
+  for (const key of ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'APP_URL', 'API_KEY']) {
+    savedEnv[key] = process.env[key];
+  }
+  process.env.GOOGLE_CLIENT_ID = 'hardening-google-client';
+  process.env.GOOGLE_CLIENT_SECRET = 'hardening-google-secret';
+  delete process.env.STRIPE_SECRET_KEY;
+  delete process.env.STRIPE_WEBHOOK_SECRET;
+  delete process.env.APP_URL;
+
+  const testPort = 45971;
+  const server = webServer.startWebGuiServer(testPort);
+  const base = `http://127.0.0.1:${testPort}`;
+  const REAL_FETCH = global.fetch;
+
+  const resetBilling = (obj) => fs.writeFileSync(billingDbPath, JSON.stringify(obj), 'utf8');
+  const readBilling = () => utils.readJsonFileSecure(billingDbPath, {});
+  const signPayload = (payloadStr, secret) => {
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = crypto.createHmac('sha256', secret).update(`${timestamp}.${payloadStr}`).digest('hex');
+    return `t=${timestamp},v1=${signature}`;
+  };
+  const postWebhook = (bodyStr, signatureHeader) => REAL_FETCH(`${base}/api/billing/webhook`, {
+    method: 'POST',
+    headers: signatureHeader
+      ? { 'Content-Type': 'application/json', 'Stripe-Signature': signatureHeader }
+      : { 'Content-Type': 'application/json' },
+    body: bodyStr
+  });
+
+  // Google-login helper (same mocked-Google pattern as the metering suite).
+  const loginAs = async (email) => {
+    const prevFetch = global.fetch;
+    global.fetch = async (url, options) => {
+      const u = String(url);
+      if (u.includes('oauth2.googleapis.com/token')) {
+        return { ok: true, json: async () => ({ access_token: 'hardening-access-token' }) };
+      }
+      if (u.includes('openidconnect.googleapis.com') || u.includes('googleapis.com/oauth2')) {
+        return { ok: true, json: async () => ({ email, name: 'Hardening Tester' }) };
+      }
+      return REAL_FETCH(url, options);
+    };
+    try {
+      const res = await REAL_FETCH(`${base}/api/auth/google/callback?code=test-code`, { redirect: 'manual' });
+      const setCookie = res.headers.get('set-cookie') || '';
+      const match = setCookie.match(/sessionId=([^;]+)/);
+      assert.ok(match, `loginAs(${email}) should set a session cookie`);
+      return `sessionId=${match[1]}`;
+    } finally {
+      global.fetch = prevFetch;
+    }
+  };
+
+  await t.test('no shipped default API key; APP_URL base; plan config matches allotments', async () => {
+    delete process.env.API_KEY;
+    assert.strictEqual(config.getAPI_KEY(), undefined);
+    process.env.API_KEY = savedEnv.API_KEY;
+
+    delete process.env.APP_URL;
+    assert.strictEqual(config.getAPP_URL(), undefined);
+    assert.strictEqual(webServer.getAppBaseUrl(45900), 'http://localhost:45900');
+    process.env.APP_URL = 'https://app.example.com/';
+    assert.strictEqual(config.getAPP_URL(), 'https://app.example.com');
+    assert.strictEqual(webServer.getAppBaseUrl(45900), 'https://app.example.com');
+    delete process.env.APP_URL;
+
+    assert.strictEqual(webServer.BILLING_PLANS.pro.amountCents, 1900);
+    assert.strictEqual(webServer.BILLING_PLANS.power_seller.amountCents, 4900);
+    assert.strictEqual(webServer.BILLING_PLANS.pro.monthlyListings, webServer.LISTING_ALLOTMENT_BY_PLAN.pro);
+    assert.strictEqual(webServer.BILLING_PLANS.power_seller.monthlyListings, webServer.LISTING_ALLOTMENT_BY_PLAN.power_seller);
+  });
+
+  await t.test('unconfigured Google login fails closed (503, no session)', async () => {
+    const savedClientId = process.env.GOOGLE_CLIENT_ID;
+    delete process.env.GOOGLE_CLIENT_ID;
+    try {
+      const res = await REAL_FETCH(`${base}/api/auth/google/login`, { redirect: 'manual' });
+      assert.strictEqual(res.status, 503);
+      const body = await res.json();
+      assert.strictEqual(body.error, 'LOGIN_NOT_CONFIGURED');
+      assert.ok(!(res.headers.get('set-cookie') || '').includes('sessionId='));
+    } finally {
+      process.env.GOOGLE_CLIENT_ID = savedClientId;
+    }
+  });
+
+  await t.test('mock-success route is gone and grants nothing', async () => {
+    resetBilling({});
+    const cookie = await loginAs('mock@test.com');
+    webServer.resetRateLimits();
+    const res = await REAL_FETCH(`${base}/api/billing/mock-success?email=mock@test.com`, { headers: { Cookie: cookie } });
+    assert.strictEqual(res.status, 404);
+    assert.strictEqual(webServer.getBillingPlan('mock@test.com').premium, false);
+  });
+
+  await t.test('checkout fails closed without Stripe; with Stripe it sends the real plan config', async () => {
+    const cookie = await loginAs('buyer@test.com');
+    // No Stripe secret configured -> 503, never a mock URL.
+    delete process.env.STRIPE_SECRET_KEY;
+    webServer.resetRateLimits();
+    let res = await REAL_FETCH(`${base}/api/billing/create-checkout-session`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify({ plan: 'pro' })
+    });
+    assert.strictEqual(res.status, 503);
+    assert.strictEqual((await res.json()).error, 'BILLING_NOT_CONFIGURED');
+
+    // With Stripe configured, the session carries plan metadata + amounts.
+    const originalFetchWithRetry = ebayClient.fetchWithRetry;
+    let capturedBody = null;
+    ebayClient.fetchWithRetry = async (url, options) => {
+      if (String(url).includes('api.stripe.com')) {
+        capturedBody = options.body;
+        return { ok: true, status: 200, json: async () => ({ url: 'https://checkout.stripe.com/pay/cs_test_hardening' }) };
+      }
+      return originalFetchWithRetry(url, options);
+    };
+    process.env.STRIPE_SECRET_KEY = 'sk_test_hardening';
+    process.env.APP_URL = 'https://app.example.com';
+    try {
+      webServer.resetRateLimits();
+      res = await REAL_FETCH(`${base}/api/billing/create-checkout-session`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify({ plan: 'power_seller' })
+      });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual((await res.json()).url, 'https://checkout.stripe.com/pay/cs_test_hardening');
+      const params = new URLSearchParams(capturedBody);
+      assert.strictEqual(params.get('metadata[plan]'), 'power_seller');
+      assert.strictEqual(params.get('subscription_data[metadata][plan]'), 'power_seller');
+      assert.strictEqual(params.get('line_items[0][price_data][unit_amount]'), '4900');
+      assert.strictEqual(params.get('line_items[0][price_data][product_data][name]'), 'ListAI Pro — Power Seller');
+      assert.strictEqual(params.get('success_url'), 'https://app.example.com/?billing=success');
+      assert.strictEqual(params.get('cancel_url'), 'https://app.example.com/?billing=cancel');
+      assert.strictEqual(params.get('customer_email'), 'buyer@test.com');
+
+      // Unknown plan is rejected before Stripe is touched.
+      webServer.resetRateLimits();
+      res = await REAL_FETCH(`${base}/api/billing/create-checkout-session`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify({ plan: 'business' })
+      });
+      assert.strictEqual(res.status, 400);
+      assert.strictEqual((await res.json()).error, 'INVALID_PLAN');
+
+      // Default (no body plan) is Pro at $19.
+      webServer.resetRateLimits();
+      res = await REAL_FETCH(`${base}/api/billing/create-checkout-session`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: JSON.stringify({})
+      });
+      assert.strictEqual(res.status, 200);
+      const proParams = new URLSearchParams(capturedBody);
+      assert.strictEqual(proParams.get('metadata[plan]'), 'pro');
+      assert.strictEqual(proParams.get('line_items[0][price_data][unit_amount]'), '1900');
+    } finally {
+      ebayClient.fetchWithRetry = originalFetchWithRetry;
+      delete process.env.APP_URL;
+    }
+  });
+
+  await t.test('webhook rejects forged/unsigned/unconfigured and syncs the verified lifecycle', async () => {
+    const checkoutEvent = (email, plan, subId, customerId) => JSON.stringify({
+      id: 'evt_h', type: 'checkout.session.completed',
+      data: { object: { customer_email: email, subscription: subId, customer: customerId, metadata: { plan } } }
+    });
+
+    resetBilling({});
+    // No webhook secret configured -> reject, never trust.
+    delete process.env.STRIPE_WEBHOOK_SECRET;
+    let res = await postWebhook(checkoutEvent('wh@test.com', 'pro', 'sub_h1', 'cus_h1'), null);
+    assert.strictEqual(res.status, 400);
+    assert.deepStrictEqual(readBilling(), {});
+
+    process.env.STRIPE_WEBHOOK_SECRET = 'whsec_hardening';
+    // Unsigned -> 400.
+    res = await postWebhook(checkoutEvent('wh@test.com', 'pro', 'sub_h1', 'cus_h1'), null);
+    assert.strictEqual(res.status, 400);
+    // Wrong signature -> 400.
+    const goodPayload = checkoutEvent('wh@test.com', 'power_seller', 'sub_h1', 'cus_h1');
+    res = await postWebhook(goodPayload, signPayload(goodPayload, 'whsec_wrong'));
+    assert.strictEqual(res.status, 400);
+    // Stale timestamp (correctly signed) -> 400.
+    const staleTs = Math.floor(Date.now() / 1000) - 3600;
+    const staleSig = crypto.createHmac('sha256', 'whsec_hardening').update(`${staleTs}.${goodPayload}`).digest('hex');
+    res = await postWebhook(goodPayload, `t=${staleTs},v1=${staleSig}`);
+    assert.strictEqual(res.status, 400);
+    assert.deepStrictEqual(readBilling(), {});
+
+    // Verified checkout completion grants the plan actually bought.
+    res = await postWebhook(goodPayload, signPayload(goodPayload, 'whsec_hardening'));
+    assert.strictEqual(res.status, 200);
+    let record = readBilling()['wh@test.com'];
+    assert.strictEqual(record.premium, true);
+    assert.strictEqual(record.plan, 'power_seller');
+    assert.strictEqual(record.subscriptionId, 'sub_h1');
+    assert.strictEqual(record.customerId, 'cus_h1');
+
+    // Payment failure marks past-due but does not revoke during dunning.
+    const failedPayload = JSON.stringify({ id: 'evt_h2', type: 'invoice.payment_failed', data: { object: { subscription: 'sub_h1', customer: 'cus_h1' } } });
+    res = await postWebhook(failedPayload, signPayload(failedPayload, 'whsec_hardening'));
+    assert.strictEqual(res.status, 200);
+    record = readBilling()['wh@test.com'];
+    assert.strictEqual(record.pastDue, true);
+    assert.strictEqual(record.premium, true);
+
+    // Recovery clears the past-due mark.
+    const paidPayload = JSON.stringify({ id: 'evt_h3', type: 'invoice.paid', data: { object: { subscription: 'sub_h1', customer: 'cus_h1' } } });
+    res = await postWebhook(paidPayload, signPayload(paidPayload, 'whsec_hardening'));
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(readBilling()['wh@test.com'].pastDue, false);
+
+    // Subscription update syncs the plan from metadata.
+    const updPayload = JSON.stringify({ id: 'evt_h4', type: 'customer.subscription.updated', data: { object: { id: 'sub_h1', customer: 'cus_h1', status: 'active', cancel_at_period_end: false, metadata: { plan: 'pro' } } } });
+    res = await postWebhook(updPayload, signPayload(updPayload, 'whsec_hardening'));
+    assert.strictEqual(res.status, 200);
+    record = readBilling()['wh@test.com'];
+    assert.strictEqual(record.plan, 'pro');
+    assert.strictEqual(record.premium, true);
+
+    // Subscription deletion revokes.
+    const delPayload = JSON.stringify({ id: 'evt_h5', type: 'customer.subscription.deleted', data: { object: { id: 'sub_h1', customer: 'cus_h1' } } });
+    res = await postWebhook(delPayload, signPayload(delPayload, 'whsec_hardening'));
+    assert.strictEqual(res.status, 200);
+    record = readBilling()['wh@test.com'];
+    assert.strictEqual(record.premium, false);
+    assert.strictEqual(record.paymentStatus, 'canceled');
+  });
+
+  await t.test('generation: anonymous refused; analyze succeeds with eBay disconnected', async () => {
+    const sandboxDataDir = path.join(testDir, 'processed');
+    fs.mkdirSync(sandboxDataDir, { recursive: true });
+    const pngPath = path.join(sandboxDataDir, 'hardening-analyze.png');
+    fs.writeFileSync(pngPath, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8Xw8AAwMCAO+ip1sAAAAASUVORK5CYII=', 'base64'));
+
+    const originalOrchestration = geminiClient.runAIOrchestration;
+    const originalKeywords = geminiClient.generateListingFromKeywords;
+    const originalRefresh = ebayClient.refreshEbayAccessToken;
+    const originalFetchWithRetry = ebayClient.fetchWithRetry;
+    const originalSearchItemId = ebayClient.searchItemIdByKeywords;
+    const originalStockPhotos = ebayClient.searchCatalogStockPhotos;
+    let orchCalls = 0;
+    geminiClient.runAIOrchestration = async (...args) => {
+      orchCalls += 1;
+      const imagePaths = args[0] || [];
+      return {
+        analysisData: { title_seo_optimized: 'Hardening Test Widget' },
+        suggestedDescription: 'Hardening description',
+        suggestedAspectsObj: { Brand: ['Acme'] },
+        detectedUPC: '',
+        rawDefectReport: null,
+        detectedCategory: 'Sporting Goods',
+        orchestrationFiles: imagePaths.map((p, i) => ({ path: p, index: i + 1 })),
+        orchestrationTokens: 10
+      };
+    };
+    geminiClient.generateListingFromKeywords = async () => ({
+      title: 'Hardening Keyword Listing', suggestedPrice: 9.99, description: 'kw', suggestedCategory: 'Sporting Goods', itemSpecifics: {}, imageUrl: null
+    });
+    // eBay is DISCONNECTED: the token refresh always throws, exactly as it
+    // does with no credentials configured.
+    ebayClient.refreshEbayAccessToken = async () => { throw new Error('Credentials missing. Run --bootstrap to configure your settings.'); };
+    ebayClient.fetchWithRetry = async (url, options) => {
+      if (String(url).includes('tmpfiles.org') || String(url).includes('file.io')) {
+        return { ok: true, status: 200, headers: { get: () => 'application/json' }, json: async () => ({ data: { url: 'https://tmpfiles.org/dl/test/hardening.png' }, link: 'https://file.io/test' }), text: async () => '{}' };
+      }
+      return originalFetchWithRetry(url, options);
+    };
+    ebayClient.searchItemIdByKeywords = async () => null;
+    ebayClient.searchCatalogStockPhotos = async () => [];
+
+    try {
+      resetBilling({ 'dec@test.com': { premium: true, plan: 'pro', subscriptionId: 'sub_dec', customerId: 'cus_dec' } });
+      const cookie = await loginAs('dec@test.com');
+      const payload = JSON.stringify({ images: ['/uploads/processed/hardening-analyze.png'], notes: 'hardening run' });
+
+      // Signed-in generation succeeds even though eBay refresh always throws.
+      webServer.resetRateLimits();
+      let res = await REAL_FETCH(`${base}/api/analyze`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Cookie: cookie }, body: payload
+      });
+      assert.strictEqual(res.status, 200);
+      await res.json();
+      assert.strictEqual(webServer.getMonthlyUsage('dec@test.com'), 1);
+      assert.strictEqual(orchCalls, 1);
+
+      // Anonymous generation is refused before anything runs — by the
+      // auth middleware (UNAUTHORIZED) when Google login is configured, or
+      // by the handler's own LOGIN_REQUIRED check when it is not (the
+      // no-login deployment the audit's unmetered hole lived in).
+      webServer.resetRateLimits();
+      res = await REAL_FETCH(`${base}/api/analyze`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload
+      });
+      assert.strictEqual(res.status, 401);
+      assert.ok(['LOGIN_REQUIRED', 'UNAUTHORIZED'].includes((await res.json()).error));
+      assert.strictEqual(orchCalls, 1);
+      assert.strictEqual(webServer.getMonthlyUsage('dec@test.com'), 1);
+
+      // Anonymous import fallback (a generation) is refused too — by the
+      // auth middleware (UNAUTHORIZED) when Google login is configured, or
+      // by the handler's own LOGIN_REQUIRED check when it is not.
+      webServer.resetRateLimits();
+      res = await REAL_FETCH(`${base}/api/ebay/import?itemIdOrUrl=hardening%20keywords`);
+      assert.strictEqual(res.status, 401);
+      assert.ok(['LOGIN_REQUIRED', 'UNAUTHORIZED'].includes((await res.json()).error));
+
+      // Signed-in import fallback still works.
+      webServer.resetRateLimits();
+      res = await REAL_FETCH(`${base}/api/ebay/import?itemIdOrUrl=hardening%20keywords`, { headers: { Cookie: cookie } });
+      assert.strictEqual(res.status, 200);
+      const imported = await res.json();
+      assert.strictEqual(imported.title, 'Hardening Keyword Listing');
+
+      // The audit's hole scenario: NO Google login configured (auth
+      // middleware off). Anonymous generation must STILL be refused — by
+      // the handlers' own LOGIN_REQUIRED checks.
+      const savedClientId = process.env.GOOGLE_CLIENT_ID;
+      delete process.env.GOOGLE_CLIENT_ID;
+      try {
+        webServer.resetRateLimits();
+        res = await REAL_FETCH(`${base}/api/analyze`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: payload
+        });
+        assert.strictEqual(res.status, 401);
+        assert.strictEqual((await res.json()).error, 'LOGIN_REQUIRED');
+        assert.strictEqual(orchCalls, 1);
+
+        webServer.resetRateLimits();
+        res = await REAL_FETCH(`${base}/api/ebay/import?itemIdOrUrl=hardening%20keywords`);
+        assert.strictEqual(res.status, 401);
+        assert.strictEqual((await res.json()).error, 'LOGIN_REQUIRED');
+      } finally {
+        process.env.GOOGLE_CLIENT_ID = savedClientId;
+      }
+    } finally {
+      geminiClient.runAIOrchestration = originalOrchestration;
+      geminiClient.generateListingFromKeywords = originalKeywords;
+      ebayClient.refreshEbayAccessToken = originalRefresh;
+      ebayClient.fetchWithRetry = originalFetchWithRetry;
+      ebayClient.searchItemIdByKeywords = originalSearchItemId;
+      ebayClient.searchCatalogStockPhotos = originalStockPhotos;
+      global.fetch = REAL_FETCH;
+      try { fs.unlinkSync(pngPath); } catch (e) {}
+    }
+  });
+
+  await t.test('cancel + portal endpoints act on the signed-in user only', async () => {
+    process.env.STRIPE_SECRET_KEY = 'sk_test_hardening';
+    resetBilling({ 'cancel@test.com': { premium: true, plan: 'pro', subscriptionId: 'sub_cancel', customerId: 'cus_cancel' } });
+    const cookie = await loginAs('cancel@test.com');
+    const originalFetchWithRetry = ebayClient.fetchWithRetry;
+    ebayClient.fetchWithRetry = async (url, options) => {
+      const u = String(url);
+      if (u.includes('api.stripe.com/v1/subscriptions/')) return { ok: true, status: 200, json: async () => ({ id: 'sub_cancel', cancel_at_period_end: true }) };
+      if (u.includes('api.stripe.com/v1/billing_portal/sessions')) return { ok: true, status: 200, json: async () => ({ url: 'https://billing.stripe.com/p/session/test' }) };
+      return originalFetchWithRetry(url, options);
+    };
+    try {
+      webServer.resetRateLimits();
+      let res = await REAL_FETCH(`${base}/api/billing/cancel`, { method: 'POST' });
+      assert.strictEqual(res.status, 401);
+
+      webServer.resetRateLimits();
+      res = await REAL_FETCH(`${base}/api/billing/cancel`, { method: 'POST', headers: { Cookie: cookie } });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual((await res.json()).cancelAtPeriodEnd, true);
+      assert.strictEqual(readBilling()['cancel@test.com'].cancelAtPeriodEnd, true);
+
+      webServer.resetRateLimits();
+      res = await REAL_FETCH(`${base}/api/billing/portal`, { method: 'POST', headers: { Cookie: cookie } });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual((await res.json()).url, 'https://billing.stripe.com/p/session/test');
+    } finally {
+      ebayClient.fetchWithRetry = originalFetchWithRetry;
+    }
+  });
+
+  // Restore pre-block state.
+  await new Promise((resolve) => server.close(resolve));
+  if (teamBackup === null) { try { fs.unlinkSync(config.teamPath); } catch (e) {} }
+  else fs.writeFileSync(config.teamPath, teamBackup, 'utf8');
+  if (billingBackup === null) { try { fs.unlinkSync(billingDbPath); } catch (e) {} }
+  else fs.writeFileSync(billingDbPath, billingBackup, 'utf8');
+  try { fs.rmSync(usageSandbox, { recursive: true, force: true }); } catch (e) {}
+  config.usagePath = originalUsagePath;
+  for (const key of Object.keys(savedEnv)) {
+    if (savedEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = savedEnv[key];
+  }
+  global.fetch = REAL_FETCH;
 });

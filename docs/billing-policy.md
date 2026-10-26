@@ -11,6 +11,24 @@
 > (BYOK-gated free tier, Policy 4). Only successful generations consume.
 > Counts are keyed by billing account + month; Power Seller seats count
 > against the workspace owner's shared pool. <!-- [WAVE1-A] -->
+>
+> **Hardening (2026-10-26, [HARDENING] in webServer.js/config.js):**
+> premium is granted ONLY by the Stripe webhook, and the webhook rejects
+> every event it cannot verify — signature verification is mandatory
+> (constant-time, 5-minute timestamp tolerance), and with no webhook
+> secret configured all events are refused. There is no mock checkout:
+> an unconfigured Stripe makes checkout fail closed (503), and the old
+> mock-success endpoint that granted premium for $0 is deleted. Checkout
+> sessions are built from the plan config (Pro $19/300, Power Seller
+> $49/1,000) and carry `metadata.plan` on the session and the
+> subscription, so fulfillment delivers the plan actually bought.
+> Anonymous generation requests are refused (401) at both generation
+> endpoints, the folder watcher daemon's unmetered generations are
+> disabled, the shipped default API key is removed (operator API-key
+> auth exists only when API_KEY is configured), an unconfigured Google
+> login no longer mints an admin session, and all mutable state lives
+> under one state root (LISTER_STATE_DIR / Railway volume) so billing
+> records survive redeploys.
 
 ## Policy 1 — Edits never consume credits
 
@@ -93,6 +111,29 @@ and no separate BYOK plan.**
   the polish runs on that key too, so free-tier AI work stays off the
   house key. Keyless accounts enhance on the house key, as before.
 
+## Policy 5 — Cancellation, payment failure, and self-serve billing <!-- [HARDENING] implemented 2026-10-26 -->
+
+**Cancel anytime is real and self-serve.**
+
+- `POST /api/billing/cancel` (signed-in) sets the Stripe subscription to
+  cancel at period end: the customer keeps the access they paid for, is
+  not charged again, and premium is revoked when
+  `customer.subscription.deleted` arrives at period end.
+- `POST /api/billing/portal` (signed-in) returns a Stripe Billing Portal
+  session URL — update payment method, switch plans (proration per
+  Policy 2), or cancel there.
+- **Plan changes:** `customer.subscription.created` / `.updated` webhook
+  events sync the local plan and status from the subscription's
+  `metadata.plan`; a subscription that leaves the active states
+  (canceled / unpaid / incomplete_expired) stops granting premium at
+  once, not at deletion time.
+- **Failed renewals:** `invoice.payment_failed` marks the account
+  `past_due` but does not revoke premium mid-dunning — Stripe's retry
+  schedule decides, and if it gives up, the subscription deletion
+  revokes. `invoice.paid` clears the past-due mark. (This settles the
+  mechanics of the grace question below; the grace *length* is Stripe's
+  retry schedule, not an app setting.)
+
 ## Open questions (not decided)
 
 - Dollar overage pricing beyond the cap. (Allotments themselves are now
@@ -100,8 +141,10 @@ and no separate BYOK plan.**
   cap, generation is refused unless the paid account uses the own-key
   BYOK valve, Policy 4; a free BYOK account at its 10 is pointed at the
   paid plans.)
-- Grace behavior when a subscription lapses mid-dunning (Stripe retry
-  schedule vs. immediate feature cutoff).
+- Grace behavior when a subscription lapses mid-dunning — mechanics
+  settled by Policy 5 (mark past due, premium held during Stripe's retry
+  schedule, revoked on deletion); only the retry schedule itself remains
+  a Stripe-side setting.
 
 ## Resolved
 

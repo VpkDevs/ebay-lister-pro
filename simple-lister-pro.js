@@ -904,8 +904,13 @@ WATERMARK_TEXT=${watermark}
   }
 
   // Folder watching daemon mode
+  // [HARDENING] DISABLED: watch-mode generations called Gemini directly,
+  // bypassing per-user metering and billing entirely — unmetered house-key
+  // spend with no billing account attached. Generate listings through the
+  // web UI instead, where generations are metered per account.
   if (args.includes('--watch')) {
-    await startWatchDaemon();
+    console.log("⛔ Watch mode is disabled: folder-watch generations bypassed billing metering. Generate listings through the web UI, where generations are metered per account.");
+    utils.logAudit("WARN", "Watch daemon invoked but disabled (unmetered generation path removed by hardening pass).");
     return;
   }
 

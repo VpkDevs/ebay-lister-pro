@@ -5,3 +5,14 @@ builder = "NIXPACKS"
 startCommand = "node start.js"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
+
+# [HARDENING] Persistence (required for real billing):
+# railway.toml has no volume schema — volumes are attached in the Railway
+# dashboard. Attach a Volume to this service with mount path "/data".
+# Railway then sets RAILWAY_VOLUME_MOUNT_PATH automatically, and the app
+# stores ALL mutable state under it (data/ listing stores + scratch/
+# billing records), so paid status and listing history survive redeploys.
+# Without a volume, the container filesystem is wiped on every redeploy —
+# every paying customer would lose premium and every listing.
+# Set APP_URL to the service's public URL so Stripe checkout success /
+# cancel redirects point at the real site instead of localhost.
