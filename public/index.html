@@ -6027,9 +6027,15 @@
     </div>`;
   }
 
-  async function upgradeToPremium() {
+  async function upgradeToPremium(plan) {
     try {
-      const res  = await fetch('/api/billing/create-checkout-session', { method:'POST' });
+      // [HARDENING] Tell checkout which plan is being bought so the session
+      // carries that plan's price + metadata (Pro $19 / Power Seller $49).
+      const res  = await fetch('/api/billing/create-checkout-session', {
+        method:'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: plan === 'power_seller' ? 'power_seller' : 'pro' })
+      });
       const data = await res.json();
       if (data.url) window.location.href = data.url;
       else showToast('error','Billing error','Could not open Stripe checkout.',4000);
@@ -6062,7 +6068,7 @@
             <div style="font-weight:600;margin-bottom:6px;">No team workspace yet</div>
             <div style="font-size:0.85rem;color:var(--text-dim);max-width:420px;">${escHtml(upsell)}</div>
             ${t.usage ? `<div style="font-size:0.85rem;color:var(--text-dim);margin-top:8px;">Listings used this month: <strong style="color:var(--text);">${t.usage.used} / ${t.usage.limit}</strong> (${escHtml(t.usage.plan)} plan)</div>` : ''}
-            ${t.plan !== 'power_seller' ? `<button class="btn btn--primary btn--sm" style="margin-top:12px;" onclick="upgradeToPremium()">Upgrade to Power Seller</button>` : ''}
+            ${t.plan !== 'power_seller' ? `<button class="btn btn--primary btn--sm" style="margin-top:12px;" onclick="upgradeToPremium('power_seller')">Upgrade to Power Seller</button>` : ''}
           </div>`;
         return;
       }

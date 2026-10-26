@@ -10,20 +10,19 @@ console.log("===================================================================
 console.log("🌟 Starting eBay Multi-Channel Lister System Processes...");
 console.log("=========================================================================\n");
 
+// [HARDENING] The Watcher Daemon is no longer started here. Its folder-watch
+// generations called Gemini directly, bypassing per-user metering and
+// billing entirely (unmetered house-key spend in production). Generations
+// happen through the web UI, where they are metered. simple-lister-pro.js
+// --watch is disabled the same way; the one-shot CLI stays an operator tool.
+console.log("\x1b[33m[System] Watcher Daemon DISABLED: folder-watch generations bypassed billing metering. Use the web UI to generate listings.\x1b[0m");
+
 const processes = [
   {
     name: 'Web Server',
     script: 'webServer.js',
     args: [],
     color: '\x1b[36m', // Cyan
-    instance: null,
-    restartCount: 0
-  },
-  {
-    name: 'Watcher Daemon',
-    script: 'simple-lister-pro.js',
-    args: ['--watch'],
-    color: '\x1b[33m', // Yellow
     instance: null,
     restartCount: 0
   }

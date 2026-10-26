@@ -17,5 +17,12 @@ EXPOSE 45900
 ENV PORT=45900
 ENV NODE_ENV=production
 
+# [HARDENING] Persist app state (billing records + listing history) on a
+# volume: all mutable state lives under LISTER_STATE_DIR (data/ + scratch/).
+# Mount a volume at /data or the first container recreate wipes every
+# customer's paid status and listings.
+ENV LISTER_STATE_DIR=/data
+VOLUME ["/data"]
+
 # Start processes concurrently using start.js
 CMD ["node", "start.js"]

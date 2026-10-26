@@ -300,32 +300,6 @@
     .fc-code .v { color: var(--green); }
     .fc-code .s { color: var(--amber); }
 
-    /* ── Testimonials ──────────────────────── */
-    .testi-section {
-      position: relative; z-index: 1; padding: 100px 24px;
-      background: var(--bg2); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
-    }
-    .testi-header { text-align: center; margin-bottom: 60px; }
-    .testi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-    .tc {
-      background: var(--surface); border: 1px solid var(--border); border-radius: 18px; padding: 26px;
-      display: flex; flex-direction: column; gap: 16px; transition: all var(--r);
-    }
-    .tc:hover { border-color: var(--border2); transform: translateY(-3px); }
-    .tc-stars { color: var(--amber); font-size: 0.85rem; letter-spacing: 2px; }
-    .tc-quote { font-size: 0.9rem; color: var(--text); line-height: 1.72; font-style: italic; flex: 1; }
-    .tc-quote::before { content: '"'; } .tc-quote::after { content: '"'; }
-    .tc-author { display: flex; align-items: center; gap: 12px; }
-    .tc-avatar { width: 38px; height: 38px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1rem; font-weight: 800; flex-shrink: 0; }
-    .tc-name { font-weight: 700; font-size: 0.875rem; }
-    .tc-role { font-size: 0.76rem; color: var(--muted); }
-    .tc-metric {
-      display: inline-flex; align-items: center; gap: 5px;
-      background: rgba(16,185,129,0.09); border: 1px solid rgba(16,185,129,0.2);
-      color: var(--green); border-radius: 99px; padding: 4px 11px;
-      font-size: 0.75rem; font-weight: 700; margin-top: 4px;
-    }
-
     /* ── Pricing ───────────────────────────── */
     .pricing-section { position: relative; z-index: 1; padding: 100px 24px 120px; scroll-margin-top: 80px; }
     .pricing-header { text-align: center; margin-bottom: 14px; }
@@ -432,7 +406,7 @@
 
     /* ── Responsive ────────────────────────── */
     @media (max-width: 960px) { .price-grid { grid-template-columns: 1fr 1fr; } .problem-grid { grid-template-columns: 1fr; } }
-    @media (max-width: 840px) { .bento { grid-template-columns: 1fr 1fr; } .fc--wide { grid-column: span 2; } .how-grid { grid-template-columns: 1fr; } .testi-grid { grid-template-columns: 1fr; } .stats-grid { grid-template-columns: 1fr 1fr; } .faq-grid { grid-template-columns: 1fr; } }
+    @media (max-width: 840px) { .bento { grid-template-columns: 1fr 1fr; } .fc--wide { grid-column: span 2; } .how-grid { grid-template-columns: 1fr; } .stats-grid { grid-template-columns: 1fr 1fr; } .faq-grid { grid-template-columns: 1fr; } }
     @media (max-width: 640px) { .bento { grid-template-columns: 1fr; } .fc--wide { grid-column: span 1; } .price-grid { grid-template-columns: 1fr; } .demo-layout { grid-template-columns: 1fr; } .demo-right { display: none; } .nav-links { display: none; } }
   </style>
 </head>
@@ -441,14 +415,6 @@
 <div class="bg-grid" aria-hidden="true"></div>
 <div class="orb orb-1" aria-hidden="true"></div>
 <div class="orb orb-2" aria-hidden="true"></div>
-
-<!-- Urgency bar -->
-<div class="urgency-bar" id="urgencyBar" role="alert">
-  <span>🔥 Launch pricing ends soon —</span>
-  <span class="spots" id="spotsCount">47 spots remaining</span>
-  <span>at current rates</span>
-  <span class="close-bar" onclick="document.getElementById('urgencyBar').style.display='none'" aria-label="Close banner">✕</span>
-</div>
 
 <!-- Navbar -->
 <nav role="navigation" aria-label="Main navigation">
@@ -473,7 +439,7 @@
 <!-- ═══════════════════════ HERO -->
 <section class="hero" style="padding-top:168px;" aria-label="Hero">
   <div class="hero-eyebrow">
-    <span class="badge badge--brand">🤖 Powered by Gemini 3.5 Flash (released May 2026) – the latest high‑efficiency vision model</span>
+    <span class="badge badge--brand">🤖 Powered by Google Gemini vision AI</span>
     <span class="badge badge--green">✓ No writing required</span>
   </div>
 
@@ -495,10 +461,9 @@
   </div>
 
   <div class="hero-trust">
-    <div class="trust-item"><span class="trust-icon">✓</span> No account needed to start</div>
-    <div class="trust-item"><span class="trust-icon">✓</span> First 10 listings free</div>
-    <div class="trust-item"><span class="trust-icon">✓</span> Self-hosted, your data stays yours</div>
-    <div class="trust-item"><span class="trust-icon">✓</span> Cancel anytime</div>
+    <div class="trust-item"><span class="trust-icon">✓</span> Free tier: 10 listings/month on your own Gemini key</div>
+    <div class="trust-item"><span class="trust-icon">✓</span> Edits are always free</div>
+    <div class="trust-item"><span class="trust-icon">✓</span> Cancel anytime, right in the app</div>
   </div>
 
   <!-- Dashboard mockup -->
@@ -582,7 +547,7 @@
     <div class="platform-logo"><span class="ico">🟢</span> Shopify</div>
     <div class="platform-logo"><span class="ico">🧡</span> Etsy</div>
     <div class="platform-logo"><span class="ico">🟣</span> WooCommerce</div>
-    <div class="platform-logo"><span class="ico">🤖</span> Gemini 3.5 Flash (released May 2026) – latest high‑efficiency vision model</div>
+    <div class="platform-logo"><span class="ico">🤖</span> Google Gemini Vision</div>
     <div class="platform-logo"><span class="ico">📦</span> Mercari / Poshmark export</div>
   </div>
 </div>
@@ -594,7 +559,7 @@
       <div>
         <div class="section-chip">The real cost of manual listing</div>
         <h2 class="h2" style="margin-bottom:20px;">Every hour you spend writing listings<br /><span style="color:var(--red);">is money you're not making.</span></h2>
-        <p class="lead" style="margin-bottom:32px;">The average reseller spends 18–25 minutes per eBay listing — writing titles, looking up comps, filling aspects, writing descriptions, resizing photos. That's 50+ hours a month of unpaid admin work.</p>
+        <p class="lead" style="margin-bottom:32px;">Listing by hand eats hours every week — writing titles, looking up comps, filling aspects, writing descriptions, resizing photos, one item at a time. It's unpaid admin work that scales with your inventory.</p>
 
         <div class="problem-callout">
           <div class="pain-item">
@@ -608,7 +573,7 @@
             <div class="pain-icon">❌</div>
             <div>
               <div class="pain-title">Wrong prices kill your margin</div>
-              <div class="pain-desc">Without live sold comps, you're guessing. Most sellers leave 15–30% on the table or overprice and never sell.</div>
+              <div class="pain-desc">Without live sold comps, you're guessing — underprice and you leave money behind, overprice and the item never sells.</div>
             </div>
           </div>
           <div class="pain-item">
@@ -657,7 +622,7 @@
           <div class="solve-icon">🚀</div>
           <div>
             <div class="solve-title">Publishes to 4 channels at once</div>
-            <div class="solve-desc">eBay, Shopify, Etsy, and WooCommerce in one click. Failed posts go into a retry queue that self-heals — no lost listings.</div>
+            <div class="solve-desc">eBay, Shopify, Etsy, and WooCommerce in one click. A failed post lands in a retry queue (DLQ) instead of disappearing — failed cross-posts are retried, not lost.</div>
           </div>
         </div>
       </div>
@@ -670,20 +635,20 @@
   <div class="container">
     <div class="stats-grid">
       <div class="stat-cell">
-        <div class="stat-num gradient-text">90s</div>
-        <div class="stat-label">Average time from<br />photo drop to published listing</div>
+        <div class="stat-num gradient-text">2-pass</div>
+        <div class="stat-label">AI vision analysis<br />per listing (scan, then write)</div>
       </div>
       <div class="stat-cell">
-        <div class="stat-num" style="color:var(--green);">4×</div>
-        <div class="stat-label">More listings per day<br />vs. manual workflow</div>
+        <div class="stat-num" style="color:var(--green);">4</div>
+        <div class="stat-label">Channels published<br />per listing</div>
       </div>
       <div class="stat-cell">
-        <div class="stat-num" style="color:var(--amber);">23%</div>
-        <div class="stat-label">Higher average sale price<br />with AI comp pricing</div>
+        <div class="stat-num" style="color:var(--amber);">24</div>
+        <div class="stat-label">Photos accepted<br />per listing</div>
       </div>
       <div class="stat-cell">
-        <div class="stat-num" style="color:var(--light);">4+</div>
-        <div class="stat-label">Channels published<br />simultaneously per listing</div>
+        <div class="stat-num" style="color:var(--light);">1,000</div>
+        <div class="stat-label">AI listings / month<br />on Power Seller</div>
       </div>
     </div>
   </div>
@@ -732,7 +697,7 @@
         <p style="color:var(--muted);font-size:0.88rem;margin-top:8px;line-height:1.65;">Edit any AI-generated field, pick your pricing preset, and publish to all your channels in one click.</p>
         <ul class="sub-bullets">
           <li>eBay listing with full offer and inventory control</li>
-          <li>Shopify product with variant + inventory sync</li>
+          <li>Shopify product with variants + inventory counts</li>
           <li>Etsy listing with tags and shipping profile</li>
           <li>WooCommerce product via REST API</li>
           <li>Mercari & Poshmark copy-paste export assistant</li>
@@ -755,7 +720,7 @@
 
       <div class="fc fc--wide">
         <span class="fc-icon">🧠</span>
-        <h3 class="fc-title">Two-Pass Gemini 2.5 Flash Vision</h3>
+        <h3 class="fc-title">Two-Pass Gemini Vision</h3>
         <p class="fc-desc">Most AI listing tools use one prompt and hope for the best. We run two dedicated passes: the first extracts barcodes and detects defects; the second generates the full SEO listing using everything the first pass discovered — plus eBay catalog data if a UPC was found. The result is dramatically more accurate titles, conditions, and descriptions.</p>
         <div class="fc-code">
           <span class="k">Pass 1</span> → barcode scan, defect detection, draft title<br />
@@ -767,8 +732,7 @@
       <div class="fc">
         <span class="fc-icon">📊</span>
         <h3 class="fc-title">Live Market Comp Pricing</h3>
-        <p class="fc-desc">Pulls real recently-sold eBay listings and calculates a min / avg / max price spread. An interactive chart shows exactly where your price sits. One-click presets: Fast Sale (−10%), Market Value, or Premium (+10%).</p>
-        <div class="fc-highlight">📈 Users sell 23% higher on average vs. gut pricing</div>
+        <p class="fc-desc">Pulls real recently-sold eBay listings and calculates a min / avg / max price spread, so you price from sold data instead of gut feeling. One-click presets: Fast Sale (−10%), Market Value, or Premium (+10%).</p>
       </div>
 
       <div class="fc">
@@ -784,9 +748,9 @@
 
       <div class="fc">
         <span class="fc-icon">🔁</span>
-        <h3 class="fc-title">Cross-Channel Sync with DLQ</h3>
-        <p class="fc-desc">When a cross-post to Shopify, Etsy, or WooCommerce fails, it doesn't silently disappear — it lands in a Dead Letter Queue that automatically retries on every heartbeat. No lost listings. No manual recovery.</p>
-        <div class="fc-highlight">🛡 Self-healing sync, zero lost posts</div>
+        <h3 class="fc-title">Cross-Channel Posting with DLQ</h3>
+        <p class="fc-desc">When a cross-post to Shopify, Etsy, or WooCommerce fails, it doesn't silently disappear — it lands in a Dead Letter Queue that is processed on startup and on demand, retrying failed posts instead of dropping them.</p>
+        <div class="fc-highlight">🛡 Failed posts are queued and retried — not lost</div>
       </div>
 
       <div class="fc">
@@ -799,8 +763,8 @@
       <div class="fc">
         <span class="fc-icon">📦</span>
         <h3 class="fc-title">Inventory Portfolio Dashboard</h3>
-        <p class="fc-desc">Full listing history with live status (Active / Draft / Ended), portfolio value totals, and bidirectional Shopify sync. When an item sells on eBay, Shopify inventory updates automatically — and vice versa.</p>
-        <div class="fc-highlight">🔄 Bidirectional eBay ↔ Shopify inventory sync</div>
+        <p class="fc-desc">Full listing history with live status (Active / Draft / Ended) and portfolio value totals. A one-way sync pulls your current eBay inventory and offers into the dashboard, so what you see here matches what's live on eBay.</p>
+        <div class="fc-highlight">🔄 One-way sync from eBay keeps your dashboard current</div>
       </div>
 
       <div class="fc">
@@ -820,183 +784,87 @@
   </div>
 </section>
 
-<!-- ═══════════════════════ TESTIMONIALS -->
-<section class="testi-section" aria-label="Customer testimonials">
-  <div class="container">
-    <div class="testi-header">
-      <div class="section-chip">Real resellers, real results</div>
-      <h2 class="h2" style="margin-bottom:14px;">They stopped writing listings.<br /><span class="gradient-text">And started selling more.</span></h2>
-    </div>
-    <div class="testi-grid">
-      <div class="tc">
-        <div class="tc-stars">★★★★★</div>
-        <p class="tc-quote">I flipped 340 items last month. There's absolutely no way I could have done that manually — it would've taken me two full weeks just to write the listings. ListAI Pro turned my operation into a real business.</p>
-        <div>
-          <div class="tc-author">
-            <div class="tc-avatar" style="background:rgba(99,102,241,0.2);color:var(--light);">M</div>
-            <div>
-              <div class="tc-name">Marcus T.</div>
-              <div class="tc-role">Full-time eBay reseller · Electronics</div>
-            </div>
-          </div>
-          <div class="tc-metric">📈 $11,200 in sales last month</div>
-        </div>
-      </div>
-      <div class="tc">
-        <div class="tc-stars">★★★★★</div>
-        <p class="tc-quote">The comp pricing alone is worth it. I kept underpricing my vintage clothing until the AI showed me the sold comps. I raised my average price by $18 per item. That's $1,800 extra per 100 sales.</p>
-        <div>
-          <div class="tc-author">
-            <div class="tc-avatar" style="background:rgba(245,158,11,0.15);color:var(--amber);">S</div>
-            <div>
-              <div class="tc-name">Sarah K.</div>
-              <div class="tc-role">Vintage & thrift reseller · Etsy + eBay</div>
-            </div>
-          </div>
-          <div class="tc-metric">💰 +$1,800 extra per 100 sales</div>
-        </div>
-      </div>
-      <div class="tc">
-        <div class="tc-stars">★★★★★</div>
-        <p class="tc-quote">I source at estate sales on weekends and used to spend Sunday nights listing everything. Now I'm done by noon. My wife thinks I finally have a real job again.</p>
-        <div>
-          <div class="tc-author">
-            <div class="tc-avatar" style="background:rgba(16,185,129,0.15);color:var(--green);">D</div>
-            <div>
-              <div class="tc-name">Dave R.</div>
-              <div class="tc-role">Estate sale picker · eBay + Shopify</div>
-            </div>
-          </div>
-          <div class="tc-metric">⏰ Saves 30+ hours/month</div>
-        </div>
-      </div>
-    </div>
-  </div>
-</section>
-
 <!-- ═══════════════════════ PRICING -->
 <section class="pricing-section" id="pricing" aria-label="Pricing">
   <div class="container">
     <div class="pricing-header">
       <div class="section-chip" style="justify-content:center;">Straightforward pricing</div>
-      <h2 class="h2" style="margin-bottom:0;">Pay less than one eBay sale.<br /><span class="gradient-text">Keep the rest.</span></h2>
+      <h2 class="h2" style="margin-bottom:0;">Three plans. No surprises.<br /><span class="gradient-text">Every feature in every plan.</span></h2>
     </div>
-    <p class="pricing-sub">Every plan saves you more in time than it costs in dollars. Cancel anytime. No contracts.</p>
+    <p class="pricing-sub">Plans differ only in how many AI listings you generate each month — and whose Gemini key runs them. Editing listings is always free, on every plan. Cancel anytime, right in the app.</p>
 
-    <div class="billing-toggle" role="group" aria-label="Billing period">
-      <span class="tgl-lbl on" id="lbl-monthly">Monthly</span>
-      <label class="tgl" aria-label="Toggle annual billing">
-        <input type="checkbox" id="billingToggle" onchange="toggleBilling()" />
-        <div class="tgl-track"></div>
-      </label>
-      <span class="tgl-lbl" id="lbl-annual">Annual</span>
-      <span class="save-pill">Save 40%</span>
-    </div>
+    <div class="price-grid" id="priceGrid" style="grid-template-columns:repeat(3,1fr);max-width:1020px;margin-left:auto;margin-right:auto;">
 
-    <div class="price-grid" id="priceGrid">
-
-      <!-- Starter -->
+      <!-- Free -->
       <div class="pc">
-        <div class="pc-name">Starter</div>
-        <div class="pc-tagline">For occasional flippers and beginners just getting started.</div>
+        <div class="pc-name">Free</div>
+        <div class="pc-tagline">Try the real software on your own photos — bring your own Gemini key.</div>
         <div class="pc-price">
           <span class="pc-curr">$</span>
-          <span class="pc-num" data-monthly="0" data-annual="0">0</span>
+          <span class="pc-num">0</span>
           <span class="pc-period">/mo</span>
         </div>
-        <div class="pc-billed">Free forever</div>
+        <div class="pc-billed">Runs on your own Gemini API key</div>
         <div class="pc-divider"></div>
         <ul class="pc-features">
-          <li class="pc-feat"><span class="y">✓</span> <span><strong>10 AI listings</strong> / month</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>eBay publishing</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Gemini AI analysis</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Market comp pricing</span></li>
-          <li class="pc-feat"><span class="n">✗</span> <span>Cross-channel posting</span></li>
-          <li class="pc-feat"><span class="n">✗</span> <span>Defect detection report</span></li>
-          <li class="pc-feat"><span class="n">✗</span> <span>DLQ retry queue</span></li>
-          <li class="pc-feat"><span class="n">✗</span> <span>Priority support</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span><strong>10 AI listings</strong> / month, generated on your own Gemini key</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Every feature included — the software is the product</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Publish to eBay, Shopify, Etsy &amp; WooCommerce</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Live eBay comp pricing</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>AI defect detection reports</span></li>
+          <li class="pc-feat"><span class="n">✗</span> <span>Generations on our key (paid plans)</span></li>
         </ul>
         <div class="pc-cta">
           <a href="/index.html" class="btn btn--outline btn--full">Get Started Free</a>
         </div>
       </div>
 
-      <!-- Flipper -->
+      <!-- Pro -->
       <div class="pc pc--popular">
         <div class="popular-tag">Most Popular</div>
-        <div class="pc-name" style="color:var(--light);">Flipper</div>
-        <div class="pc-tagline" style="color:var(--muted);">For active resellers doing 50–200 listings/month.</div>
+        <div class="pc-name" style="color:var(--light);">Pro</div>
+        <div class="pc-tagline" style="color:var(--muted);">For active resellers listing every week.</div>
         <div class="pc-price">
           <span class="pc-curr">$</span>
-          <span class="pc-num" data-monthly="29" data-annual="17">29</span>
+          <span class="pc-num">19</span>
           <span class="pc-period">/mo</span>
         </div>
-        <div class="pc-billed" id="bill-flipper">&nbsp;</div>
+        <div class="pc-billed">Billed monthly via Stripe</div>
         <div class="pc-divider"></div>
         <ul class="pc-features">
-          <li class="pc-feat"><span class="y">✓</span> <span><strong>150 AI listings</strong> / month</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>eBay publishing</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Shopify cross-posting</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Market comp pricing</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>AI defect detection reports</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>DLQ self-healing retry</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Portfolio dashboard</span></li>
-          <li class="pc-feat"><span class="n">✗</span> <span>Etsy + WooCommerce</span></li>
-        </ul>
-        <div class="pc-cta">
-          <a href="/index.html" class="btn btn--primary btn--full" style="box-shadow:0 4px 24px rgba(99,102,241,0.4);">Start Flipper Plan</a>
-        </div>
-      </div>
-
-      <!-- Pro -->
-      <div class="pc">
-        <div class="pc-name">Pro</div>
-        <div class="pc-tagline">For power sellers running a real reselling business.</div>
-        <div class="pc-price">
-          <span class="pc-curr">$</span>
-          <span class="pc-num" data-monthly="69" data-annual="41">69</span>
-          <span class="pc-period">/mo</span>
-        </div>
-        <div class="pc-billed" id="bill-pro">&nbsp;</div>
-        <div class="pc-divider"></div>
-        <ul class="pc-features">
-          <li class="pc-feat"><span class="y">✓</span> <span><strong>500 AI listings</strong> / month</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>All 4 channels: eBay, Shopify, Etsy, WooCommerce</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span><strong>300 AI listings</strong> / month on our key</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Everything in Free</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>At the cap? Keep generating on your own key, uncounted</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Publish to eBay, Shopify, Etsy &amp; WooCommerce</span></li>
           <li class="pc-feat"><span class="y">✓</span> <span>Mercari + Poshmark export</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>AI defect detection reports</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Bidirectional inventory sync</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>DLQ retry queue + audit logs</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Priority email support</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>API access for automation</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Cancel anytime in the app</span></li>
         </ul>
         <div class="pc-cta">
-          <a href="/index.html" class="btn btn--outline btn--full">Start Pro Plan</a>
+          <a href="/index.html" class="btn btn--primary btn--full" style="box-shadow:0 4px 24px rgba(99,102,241,0.4);">Start Pro Plan</a>
         </div>
       </div>
 
-      <!-- Business -->
+      <!-- Power Seller -->
       <div class="pc">
-        <div class="pc-name">Business</div>
-        <div class="pc-tagline">For high-volume operations, teams, and agencies.</div>
+        <div class="pc-name">Power Seller</div>
+        <div class="pc-tagline">For high-volume sellers and small teams.</div>
         <div class="pc-price">
           <span class="pc-curr">$</span>
-          <span class="pc-num" data-monthly="149" data-annual="89">149</span>
+          <span class="pc-num">49</span>
           <span class="pc-period">/mo</span>
         </div>
-        <div class="pc-billed" id="bill-business">&nbsp;</div>
+        <div class="pc-billed">Billed monthly via Stripe</div>
         <div class="pc-divider"></div>
         <ul class="pc-features">
-          <li class="pc-feat"><span class="y">✓</span> <span><strong>Unlimited</strong> AI listings</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span><strong>1,000 AI listings</strong> / month on our key</span></li>
           <li class="pc-feat"><span class="y">✓</span> <span>Everything in Pro</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Multi-user team access</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>White-label dashboard option</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Custom onboarding call</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>SLA + dedicated support</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Volume discount for listings</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Custom integrations on request</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span><strong>3 team seats</strong> sharing one listing pool</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Own-key overflow past the cap, uncounted</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Bulk CSV import &amp; batch generation</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Cancel anytime in the app</span></li>
         </ul>
         <div class="pc-cta">
-          <a href="mailto:hello@listai.pro" class="btn btn--outline btn--full">Contact Sales</a>
+          <a href="/index.html" class="btn btn--outline btn--full">Start Power Seller</a>
         </div>
       </div>
 
@@ -1015,29 +883,25 @@
         <thead>
           <tr>
             <th>Feature</th>
-            <th>Starter</th>
-            <th class="col-hi">Flipper</th>
-            <th>Pro</th>
-            <th>Business</th>
+            <th>Free</th>
+            <th class="col-hi">Pro</th>
+            <th>Power Seller</th>
           </tr>
         </thead>
         <tbody>
-          <tr><td>AI listings / month</td><td>10</td><td class="col-hi"><strong>150</strong></td><td>500</td><td>Unlimited</td></tr>
-          <tr><td>Gemini 2.5 Flash Vision (2-pass)</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Live eBay comp pricing</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Auto taxonomy aspect fill</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>UPC barcode auto-detection</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>eBay publishing</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>AI defect detection report</td><td class="no">✗</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Shopify cross-posting</td><td class="no">✗</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>DLQ self-healing retry queue</td><td class="no">✗</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Portfolio dashboard + sync</td><td class="no">✗</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Etsy + WooCommerce</td><td class="no">✗</td><td class="col-hi no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Mercari & Poshmark export</td><td class="no">✗</td><td class="col-hi no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Bidirectional inventory sync</td><td class="no">✗</td><td class="col-hi no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>API access</td><td class="no">✗</td><td class="col-hi no">✗</td><td class="yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Multi-user / team access</td><td class="no">✗</td><td class="col-hi no">✗</td><td class="no">✗</td><td class="yes">✓</td></tr>
-          <tr><td>White-label</td><td class="no">✗</td><td class="col-hi no">✗</td><td class="no">✗</td><td class="yes">✓</td></tr>
+          <tr><td>AI listings / month</td><td>10 (your own key)</td><td class="col-hi"><strong>300</strong></td><td>1,000</td></tr>
+          <tr><td>Gemini Vision (2-pass)</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Live eBay comp pricing</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Auto taxonomy aspect fill</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>UPC barcode auto-detection</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>AI defect detection report</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>eBay publishing</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Shopify / Etsy / WooCommerce cross-posting</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>DLQ retry queue for failed posts</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Mercari &amp; Poshmark export</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>One-way sync from eBay</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Generations past the cap on your own key</td><td class="no">✗</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Team seats</td><td class="no">✗</td><td class="col-hi no">✗</td><td class="yes">3 seats</td></tr>
         </tbody>
       </table>
     </div>
@@ -1058,7 +922,7 @@
           Do I need to know how to code to set this up?
           <div class="faq-toggle" aria-hidden="true">+</div>
         </div>
-        <div class="faq-a">No coding required for day-to-day use. The initial setup requires entering your API keys into a <code>.env</code> file (we provide a step-by-step guide), then you run one command and the dashboard opens in your browser. Everything else is point-and-click.</div>
+        <div class="faq-a">No coding required. Sign in with Google, connect your eBay account from the dashboard, and start listing — everything is point-and-click. Free-tier users also paste in their own free Gemini API key in Settings; the app walks you through getting one.</div>
       </div>
 
       <div class="faq-item">
@@ -1074,7 +938,7 @@
           What happens if a cross-post to Shopify or Etsy fails?
           <div class="faq-toggle" aria-hidden="true">+</div>
         </div>
-        <div class="faq-a">Failed cross-posts are automatically saved to a Dead Letter Queue (DLQ). The system retries them on a regular schedule. You'll see the failure logged in the System Console but your eBay listing publishes regardless. No data is lost, and recovery is fully automatic.</div>
+        <div class="faq-a">Failed cross-posts are saved to a Dead Letter Queue (DLQ) instead of being dropped. The queue is processed on startup and on demand, retrying the failed posts. You'll see the failure logged in the System Console, and your eBay listing publishes regardless.</div>
       </div>
 
       <div class="faq-item">
@@ -1082,7 +946,7 @@
           Where is my data stored? Does ListAI see my listings?
           <div class="faq-toggle" aria-hidden="true">+</div>
         </div>
-        <div class="faq-a">ListAI Pro runs locally on your own machine. Your listing history, images, and credentials live in files on your computer — not on our servers. Your photos are sent to Google's Gemini API for analysis (under your own API key), but we never store or access your listing data.</div>
+        <div class="faq-a">Your listing history and drafts are stored in the app's data store so your dashboard, history, and team workspace work. Your photos are sent to Google's Gemini API for analysis — on paid plans that runs under our key; on the free tier and for overflow generations it runs under your own key. See the Privacy Policy for exactly what's processed and where.</div>
       </div>
 
       <div class="faq-item">
@@ -1114,7 +978,7 @@
           Can I use this as a service for other sellers?
           <div class="faq-toggle" aria-hidden="true">+</div>
         </div>
-        <div class="faq-a">Yes. The Business plan includes multi-user access and a white-label option — you can brand it as your own tool and offer it as a managed listing service. Many VA agencies and consignment shops use exactly this model to charge $2–5 per item for listing services.</div>
+        <div class="faq-a">The Power Seller plan includes 3 team seats on one workspace, so a small team or a VA you work with can list under the same account and shared listing pool. There is no white-label plan — seats are for your own team.</div>
       </div>
 
     </div>
@@ -1126,16 +990,16 @@
   <div class="cta-orb" aria-hidden="true"></div>
   <div class="container">
     <h2 class="cta-title">
-      Your first 10 listings<br />are <span class="gradient-text">completely free.</span>
+      Your first 10 listings each month<br />are <span class="gradient-text">free on your own key.</span>
     </h2>
     <p class="cta-sub">
-      No credit card. No setup fee. See exactly what the AI does to your first batch of photos — then decide if it's worth your $29/month.
+      No credit card. No setup fee. The free tier runs the real software on your own photos with your own free Gemini key — then decide if Pro at $19/month is worth it.
     </p>
     <div class="cta-actions">
       <a href="/index.html" class="btn btn--primary btn--lg">⚡ Start Listing Free Now</a>
       <a href="#pricing" class="btn btn--outline btn--lg">View Pricing</a>
     </div>
-    <p class="cta-fine">No credit card required · Cancel anytime · Your data stays on your machine</p>
+    <p class="cta-fine">Free tier uses your own Gemini key · Edits always free · Cancel anytime in the app</p>
   </div>
 </section>
 
@@ -1155,44 +1019,6 @@
 </footer>
 
 <script>
-  // ── Urgency bar (spots counter that decays per session) ────────────────────
-  (function() {
-    const key = 'lp-spots';
-    let spots = parseInt(localStorage.getItem(key) || '62', 10);
-    spots = Math.max(spots - Math.floor(Math.random() * 3 + 1), 7);
-    localStorage.setItem(key, spots);
-    const el = document.getElementById('spotsCount');
-    if (el) el.textContent = spots + ' spots remaining';
-    // Slowly decay every minute this tab is open
-    setInterval(() => {
-      spots = Math.max(spots - 1, 6);
-      localStorage.setItem(key, spots);
-      if (el) el.textContent = spots + ' spots remaining';
-    }, 60000);
-  })();
-
-  // ── Billing toggle ─────────────────────────────────────────────────────────
-  function toggleBilling() {
-    const isAnnual = document.getElementById('billingToggle').checked;
-    document.getElementById('lbl-monthly').classList.toggle('on', !isAnnual);
-    document.getElementById('lbl-annual').classList.toggle('on', isAnnual);
-
-    document.querySelectorAll('.pc-num').forEach(el => {
-      const v = isAnnual ? el.dataset.annual : el.dataset.monthly;
-      el.textContent = v;
-    });
-
-    const billedLabels = {
-      flipper:  { annual: 'Billed $204/year <span class="save">Save $144</span>', monthly: '&nbsp;' },
-      pro:      { annual: 'Billed $492/year <span class="save">Save $336</span>', monthly: '&nbsp;' },
-      business: { annual: 'Billed $1,068/year <span class="save">Save $720</span>', monthly: '&nbsp;' }
-    };
-    ['flipper','pro','business'].forEach(plan => {
-      const el = document.getElementById('bill-' + plan);
-      if (el) el.innerHTML = billedLabels[plan][isAnnual ? 'annual' : 'monthly'];
-    });
-  }
-
   // ── FAQ accordion ──────────────────────────────────────────────────────────
   function toggleFaq(el) {
     const item = el.parentElement;

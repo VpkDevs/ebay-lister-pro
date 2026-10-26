@@ -459,7 +459,7 @@ function getTeamMaxSeats(plan) {
  * @returns {{premium:boolean, plan:string}}
  */
 function getBillingPlan(email) {
-  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingDbPath = config.billingDbPath;
   const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
   const rec = email ? billingHistory[email] : null;
   if (!rec || !rec.premium) return { premium: false, plan: "starter" };
@@ -638,9 +638,13 @@ function getWorkspaceFor(email) {
  * The billing account is workspace-resolved: a Power Seller seat's
  * generations count against the workspace owner's plan and shared pool.
  *
- * Requests with no signed-in account are not billing accounts and pass
- * through unmetered: local owner mode (Google sign-in not configured) and
- * the Chrome extension's operator API key (EXTENSION_OPERATOR_EMAIL).
+ * [HARDENING] Requests with no signed-in account are REFUSED at the
+ * generation endpoints (401 LOGIN_REQUIRED) — they are never passed
+ * through unmetered. The allowance layer below still reports them as
+ * non-billing accounts; refusal happens in the handlers. The only
+ * unmetered identity is the Chrome extension's operator API key
+ * (EXTENSION_OPERATOR_EMAIL), which exists only when the operator has
+ * configured API_KEY — there is no shipped default key.
  * ========================================================================== */
 
 // [METERING] Monthly listing allotments by billing plan. Starter's base
@@ -655,6 +659,24 @@ const STARTER_BYOK_ALLOTMENT = 10;
 // billing account, so it is never metered.
 const EXTENSION_OPERATOR_EMAIL = "extension@local.lister";
 
+// [HARDENING] The real plan lineup — the only plans checkout can sell and
+// the webhook can grant. Amounts and allotments mirror the approved
+// pricing and docs/billing-policy.md (Pro $19/300, Power Seller $49/1,000).
+const BILLING_PLANS = {
+  pro: { label: "Pro", productName: "ListAI Pro — Pro", amountCents: 1900, monthlyListings: 300 },
+  power_seller: { label: "Power Seller", productName: "ListAI Pro — Power Seller", amountCents: 4900, monthlyListings: 1000 }
+};
+
+/**
+ * [HARDENING] Base URL for Stripe redirect/return URLs: the configured
+ * public app URL (APP_URL) when set, else the local server origin.
+ * @param {number} port
+ * @returns {string}
+ */
+function getAppBaseUrl(port) {
+  return config.getAPP_URL() || `http://localhost:${port}`;
+}
+
 /**
  * [BYOK] Returns the account's saved Gemini API key, or null when none
  * is saved. Storage contract: the `geminiApiKey` field on the account's
@@ -668,7 +690,7 @@ const EXTENSION_OPERATOR_EMAIL = "extension@local.lister";
 function getUserGeminiKey(email) {
   email = String(email || "").trim().toLowerCase();
   if (!email) return null;
-  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingDbPath = config.billingDbPath;
   const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
   const rec = billingHistory[email];
   const key = rec && typeof rec.geminiApiKey === 'string' ? rec.geminiApiKey.trim() : '';
@@ -862,7 +884,7 @@ function refuseGeneration(res, allowance) {
  * @returns {object}
  */
 function readBillingStore() {
-  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingDbPath = config.billingDbPath;
   return utils.readJsonFileSecure(billingDbPath, {});
 }
 
@@ -871,7 +893,7 @@ function readBillingStore() {
  * @param {object} store
  */
 function writeBillingStore(store) {
-  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingDbPath = config.billingDbPath;
   utils.writeJsonFileSecure(billingDbPath, store);
 }
 
@@ -1128,10 +1150,14 @@ function parseCookies(cookieHeader) {
  * @returns {object|null}
  */
 function getAuthenticatedUser(req) {
-  // Check Chrome Extension API Key header
+  // Check Chrome Extension API Key header. [HARDENING] The operator
+  // identity exists only when the operator has configured API_KEY — there
+  // is no shipped default key, so a bare header (or no header) never
+  // authenticates as the premium operator.
+  const configuredApiKey = config.getAPI_KEY();
   const apiKey = req.headers['x-lister-api-key'] || (new URL(req.url, 'http://localhost')).searchParams.get('apiKey');
-  if (apiKey === config.getAPI_KEY()) {
-    return { email: "extension@local.lister", role: "API_USER", isPremium: true };
+  if (configuredApiKey && apiKey && apiKey === configuredApiKey) {
+    return { email: EXTENSION_OPERATOR_EMAIL, role: "API_USER", isPremium: true };
   }
 
   const cookies = parseCookies(req.headers.cookie);
@@ -1398,7 +1424,7 @@ async function runDiagnosticsHealth() {
   };
 
   reports.storage = {
-    scratch: checkFolderWritable(path.join(process.cwd(), 'scratch')),
+    scratch: checkFolderWritable(config.scratchDir),
     uploads: checkFolderWritable(config.uploadTempDir),
     data: checkFolderWritable(path.join(process.cwd(), 'data'))
   };
@@ -1587,8 +1613,7 @@ function startWebGuiServer(port = 45900) {
       '/api/metrics',
       '/api/auth/google/login',
       '/api/auth/google/callback',
-      '/api/billing/webhook',
-      '/api/billing/mock-success'
+      '/api/billing/webhook'
     ];
     
     const isApiRoute = parsedUrl.pathname.startsWith('/api/');
@@ -1944,16 +1969,12 @@ function startWebGuiServer(port = 45900) {
       const clientId = config.getGOOGLE_CLIENT_ID();
       const redirectUri = encodeURIComponent(config.getGOOGLE_REDIRECT_URI());
       if (!clientId) {
-        // Auto-login mock for local dev
-        const sessionId = crypto.randomBytes(32).toString('hex');
-        const userObj = { email: "local-admin@lister.pro", isPremium: true };
-        activeSessions.set(sessionId, { user: userObj, expiresAt: Date.now() + 86400000 });
-        
-        res.writeHead(302, {
-          'Set-Cookie': `sessionId=${sessionId}; Path=/; HttpOnly; SameSite=Lax`,
-          'Location': '/'
-        });
-        res.end();
+        // [HARDENING] Fail closed: with Google sign-in not configured there
+        // is no login — and no implicit session. This replaces the local-dev
+        // auto-login that minted a premium "local-admin@lister.pro" session
+        // for anyone who visited the login URL (no identity, no premium).
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "LOGIN_NOT_CONFIGURED", message: "Google sign-in is not configured on this server." }));
         return;
       }
       
@@ -2006,7 +2027,7 @@ function startWebGuiServer(port = 45900) {
         }
         
         const email = userInfo.email;
-        const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+        const billingDbPath = config.billingDbPath;
         const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
         const isPremium = !!(billingHistory[email] && billingHistory[email].premium);
         
@@ -2053,7 +2074,7 @@ function startWebGuiServer(port = 45900) {
       }
       
       if (email) {
-        const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+        const billingDbPath = config.billingDbPath;
         const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
         if (billingHistory[email]) {
           delete billingHistory[email];
@@ -2137,101 +2158,164 @@ function startWebGuiServer(port = 45900) {
     }
 
     // API: Stripe Checkout Session creation
+    // [HARDENING] Sessions are built from the real plan config (BILLING_PLANS:
+    // Pro $19/300, Power Seller $49/1,000) and carry plan metadata on both the
+    // session and the subscription, so the webhook grants the plan actually
+    // bought. Redirect URLs come from the configured app URL (APP_URL).
     if (req.method === 'POST' && parsedUrl.pathname === '/api/billing/create-checkout-session') {
       const stripeSecret = config.getSTRIPE_SECRET_KEY();
       if (!stripeSecret) {
-        // Dev mock fallback if Stripe not configured
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ url: '/api/billing/mock-success' }));
+        // [HARDENING] No mock checkout. An unconfigured Stripe fails closed:
+        // there is no success flow that can grant entitlements — premium is
+        // granted ONLY by the signature-verified webhook below, for a real
+        // paid subscription.
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "BILLING_NOT_CONFIGURED", message: "Checkout is unavailable: payments are not configured on this server." }));
         return;
       }
-      
-      try {
-        const userEmail = user ? user.email : "customer@local.lister";
-        const stripePayload = new URLSearchParams({
-          "success_url": `http://localhost:${port}/?billing=success`,
-          "cancel_url": `http://localhost:${port}/?billing=cancel`,
-          "mode": "subscription",
-          "customer_email": userEmail,
-          "line_items[0][price_data][currency]": "usd",
-          "line_items[0][price_data][product_data][name]": "Lister Pro Premium Subscription",
-          "line_items[0][price_data][unit_amount]": "2900", // $29.00
-          "line_items[0][price_data][recurring][interval]": "month",
-          "line_items[0][quantity]": "1"
-        }).toString();
-        
-        const stripeRes = await ebayClient.fetchWithRetry("https://api.stripe.com/v1/checkout/sessions", {
-          method: "POST",
-          headers: {
-            "Authorization": `Basic ${Buffer.from(stripeSecret + ':').toString('base64')}`,
-            "Content-Type": "application/x-www-form-urlencoded"
-          },
-          body: stripePayload
-        });
-        
-        const stripeData = await stripeRes.json();
-        if (!stripeRes.ok) {
-          throw new Error(`Stripe API error: ${JSON.stringify(stripeData)}`);
+
+      let checkoutBody = '';
+      req.on('data', chunk => { checkoutBody += chunk; });
+      req.on('end', async () => {
+        try {
+          // The plan is chosen by the caller ({ plan: "pro" | "power_seller" });
+          // absent or empty body defaults to Pro.
+          let plan = "pro";
+          if (checkoutBody) {
+            try {
+              const parsed = JSON.parse(checkoutBody);
+              if (parsed && typeof parsed.plan === 'string' && parsed.plan) plan = parsed.plan;
+            } catch (e) { /* malformed body: fall through to the plan check */ }
+          }
+          const planDef = BILLING_PLANS[plan];
+          if (!planDef) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "INVALID_PLAN", message: `Unknown plan "${plan}".` }));
+            return;
+          }
+
+          const userEmail = user ? user.email : "customer@local.lister";
+          const baseUrl = getAppBaseUrl(port);
+          const stripePayload = new URLSearchParams({
+            "success_url": `${baseUrl}/?billing=success`,
+            "cancel_url": `${baseUrl}/?billing=cancel`,
+            "mode": "subscription",
+            "customer_email": userEmail,
+            "metadata[plan]": plan,
+            "subscription_data[metadata][plan]": plan,
+            "line_items[0][price_data][currency]": "usd",
+            "line_items[0][price_data][product_data][name]": planDef.productName,
+            "line_items[0][price_data][unit_amount]": String(planDef.amountCents),
+            "line_items[0][price_data][recurring][interval]": "month",
+            "line_items[0][quantity]": "1"
+          }).toString();
+
+          const stripeRes = await ebayClient.fetchWithRetry("https://api.stripe.com/v1/checkout/sessions", {
+            method: "POST",
+            headers: {
+              "Authorization": `Basic ${Buffer.from(stripeSecret + ':').toString('base64')}`,
+              "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: stripePayload
+          });
+
+          const stripeData = await stripeRes.json();
+          if (!stripeRes.ok) {
+            throw new Error(`Stripe API error: ${JSON.stringify(stripeData)}`);
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ url: stripeData.url }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
         }
-        
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ url: stripeData.url }));
-      } catch (err) {
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: err.message }));
-      }
+      });
       return;
     }
 
-    // API: Stripe Mock Success
-    if (req.method === 'GET' && parsedUrl.pathname === '/api/billing/mock-success') {
-      if (user) {
-        user.isPremium = true;
-        const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
-        const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
-        billingHistory[user.email] = { premium: true, subscriptionId: "mock-sub-12345", plan: "pro" }; // [WAVE1-D] plan recorded for entitlements
-        utils.writeJsonFileSecure(billingDbPath, billingHistory);
-      }
-      res.writeHead(302, { 'Location': '/?billing=success' });
-      res.end();
-      return;
-    }
+    // [HARDENING] The /api/billing/mock-success endpoint was removed. It
+    // granted premium (subscriptionId "mock-sub-12345") to any signed-in
+    // session whenever Stripe was unconfigured — free premium by design.
+    // There is no mock success flow anymore; see the webhook below.
 
     // API: Stripe Webhook
+    // [HARDENING] Signature verification is MANDATORY: with no webhook
+    // secret configured, every event is rejected (an unverifiable event is
+    // never trusted). Verification is constant-time with a 5-minute
+    // timestamp tolerance (replay window). Premium is granted only here —
+    // for a real, signature-verified paid subscription event.
     if (req.method === 'POST' && parsedUrl.pathname === '/api/billing/webhook') {
       let bodyData = '';
       req.on('data', chunk => bodyData += chunk);
       req.on('end', async () => {
         try {
-          const signatureHeader = req.headers['stripe-signature'];
           const webhookSecret = config.getSTRIPE_WEBHOOK_SECRET();
-          
-          if (webhookSecret && signatureHeader) {
-            const sigParts = signatureHeader.split(',');
-            const timestampPart = sigParts.find(p => p.startsWith('t='));
-            const signaturePart = sigParts.find(p => p.startsWith('v1='));
-            
-            if (!timestampPart || !signaturePart) throw new Error("Invalid signature headers");
-            
-            const timestamp = timestampPart.split('=')[1];
-            const signature = signaturePart.split('=')[1];
-            const signedPayload = `${timestamp}.${bodyData}`;
-            
-            const expectedSignature = crypto
-              .createHmac('sha256', webhookSecret)
-              .update(signedPayload)
-              .digest('hex');
-              
-            if (signature !== expectedSignature) {
-              res.writeHead(400, { 'Content-Type': 'application/json' });
-              res.end(JSON.stringify({ error: "Invalid Stripe signature" }));
-              return;
-            }
+          const signatureHeader = req.headers['stripe-signature'];
+
+          if (!webhookSecret) {
+            utils.logAudit("WARN", "Stripe webhook rejected: STRIPE_WEBHOOK_SECRET is not configured.");
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Webhook secret not configured" }));
+            return;
+          }
+          if (!signatureHeader) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Missing Stripe signature" }));
+            return;
+          }
+
+          const sigParts = String(signatureHeader).split(',').map(p => p.trim());
+          const timestampPart = sigParts.find(p => p.startsWith('t='));
+          const signatures = sigParts.filter(p => p.startsWith('v1=')).map(p => p.slice(3));
+          if (!timestampPart || signatures.length === 0) throw new Error("Invalid signature headers");
+
+          const timestamp = timestampPart.slice(2);
+          const timestampAgeSeconds = Math.abs(Math.floor(Date.now() / 1000) - Number(timestamp));
+          if (!Number.isFinite(timestampAgeSeconds) || timestampAgeSeconds > 300) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Stripe signature timestamp outside tolerance" }));
+            return;
+          }
+
+          const expectedSignature = crypto
+            .createHmac('sha256', webhookSecret)
+            .update(`${timestamp}.${bodyData}`)
+            .digest();
+          const signatureValid = signatures.some(sig => {
+            const candidate = Buffer.from(sig, 'hex');
+            return candidate.length === expectedSignature.length &&
+              crypto.timingSafeEqual(candidate, expectedSignature);
+          });
+          if (!signatureValid) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Invalid Stripe signature" }));
+            return;
           }
 
           const event = JSON.parse(bodyData);
-          const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+          const billingDbPath = config.billingDbPath;
           const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
+
+          const findEmailBySubscription = (subscriptionId) => subscriptionId
+            ? Object.keys(billingHistory).find(e => billingHistory[e].subscriptionId === subscriptionId)
+            : undefined;
+          const findEmailByCustomer = (customerId) => customerId
+            ? Object.keys(billingHistory).find(e => billingHistory[e].customerId === customerId)
+            : undefined;
+          const syncSessionPremium = (email, isPremium) => {
+            for (const [sid, sess] of activeSessions.entries()) {
+              if (sess.user.email === email) sess.user.isPremium = isPremium;
+            }
+          };
+          const saveRecord = (email, fields) => {
+            billingHistory[email] = { ...(billingHistory[email] || {}), ...fields };
+            utils.writeJsonFileSecure(billingDbPath, billingHistory);
+          };
+          const planFromMetadata = (metadata, fallback) => {
+            const plan = metadata && metadata.plan;
+            return BILLING_PLANS[plan] ? plan : fallback;
+          };
 
           if (event.type === 'checkout.session.completed') {
             const session = event.data.object;
@@ -2240,29 +2324,82 @@ function startWebGuiServer(port = 45900) {
               // [WAVE1-D] Record the billing plan from checkout metadata
               // (plan: "pro" | "power_seller") so team-seat entitlements can
               // be enforced. Defaults to "pro" for sessions without metadata.
-              const plan = (session.metadata && session.metadata.plan) || "pro";
-              billingHistory[email] = { premium: true, subscriptionId: session.subscription, plan };
-              utils.writeJsonFileSecure(billingDbPath, billingHistory);
+              const plan = planFromMetadata(session.metadata, "pro");
+              saveRecord(email, {
+                premium: true,
+                plan,
+                subscriptionId: session.subscription || (billingHistory[email] || {}).subscriptionId,
+                customerId: session.customer || (billingHistory[email] || {}).customerId,
+                paymentStatus: "active",
+                pastDue: false,
+                cancelAtPeriodEnd: false
+              });
               utils.logAudit("INFO", `Stripe Premium Activated for customer: ${email} (plan: ${plan})`);
-              for (const [sid, sess] of activeSessions.entries()) {
-                if (sess.user.email === email) {
-                  sess.user.isPremium = true;
-                }
+              syncSessionPremium(email, true);
+            }
+          } else if (event.type === 'customer.subscription.created' || event.type === 'customer.subscription.updated') {
+            // [HARDENING] Keep the local record in sync with Stripe: plan
+            // changes land here (proration itself is Stripe's, Policy 2),
+            // and a subscription that is no longer active stops granting
+            // premium immediately instead of at deletion time.
+            const subscription = event.data.object;
+            const email = findEmailBySubscription(subscription.id) || findEmailByCustomer(subscription.customer);
+            if (email) {
+              const current = billingHistory[email];
+              const fields = {
+                subscriptionId: subscription.id,
+                customerId: subscription.customer || current.customerId,
+                plan: planFromMetadata(subscription.metadata, current.plan || "pro")
+              };
+              if (typeof subscription.cancel_at_period_end === 'boolean') {
+                fields.cancelAtPeriodEnd = subscription.cancel_at_period_end;
               }
+              if (subscription.status === 'active' || subscription.status === 'trialing') {
+                fields.premium = true;
+                fields.paymentStatus = subscription.status;
+                fields.pastDue = false;
+              } else if (subscription.status === 'past_due') {
+                fields.paymentStatus = 'past_due';
+                fields.pastDue = true; // dunning: premium held until Stripe gives up (deleted)
+              } else if (['canceled', 'unpaid', 'incomplete_expired'].includes(subscription.status)) {
+                fields.premium = false;
+                fields.paymentStatus = subscription.status;
+                fields.pastDue = false;
+              } else {
+                fields.paymentStatus = subscription.status;
+              }
+              saveRecord(email, fields);
+              if (typeof fields.premium === 'boolean') syncSessionPremium(email, fields.premium);
+              utils.logAudit("INFO", `Stripe subscription ${event.type === 'customer.subscription.created' ? 'created' : 'updated'} synced for ${email}: status=${subscription.status}, plan=${fields.plan}`);
             }
           } else if (event.type === 'customer.subscription.deleted') {
+            // [HARDENING] Cancellation (immediate or at period end) and
+            // dunning exhaustion both end here: premium is revoked.
             const subscription = event.data.object;
-            for (const email of Object.keys(billingHistory)) {
-              if (billingHistory[email].subscriptionId === subscription.id) {
-                billingHistory[email].premium = false;
-                utils.writeJsonFileSecure(billingDbPath, billingHistory);
-                utils.logAudit("INFO", `Stripe Premium Expired for customer: ${email}`);
-                for (const [sid, sess] of activeSessions.entries()) {
-                  if (sess.user.email === email) {
-                    sess.user.isPremium = false;
-                  }
-                }
-              }
+            const email = findEmailBySubscription(subscription.id) || findEmailByCustomer(subscription.customer);
+            if (email) {
+              saveRecord(email, { premium: false, paymentStatus: 'canceled', pastDue: false, cancelAtPeriodEnd: false });
+              utils.logAudit("INFO", `Stripe Premium Expired for customer: ${email}`);
+              syncSessionPremium(email, false);
+            }
+          } else if (event.type === 'invoice.payment_failed') {
+            // [HARDENING] A failed renewal marks the account past due.
+            // Premium is NOT yanked mid-dunning (docs/billing-policy.md
+            // leaves the grace behavior open; Stripe's retry schedule
+            // decides) — if Stripe gives up, customer.subscription.deleted
+            // above revokes premium.
+            const invoice = event.data.object;
+            const email = findEmailBySubscription(invoice.subscription) || findEmailByCustomer(invoice.customer);
+            if (email) {
+              saveRecord(email, { paymentStatus: 'past_due', pastDue: true });
+              utils.logAudit("WARN", `Stripe payment failed for customer: ${email} (marked past due)`);
+            }
+          } else if (event.type === 'invoice.paid') {
+            const invoice = event.data.object;
+            const email = findEmailBySubscription(invoice.subscription) || findEmailByCustomer(invoice.customer);
+            if (email && billingHistory[email].pastDue) {
+              saveRecord(email, { paymentStatus: 'active', pastDue: false });
+              utils.logAudit("INFO", `Stripe payment recovered for customer: ${email} (past-due mark cleared)`);
             }
           }
 
@@ -2273,6 +2410,107 @@ function startWebGuiServer(port = 45900) {
           res.end(JSON.stringify({ error: err.message }));
         }
       });
+      return;
+    }
+
+    // [HARDENING] API: Cancel the signed-in user's subscription.
+    // Self-serve "cancel anytime" (docs/billing-policy.md): the
+    // subscription is set to cancel at period end in Stripe, so the
+    // customer keeps what they paid for; the subscription.deleted webhook
+    // revokes premium when the period actually ends.
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/billing/cancel') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "LOGIN_REQUIRED", message: "Please log in to manage your subscription." }));
+        return;
+      }
+      const record = readBillingStore()[user.email];
+      if (!record || !record.subscriptionId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "NO_SUBSCRIPTION", message: "There's no active subscription on this account to cancel." }));
+        return;
+      }
+      const stripeSecret = config.getSTRIPE_SECRET_KEY();
+      if (!stripeSecret) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "BILLING_NOT_CONFIGURED", message: "Billing is not configured on this server." }));
+        return;
+      }
+      try {
+        const stripeRes = await ebayClient.fetchWithRetry(`https://api.stripe.com/v1/subscriptions/${encodeURIComponent(record.subscriptionId)}`, {
+          method: "POST",
+          headers: {
+            "Authorization": `Basic ${Buffer.from(stripeSecret + ':').toString('base64')}`,
+            "Content-Type": "application/x-www-form-urlencoded"
+          },
+          body: new URLSearchParams({ "cancel_at_period_end": "true" }).toString()
+        });
+        const stripeData = await stripeRes.json();
+        if (!stripeRes.ok) {
+          throw new Error(`Stripe API error: ${JSON.stringify(stripeData)}`);
+        }
+        const store = readBillingStore();
+        if (store[user.email]) {
+          store[user.email].cancelAtPeriodEnd = true;
+          writeBillingStore(store);
+        }
+        utils.logAudit("INFO", `Subscription set to cancel at period end for ${user.email}`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          cancelAtPeriodEnd: true,
+          message: "Your subscription stays active until the end of the current billing period, then ends automatically. You won't be charged again."
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // [HARDENING] API: Stripe Billing Portal session — the self-serve page
+    // where customers update payment methods, switch plans (Stripe
+    // proration applies, Policy 2), and cancel.
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/billing/portal') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "LOGIN_REQUIRED", message: "Please log in to manage your subscription." }));
+        return;
+      }
+      const record = readBillingStore()[user.email];
+      if (!record || !record.customerId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "NO_STRIPE_CUSTOMER", message: "No billing account was found for this login — subscribe first, or contact support." }));
+        return;
+      }
+      const stripeSecret = config.getSTRIPE_SECRET_KEY();
+      if (!stripeSecret) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "BILLING_NOT_CONFIGURED", message: "Billing is not configured on this server." }));
+        return;
+      }
+      try {
+        const stripeRes = await ebayClient.fetchWithRetry("https://api.stripe.com/v1/billing_portal/sessions", {
+          method: "POST",
+          headers: {
+            "Authorization": `Basic ${Buffer.from(stripeSecret + ':').toString('base64')}`,
+            "Content-Type": "application/x-www-form-urlencoded"
+          },
+          body: new URLSearchParams({
+            "customer": record.customerId,
+            "return_url": `${getAppBaseUrl(port)}/?billing=portal-return`
+          }).toString()
+        });
+        const stripeData = await stripeRes.json();
+        if (!stripeRes.ok) {
+          throw new Error(`Stripe API error: ${JSON.stringify(stripeData)}`);
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ url: stripeData.url }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
       return;
     }
 
@@ -2728,6 +2966,15 @@ function startWebGuiServer(port = 45900) {
 
       // Helper function to handle Gemini fallback
       const handleGeminiListingFallback = async (keywords, response) => {
+        // [HARDENING] The Gemini fallback is a generation: anonymous
+        // callers are refused, never passed through unmetered. (Importing
+        // an existing eBay item by ID is not a generation and is not
+        // gated here; only the AI fallback is.)
+        if (!user || !user.email) {
+          response.writeHead(401, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ error: "LOGIN_REQUIRED", message: "Please log in to generate listings." }));
+          return;
+        }
         // [METERING + BYOK] A keywords -> listing generation routes exactly
         // like a photo generation: allotment gate, house key or the caller's
         // own key (free tier; paid overflow valve past the cap).
@@ -3726,7 +3973,8 @@ function startWebGuiServer(port = 45900) {
           // [METERING + BYOK] Generation route: signed-in accounts generate
           // only within their monthly allotment — on the house key, or on
           // their own saved key (free tier; paid overflow valve past the
-          // cap). Unmetered when no account is signed in.
+          // cap). [HARDENING] Anonymous requests never reach generation:
+          // they are refused after payload validation, below.
           const route = resolveGenerationRoute(user && user.email);
           if (route.refused) {
             refuseGeneration(res, route.allowance);
@@ -3770,7 +4018,26 @@ function startWebGuiServer(port = 45900) {
             return;
           }
 
-          await ebayClient.refreshEbayAccessToken();
+          // [HARDENING] Generation requires an identity: anonymous
+          // requests are refused here (after payload validation), never
+          // passed through unmetered.
+          if (!user || !user.email) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "LOGIN_REQUIRED", message: "Please log in to generate listings." }));
+            return;
+          }
+
+          // [HARDENING] eBay enrichment is optional for generation: refresh
+          // the token best-effort so a missing, expired, or unconfigured
+          // eBay connection can never 500 photo -> listing generation. The
+          // category/comps/stock-photo helpers below all degrade to empty
+          // results without a token. (Publish paths keep the strict
+          // refresh — selling on eBay does require eBay.)
+          try {
+            await ebayClient.refreshEbayAccessToken();
+          } catch (refreshErr) {
+            utils.logAudit("WARN", `Analyze: eBay token refresh unavailable (${refreshErr.message}); generating without eBay enrichment.`);
+          }
 
           let upcData = null;
           if (payload.barcode) {
@@ -5122,7 +5389,10 @@ module.exports = {
   saveUserGeminiKey,
   clearUserGeminiKey,
   resolveGenerationRoute,
-  resolveEnhanceKey
+  resolveEnhanceKey,
+  // [HARDENING] Exported for unit tests
+  BILLING_PLANS,
+  getAppBaseUrl
 };
 
 if (require.main === module) {

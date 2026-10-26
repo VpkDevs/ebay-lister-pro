@@ -8,11 +8,28 @@ const fs = require('fs');
 
 const envPath = path.resolve(process.cwd(), '.env');
 
-// Establish central data directory for persistence and volume mounting
-const dataDir = path.join(process.cwd(), 'data');
+// [HARDENING] Persistent state root. All mutable app state (data/ stores and
+// the scratch/ billing store) lives under ONE root so a single mounted
+// volume keeps billing records and listing history alive across redeploys.
+// Point LISTER_STATE_DIR at the volume mount path; on Railway the attached
+// volume's RAILWAY_VOLUME_MOUNT_PATH is honored automatically. With neither
+// set, the root is the app directory — the exact paths the app has always
+// used locally.
+const stateRoot = process.env.LISTER_STATE_DIR
+  ? path.resolve(process.env.LISTER_STATE_DIR)
+  : (process.env.RAILWAY_VOLUME_MOUNT_PATH
+      ? path.resolve(process.env.RAILWAY_VOLUME_MOUNT_PATH)
+      : process.cwd());
+const dataDir = path.join(stateRoot, 'data');
 if (!fs.existsSync(dataDir)) {
   fs.mkdirSync(dataDir, { recursive: true });
 }
+const scratchDir = path.join(stateRoot, 'scratch');
+if (!fs.existsSync(scratchDir)) {
+  fs.mkdirSync(scratchDir, { recursive: true });
+}
+// [HARDENING] Billing records (who has paid, plans, saved BYOK keys).
+const billingDbPath = path.join(scratchDir, 'billing_status.json');
 
 const tempPath = path.join(dataDir, 'temp-listing.json');
 const recoveryPath = path.join(dataDir, 'lister-recovery.json');
@@ -78,6 +95,10 @@ function runDiagnostics() {
 
 module.exports = {
   envPath,
+  stateRoot, // [HARDENING]
+  dataDir, // [HARDENING]
+  scratchDir, // [HARDENING]
+  billingDbPath, // [HARDENING]
   tempPath,
   recoveryPath,
   logPath,
@@ -138,8 +159,19 @@ module.exports = {
   getSTRIPE_SECRET_KEY: () => process.env.STRIPE_SECRET_KEY,
   /** @returns {string|undefined} */
   getSTRIPE_WEBHOOK_SECRET: () => process.env.STRIPE_WEBHOOK_SECRET,
-  /** @returns {string} */
-  getAPI_KEY: () => process.env.API_KEY || "lister-secret-key-12345",
+  /** @returns {string|undefined} Operator API key for the Chrome extension.
+   * [HARDENING] No shipped default: when API_KEY is not configured there is
+   * no API-key identity at all (a configured key or nothing). The previous
+   * hardcoded fallback was printed in the public source and authenticated
+   * anyone as a premium operator. */
+  getAPI_KEY: () => process.env.API_KEY || undefined,
+  /** @returns {string|undefined} Public base URL of the deployed app (e.g.
+   * https://app.example.com), used for Stripe success/cancel/return URLs.
+   * [HARDENING] Checkout no longer hardcodes localhost URLs when this is set. */
+  getAPP_URL: () => {
+    const url = (process.env.APP_URL || "").trim().replace(/\/+$/, "");
+    return url || undefined;
+  },
   /** @returns {string|undefined} */
   getWOOCOMMERCE_URL: () => {
     const url = process.env.WOOCOMMERCE_URL;
