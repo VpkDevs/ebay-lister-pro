@@ -92,6 +92,9 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
     throw new Error("Validation Error: upcData must be an object or null.");
   }
 
+  // [BYOK SEAM] House key read — a per-user key override threads in here:
+  // webServer resolves the caller's saved key (getUserGeminiKey) and passes
+  // it via `options` instead of this house key when one applies.
   const geminiKey = config.getGEMINI_API_KEY();
   if (!geminiKey) {
     throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");
@@ -568,6 +571,7 @@ async function enhanceListingDraft({ title, description, context = null }) {
     throw new Error("Validation Error: context must be a string or null.");
   }
 
+  // [BYOK SEAM] House key read — a per-user key override (BYOK) threads in here.
   const geminiKey = config.getGEMINI_API_KEY();
   if (!geminiKey) {
     throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");
@@ -619,6 +623,7 @@ async function enhanceListingDraft({ title, description, context = null }) {
  * @returns {Promise<object>} Generated listing details matching the editor schema.
  */
 async function generateListingFromKeywords(keywords) {
+  // [BYOK SEAM] House key read — a per-user key override (BYOK) threads in here.
   const geminiKey = config.getGEMINI_API_KEY();
   if (!geminiKey) {
     throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");

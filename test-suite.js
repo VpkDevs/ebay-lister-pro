@@ -4558,3 +4558,359 @@ test('Wave 1D: bulk CSV import and Power Seller team seats', async (t) => {
   if (originalGoogleClientId === undefined) delete process.env.GOOGLE_CLIENT_ID;
   else process.env.GOOGLE_CLIENT_ID = originalGoogleClientId;
 });
+
+// ==========================================
+// [METERING] Usage metering and plan-cap enforcement
+// ==========================================
+test('Metering: per-user generation counts and plan caps', async (t) => {
+  // Hermetic setup: redirect the usage store into the test sandbox and back
+  // up the team + billing stores this block rewrites.
+  const originalUsagePath = config.usagePath;
+  config.usagePath = path.join(testDir, 'test-usage.json');
+  const teamBackup = fs.existsSync(config.teamPath)
+    ? fs.readFileSync(config.teamPath, 'utf8') : null;
+  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingBackup = fs.existsSync(billingDbPath)
+    ? fs.readFileSync(billingDbPath, 'utf8') : null;
+  const savedGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+  const hadGoogleClientId = Object.prototype.hasOwnProperty.call(process.env, 'GOOGLE_CLIENT_ID');
+  const savedGoogleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const hadGoogleClientSecret = Object.prototype.hasOwnProperty.call(process.env, 'GOOGLE_CLIENT_SECRET');
+  delete process.env.GOOGLE_CLIENT_ID;
+  delete process.env.GOOGLE_CLIENT_SECRET;
+
+  function resetBilling(obj) { utils.writeJsonFileSecure(billingDbPath, obj); }
+  function resetTeam(obj) { utils.writeJsonFileSecure(config.teamPath, obj); }
+  function resetUsage(obj) { utils.writeJsonFileSecure(config.usagePath, obj); }
+  const monthKey = webServer.usageMonthKey();
+
+  await t.test('allotments: pro 300, power_seller 1000, starter 0 — or 10 with a saved own key', () => {
+    assert.strictEqual(webServer.LISTING_ALLOTMENT_BY_PLAN.pro, 300);
+    assert.strictEqual(webServer.LISTING_ALLOTMENT_BY_PLAN.power_seller, 1000);
+    assert.strictEqual(webServer.LISTING_ALLOTMENT_BY_PLAN.starter, 0);
+    assert.strictEqual(webServer.STARTER_BYOK_ALLOTMENT, 10);
+    assert.strictEqual(webServer.getMonthlyAllotment('pro', false), 300);
+    assert.strictEqual(webServer.getMonthlyAllotment('power_seller', false), 1000);
+    assert.strictEqual(webServer.getMonthlyAllotment('starter', false), 0);
+    assert.strictEqual(webServer.getMonthlyAllotment('starter', true), 10);
+  });
+
+  await t.test('getUserGeminiKey seam: null until a key is saved on the billing record', () => {
+    resetBilling({});
+    assert.strictEqual(webServer.getUserGeminiKey('free@test.com'), null);
+    assert.strictEqual(webServer.hasUserGeminiKey('free@test.com'), false);
+    resetBilling({ 'free@test.com': { premium: false, plan: 'starter', geminiApiKey: 'saved-key-123' } });
+    assert.strictEqual(webServer.getUserGeminiKey('free@test.com'), 'saved-key-123');
+    assert.strictEqual(webServer.hasUserGeminiKey('free@test.com'), true);
+    resetBilling({ 'free@test.com': { premium: false, plan: 'starter', geminiApiKey: '   ' } });
+    assert.strictEqual(webServer.getUserGeminiKey('free@test.com'), null);
+  });
+
+  await t.test('recordGeneration counts per billing account and per month', () => {
+    resetBilling({
+      'a@test.com': { premium: true, subscriptionId: 's1', plan: 'pro' },
+      'b@test.com': { premium: true, subscriptionId: 's2', plan: 'pro' }
+    });
+    resetTeam({});
+    resetUsage({ 'a@test.com': { '2000-01': 7 } });
+    webServer.recordGeneration('a@test.com');
+    const after = webServer.recordGeneration('a@test.com');
+    assert.strictEqual(after.used, 2);
+    assert.strictEqual(webServer.getMonthlyUsage('a@test.com'), 2);
+    assert.strictEqual(webServer.getMonthlyUsage('a@test.com', '2000-01'), 7); // other months untouched
+    webServer.recordGeneration('b@test.com');
+    assert.strictEqual(webServer.getMonthlyUsage('b@test.com'), 1);
+    assert.strictEqual(webServer.getMonthlyUsage('a@test.com'), 2); // per-user isolation
+  });
+
+  await t.test('keyless starter is refused (no_plan); starter with own key gets 10 then caps', () => {
+    resetTeam({});
+    resetBilling({});
+    resetUsage({});
+    let a = webServer.resolveGenerationAllowance('free@test.com');
+    assert.strictEqual(a.metered, true);
+    assert.strictEqual(a.allowed, false);
+    assert.strictEqual(a.reason, 'no_plan');
+    assert.strictEqual(a.allotment, 0);
+
+    resetBilling({ 'free@test.com': { premium: false, plan: 'starter', geminiApiKey: 'k' } });
+    a = webServer.resolveGenerationAllowance('free@test.com');
+    assert.strictEqual(a.allowed, true);
+    assert.strictEqual(a.allotment, 10);
+    resetUsage({ 'free@test.com': { [monthKey]: 10 } });
+    a = webServer.resolveGenerationAllowance('free@test.com');
+    assert.strictEqual(a.allowed, false);
+    assert.strictEqual(a.reason, 'cap_reached');
+  });
+
+  await t.test('pro is allowed at 299 and refused at the 300 cap', () => {
+    resetTeam({});
+    resetBilling({ 'pro@test.com': { premium: true, subscriptionId: 's', plan: 'pro' } });
+    resetUsage({ 'pro@test.com': { [monthKey]: 299 } });
+    assert.strictEqual(webServer.resolveGenerationAllowance('pro@test.com').allowed, true);
+    resetUsage({ 'pro@test.com': { [monthKey]: 300 } });
+    const a = webServer.resolveGenerationAllowance('pro@test.com');
+    assert.strictEqual(a.allowed, false);
+    assert.strictEqual(a.reason, 'cap_reached');
+    assert.strictEqual(a.allotment, 300);
+  });
+
+  await t.test('refusal copy: keyless free hears both doors; BYOK free hears plans only; paid hears the own-key escape', () => {
+    resetTeam({});
+    resetBilling({});
+    resetUsage({});
+    let r = webServer.generationRefusal(webServer.resolveGenerationAllowance('free@test.com'));
+    assert.strictEqual(r.status, 403);
+    assert.strictEqual(r.body.error, 'SUBSCRIPTION_REQUIRED');
+    assert.match(r.body.message, /own Gemini API key in Settings/);
+    assert.match(r.body.message, /subscribe to Pro/i);
+    assert.strictEqual(r.body.usage.limit, 0);
+
+    resetBilling({ 'free@test.com': { premium: false, plan: 'starter', geminiApiKey: 'k' } });
+    resetUsage({ 'free@test.com': { [monthKey]: 10 } });
+    r = webServer.generationRefusal(webServer.resolveGenerationAllowance('free@test.com'));
+    assert.strictEqual(r.body.error, 'LISTING_LIMIT_REACHED');
+    assert.match(r.body.message, /free listings/);
+    assert.match(r.body.message, /Subscribe to Pro/);
+    assert.ok(!/own Gemini API key/i.test(r.body.message)); // already on their own key — no own-key pitch
+
+    resetBilling({ 'pro@test.com': { premium: true, subscriptionId: 's', plan: 'pro' } });
+    resetUsage({ 'pro@test.com': { [monthKey]: 300 } });
+    r = webServer.generationRefusal(webServer.resolveGenerationAllowance('pro@test.com'));
+    assert.strictEqual(r.body.error, 'LISTING_LIMIT_REACHED');
+    assert.match(r.body.message, /own Gemini API key in Settings/);
+  });
+
+  await t.test('workspace seat generations count against the owner pool', () => {
+    resetBilling({ 'boss2@test.com': { premium: true, subscriptionId: 's', plan: 'power_seller' } });
+    resetTeam({});
+    resetUsage({});
+    webServer.inviteTeamMember('boss2@test.com', 'seat@test.com');
+    webServer.acceptTeamInvite('boss2@test.com', 'seat@test.com');
+    const a = webServer.resolveGenerationAllowance('seat@test.com');
+    assert.strictEqual(a.billingEmail, 'boss2@test.com');
+    assert.strictEqual(a.allotment, 1000);
+    webServer.recordGeneration('seat@test.com');
+    assert.strictEqual(webServer.getMonthlyUsage('boss2@test.com'), 1);
+    assert.strictEqual(webServer.getMonthlyUsage('seat@test.com'), 0);
+  });
+
+  await t.test('no-account and extension operator identities are unmetered', () => {
+    assert.strictEqual(webServer.resolveGenerationAllowance(null).metered, false);
+    assert.strictEqual(webServer.resolveGenerationAllowance('').metered, false);
+    assert.strictEqual(webServer.resolveGenerationAllowance('extension@local.lister').metered, false);
+  });
+
+  await t.test('HTTP: generation endpoints meter, gate, and expose usage', async () => {
+    const testPort = 45961;
+    const server = webServer.startWebGuiServer(testPort);
+    process.env.GOOGLE_CLIENT_ID = 'mock-client-id';
+    process.env.GOOGLE_CLIENT_SECRET = '<redacted>';
+    global.fetch = REAL_FETCH;
+
+    // Tiny valid PNG in the uploads sandbox (same recipe as the /api/analyze suite).
+    const processedDir = path.join(testDir, 'processed');
+    if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir, { recursive: true });
+    const pngPath = path.join(processedDir, 'metering-analyze.png');
+    const pngBuf = Buffer.alloc(32);
+    pngBuf.writeUInt32BE(0x89504E47, 0);
+    pngBuf.writeUInt32BE(0x0D0A1A0A, 4);
+    pngBuf.writeUInt32BE(13, 8);
+    pngBuf.writeUInt32BE(0x49484452, 12);
+    pngBuf.writeUInt32BE(600, 16);
+    pngBuf.writeUInt32BE(600, 20);
+    fs.writeFileSync(pngPath, pngBuf);
+
+    const originalOrchestration = geminiClient.runAIOrchestration;
+    const originalEnhance = geminiClient.enhanceListingDraft;
+    const originalKeywords = geminiClient.generateListingFromKeywords;
+    const originalRefresh = ebayClient.refreshEbayAccessToken;
+    const originalFetchWithRetry = ebayClient.fetchWithRetry;
+    const originalSearchItemId = ebayClient.searchItemIdByKeywords;
+    const originalStockPhotos = ebayClient.searchCatalogStockPhotos;
+
+    let orchestrationShouldFail = false;
+    let keywordsShouldFail = false;
+    geminiClient.runAIOrchestration = async () => {
+      if (orchestrationShouldFail) throw new Error('mock generation failure');
+      return { title: 'Metered Test Listing', description: 'Test', suggestedPrice: 9.99, condition: 'USED_GOOD', aspects: {}, categoryId: '111422' };
+    };
+    geminiClient.enhanceListingDraft = async ({ title, description }) => ({ title, description, enhanced: true });
+    geminiClient.generateListingFromKeywords = async () => {
+      if (keywordsShouldFail) throw new Error('mock keyword failure');
+      return { title: 'Keyword Metered Listing', suggestedPrice: 5.5, condition: 'NEW', brand: 'B', model: 'M', description: 'D', categoryId: '111422', aspects: {} };
+    };
+    ebayClient.refreshEbayAccessToken = async () => {};
+    ebayClient.fetchWithRetry = async (url, options) => {
+      const urlStr = String(url);
+      if (urlStr.includes('tmpfiles.org') || urlStr.includes('file.io')) {
+        return { ok: true, status: 200, json: async () => ({ status: 'success', data: { url: 'https://tmpfiles.org/dl/mock.jpg' } }) };
+      }
+      return originalFetchWithRetry(url, options);
+    };
+    ebayClient.searchItemIdByKeywords = async () => null; // force the Gemini fallback path
+    ebayClient.searchCatalogStockPhotos = async () => [];
+
+    // Signs in through the real Google callback with a mocked Google backend
+    // (same pattern as the OAuth suite) and returns the session cookie.
+    async function loginAs(email) {
+      const prevFetch = global.fetch;
+      global.fetch = async (url) => {
+        const urlStr = String(url);
+        if (urlStr.includes('oauth2.googleapis.com/token')) {
+          return { status: 200, ok: true, json: async () => ({ access_token: 'mock-google-token' }) };
+        }
+        if (urlStr.includes('googleapis.com/oauth2/v3/userinfo')) {
+          return { status: 200, ok: true, json: async () => ({ email, name: 'Metering Test', picture: '' }) };
+        }
+        return { status: 404, ok: false, json: async () => ({}) };
+      };
+      try {
+        const res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/auth/google/callback?code=test-code`, { redirect: 'manual' });
+        assert.strictEqual(res.status, 302);
+        const m = (res.headers.get('set-cookie') || '').match(/sessionId=([^;]+)/);
+        assert.ok(m, 'session cookie issued');
+        return `sessionId=${m[1]}`;
+      } finally {
+        global.fetch = prevFetch;
+      }
+    }
+
+    const analyzeReq = (cookie) => REAL_FETCH(`http://127.0.0.1:${testPort}/api/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cookie': cookie },
+      body: JSON.stringify({ images: ['/uploads/processed/metering-analyze.png'] })
+    });
+
+    try {
+      resetTeam({});
+
+      // --- Successful photo generation counts; failed generation and
+      // --- enhance do not. ---------------------------------------------
+      resetBilling({ 'pro-http@test.com': { premium: true, subscriptionId: 's', plan: 'pro' } });
+      resetUsage({});
+      const proCookie = await loginAs('pro-http@test.com');
+
+      webServer.resetRateLimits();
+      let res = await analyzeReq(proCookie);
+      assert.strictEqual(res.status, 200);
+      await res.json();
+      assert.strictEqual(webServer.getMonthlyUsage('pro-http@test.com'), 1);
+
+      orchestrationShouldFail = true;
+      webServer.resetRateLimits();
+      res = await analyzeReq(proCookie);
+      assert.strictEqual(res.status, 500);
+      await res.json();
+      assert.strictEqual(webServer.getMonthlyUsage('pro-http@test.com'), 1); // failure is free
+      orchestrationShouldFail = false;
+
+      res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/enhance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Cookie': proCookie },
+        body: JSON.stringify({ title: 'T', description: 'D' })
+      });
+      assert.strictEqual(res.status, 200);
+      await res.json();
+      assert.strictEqual(webServer.getMonthlyUsage('pro-http@test.com'), 1); // edits are free
+
+      // --- Keywords -> listing fallback counts; its failure does not. ---
+      res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/ebay/import?itemIdOrUrl=some%20test%20keywords`, {
+        headers: { 'Cookie': proCookie }
+      });
+      assert.strictEqual(res.status, 200);
+      const imp = await res.json();
+      assert.strictEqual(imp.title, 'Keyword Metered Listing');
+      assert.strictEqual(webServer.getMonthlyUsage('pro-http@test.com'), 2);
+
+      keywordsShouldFail = true;
+      res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/ebay/import?itemIdOrUrl=some%20test%20keywords`, {
+        headers: { 'Cookie': proCookie }
+      });
+      assert.strictEqual(res.status, 500);
+      await res.json();
+      assert.strictEqual(webServer.getMonthlyUsage('pro-http@test.com'), 2);
+      keywordsShouldFail = false;
+
+      // --- Usage is exposed on the billing surface (/api/team). --------
+      res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/team`, { headers: { 'Cookie': proCookie } });
+      assert.strictEqual(res.status, 200);
+      const team = await res.json();
+      assert.ok(team.usage);
+      assert.strictEqual(team.usage.used, 2);
+      assert.strictEqual(team.usage.limit, 300);
+      assert.strictEqual(team.usage.plan, 'pro');
+      assert.strictEqual(team.usage.period, monthKey);
+
+      // --- Paid account at cap: refused, own-key escape in the copy. ---
+      resetUsage({ 'pro-http@test.com': { [monthKey]: 300 } });
+      webServer.resetRateLimits();
+      res = await analyzeReq(proCookie);
+      assert.strictEqual(res.status, 403);
+      let body = await res.json();
+      assert.strictEqual(body.error, 'LISTING_LIMIT_REACHED');
+      assert.match(body.message, /own Gemini API key in Settings/);
+      assert.strictEqual(body.usage.used, 300);
+
+      // --- Keyless free account: refused with both doors in the copy. --
+      const freeCookie = await loginAs('free-http@test.com'); // no billing record
+      webServer.resetRateLimits();
+      res = await analyzeReq(freeCookie);
+      assert.strictEqual(res.status, 403);
+      body = await res.json();
+      assert.strictEqual(body.error, 'SUBSCRIPTION_REQUIRED');
+      assert.match(body.message, /own Gemini API key in Settings/);
+      assert.match(body.message, /subscribe to Pro/i);
+      assert.strictEqual(webServer.getMonthlyUsage('free-http@test.com'), 0);
+
+      // --- Free account with a saved key: generates toward 10, then a
+      // --- paid-plans-only pitch at the cap. ---------------------------
+      resetBilling({
+        'pro-http@test.com': { premium: true, subscriptionId: 's', plan: 'pro' },
+        'byok-http@test.com': { premium: false, plan: 'starter', geminiApiKey: 'user-key-1' }
+      });
+      resetUsage({});
+      const byokCookie = await loginAs('byok-http@test.com');
+      webServer.resetRateLimits();
+      res = await analyzeReq(byokCookie);
+      assert.strictEqual(res.status, 200);
+      await res.json();
+      assert.strictEqual(webServer.getMonthlyUsage('byok-http@test.com'), 1);
+
+      resetUsage({ 'byok-http@test.com': { [monthKey]: 10 } });
+      webServer.resetRateLimits();
+      res = await analyzeReq(byokCookie);
+      assert.strictEqual(res.status, 403);
+      body = await res.json();
+      assert.strictEqual(body.error, 'LISTING_LIMIT_REACHED');
+      assert.match(body.message, /free listings/);
+      assert.match(body.message, /Subscribe to Pro/);
+      assert.ok(!/own Gemini API key/i.test(body.message)); // already on their own key
+    } finally {
+      geminiClient.runAIOrchestration = originalOrchestration;
+      geminiClient.enhanceListingDraft = originalEnhance;
+      geminiClient.generateListingFromKeywords = originalKeywords;
+      ebayClient.refreshEbayAccessToken = originalRefresh;
+      ebayClient.fetchWithRetry = originalFetchWithRetry;
+      ebayClient.searchItemIdByKeywords = originalSearchItemId;
+      ebayClient.searchCatalogStockPhotos = originalStockPhotos;
+      global.fetch = REAL_FETCH;
+      try { fs.unlinkSync(pngPath); } catch (e) {}
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  // Restore pre-block state.
+  if (teamBackup === null) { try { fs.unlinkSync(config.teamPath); } catch (e) {} }
+  else fs.writeFileSync(config.teamPath, teamBackup, 'utf8');
+  if (billingBackup === null) { try { fs.unlinkSync(billingDbPath); } catch (e) {} }
+  else fs.writeFileSync(billingDbPath, billingBackup, 'utf8');
+  try { fs.unlinkSync(config.usagePath); } catch (e) {}
+  try { fs.unlinkSync(`${config.usagePath}.tmp`); } catch (e) {}
+  try { fs.unlinkSync(`${config.usagePath}.bak`); } catch (e) {}
+  config.usagePath = originalUsagePath;
+  if (hadGoogleClientId) process.env.GOOGLE_CLIENT_ID = savedGoogleClientId;
+  else delete process.env.GOOGLE_CLIENT_ID;
+  if (hadGoogleClientSecret) process.env.GOOGLE_CLIENT_SECRET = savedGoogleClientSecret;
+  else delete process.env.GOOGLE_CLIENT_SECRET;
+});

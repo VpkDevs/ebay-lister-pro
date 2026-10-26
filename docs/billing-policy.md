@@ -1,10 +1,15 @@
 # Billing Policy — ListAI Pro
 
 > Status: **DECIDED** (recorded 2026-10-18, Wave 1A).
-> Implementation status: **policy-only**. No credit-consumption or per-action
-> billing code exists in the codebase today (verified by search: zero code paths
-> meter listing generation, edits, or any other action). These policies take
-> effect in code once Stripe-connected metering is built. <!-- [WAVE1-A] -->
+> Implementation status: **metering implemented** (2026-10-24, [METERING] in
+> webServer.js). Per-user monthly generation counts and plan-cap enforcement
+> now exist in code: POST /api/analyze and the /api/ebay/import Gemini
+> fallback are metered; /api/enhance is not (Policy 1). Allotments in code:
+> Pro 300/month, Power Seller 1,000/month, Starter 0 — or 10/month when the
+> account has saved its own Gemini key (BYOK-gated free tier; the key-storage
+> field itself lands with the BYOK build). Only successful generations
+> consume. Counts are keyed by billing account + month; Power Seller seats
+> count against the workspace owner's shared pool. <!-- [WAVE1-A] -->
 
 ## Policy 1 — Edits never consume credits
 
@@ -55,8 +60,15 @@
 
 ## Open questions (not decided)
 
-- Exact per-tier credit allotments and overage pricing.
-- Whether failed AI generations (timeouts, validation failures) refund the
-  credit — recommended: yes, only successful generations consume credits.
+- Overage pricing beyond the cap. (Allotments themselves are now decided
+  and implemented — see the implementation status above. At the cap,
+  generation is refused; a paid account is pointed at the own-key BYOK
+  valve, a free BYOK account at the paid plans.)
 - Grace behavior when a subscription lapses mid-dunning (Stripe retry
   schedule vs. immediate feature cutoff).
+
+## Resolved
+
+- Failed AI generations never consume: only a generation that completes
+  and produces a listing increments the monthly count (implemented
+  2026-10-24).

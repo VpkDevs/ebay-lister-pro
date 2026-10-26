@@ -25,6 +25,8 @@ const templatesPath = path.join(dataDir, 'templates.json');
 const notificationsPath = path.join(dataDir, 'notifications.json');
 // [WAVE1-D] Team seats storage (Power Seller workspaces: owner -> members).
 const teamPath = path.join(dataDir, 'team.json');
+// [METERING] Per-user monthly AI generation counts ({ billingEmail: { "YYYY-MM": n } }).
+const usagePath = path.join(dataDir, 'usage.json');
 const uploadTempDir = path.join(dataDir, 'uploads');
 if (!fs.existsSync(uploadTempDir)) {
   fs.mkdirSync(uploadTempDir, { recursive: true });
@@ -85,6 +87,7 @@ module.exports = {
   templatesPath,
   notificationsPath, // [WAVE1-B]
   teamPath, // [WAVE1-D]
+  usagePath, // [METERING]
   uploadTempDir,
   runDiagnostics,
   /** @returns {string|undefined} */
