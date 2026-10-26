@@ -5947,6 +5947,7 @@
             <div class="empty-state__icon">👥</div>
             <div style="font-weight:600;margin-bottom:6px;">No team workspace yet</div>
             <div style="font-size:0.85rem;color:var(--text-dim);max-width:420px;">${escHtml(upsell)}</div>
+            ${t.usage ? `<div style="font-size:0.85rem;color:var(--text-dim);margin-top:8px;">Listings used this month: <strong style="color:var(--text);">${t.usage.used} / ${t.usage.limit}</strong> (${escHtml(t.usage.plan)} plan)</div>` : ''}
             ${t.plan !== 'power_seller' ? `<button class="btn btn--primary btn--sm" style="margin-top:12px;" onclick="upgradeToPremium()">Upgrade to Power Seller</button>` : ''}
           </div>`;
         return;
@@ -5964,6 +5965,7 @@
         <div class="metrics-grid" style="margin-bottom:16px;">
           <div class="metric-card"><span class="metric-label">Workspace</span><span class="metric-value" style="font-size:1rem;">${escHtml(t.owner)}</span><span class="metric-sub">your role: ${escHtml(t.role)}</span></div>
           <div class="metric-card"><span class="metric-label">Seats used</span><span class="metric-value">${used} / ${max}</span><span class="metric-sub">Power Seller plan</span></div>
+          ${t.usage ? `<div class="metric-card"><span class="metric-label">Listings this month</span><span class="metric-value">${t.usage.used} / ${t.usage.limit}</span><span class="metric-sub">shared workspace pool</span></div>` : ''}
         </div>
         ${t.role === 'owner' ? `
         <div style="display:flex;gap:8px;margin-bottom:16px;max-width:520px;">

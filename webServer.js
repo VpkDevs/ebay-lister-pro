@@ -622,6 +622,223 @@ function getWorkspaceFor(email) {
   }
   return null;
 }
+
+/* ============================================================================
+ * [METERING] Per-user AI generation metering + plan-cap enforcement.
+ *
+ * One completed generation that produces a new listing counts as 1 against
+ * the billing account's monthly allotment:
+ *   - POST /api/analyze (photo -> listing)
+ *   - GET  /api/ebay/import Gemini fallback (keywords -> listing)
+ * Edits never count (docs/billing-policy.md Policy 1), so /api/enhance is
+ * deliberately NOT metered. Failed generations never count.
+ *
+ * Counts live in config.usagePath as { [billingEmail]: { "YYYY-MM": n } } —
+ * keyed by billing account + month, so months roll over naturally.
+ * The billing account is workspace-resolved: a Power Seller seat's
+ * generations count against the workspace owner's plan and shared pool.
+ *
+ * Requests with no signed-in account are not billing accounts and pass
+ * through unmetered: local owner mode (Google sign-in not configured) and
+ * the Chrome extension's operator API key (EXTENSION_OPERATOR_EMAIL).
+ * ========================================================================== */
+
+// [METERING] Monthly listing allotments by billing plan. Starter's base
+// allotment is 0 — a free account generates only with its own saved key.
+const LISTING_ALLOTMENT_BY_PLAN = { starter: 0, pro: 300, power_seller: 1000 };
+// [METERING] Free-tier allotment when the account has saved its own Gemini
+// key (BYOK-gated free tier). The cap is a product limit, not a cost limit:
+// free-tier generations count toward it regardless of whose key runs them.
+const STARTER_BYOK_ALLOTMENT = 10;
+// [METERING] Identity returned by getAuthenticatedUser for the Chrome
+// extension's operator API key — the operator's own tooling, not a
+// billing account, so it is never metered.
+const EXTENSION_OPERATOR_EMAIL = "extension@local.lister";
+
+/**
+ * [BYOK SEAM] Returns the account's saved Gemini API key, or null when none
+ * is saved. Key storage is populated by the BYOK feature (next build);
+ * metering only checks presence today. Storage contract: the
+ * `geminiApiKey` field on the account's billing record
+ * (scratch/billing_status.json) — the BYOK build writes it there, or
+ * updates this one function if it stores the key elsewhere.
+ * @param {string} email - Account email.
+ * @returns {string|null}
+ */
+function getUserGeminiKey(email) {
+  email = String(email || "").trim().toLowerCase();
+  if (!email) return null;
+  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
+  const rec = billingHistory[email];
+  const key = rec && typeof rec.geminiApiKey === 'string' ? rec.geminiApiKey.trim() : '';
+  return key ? key : null;
+}
+
+/**
+ * [METERING] Whether the account has a saved Gemini key (BYOK seam).
+ * @param {string} email - Account email.
+ * @returns {boolean}
+ */
+function hasUserGeminiKey(email) {
+  return !!getUserGeminiKey(email);
+}
+
+/**
+ * [METERING] Monthly listing allotment for a plan. Starter gets
+ * STARTER_BYOK_ALLOTMENT with a saved own key, otherwise 0.
+ * @param {string} plan - Billing plan id.
+ * @param {boolean} hasOwnKey - Whether the account has a saved Gemini key.
+ * @returns {number}
+ */
+function getMonthlyAllotment(plan, hasOwnKey) {
+  if (plan === 'starter') return hasOwnKey ? STARTER_BYOK_ALLOTMENT : 0;
+  return LISTING_ALLOTMENT_BY_PLAN[plan] || 0;
+}
+
+/**
+ * [METERING] Month bucket key ("YYYY-MM", server-local) for usage counts.
+ * @param {Date} [date]
+ * @returns {string}
+ */
+function usageMonthKey(date = new Date()) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/**
+ * [METERING] Reads the usage store: { [billingEmail]: { "YYYY-MM": n } }.
+ * @returns {object}
+ */
+function readUsageStore() {
+  return utils.readJsonFileSecure(config.usagePath, {});
+}
+
+/**
+ * [METERING] Persists the usage store.
+ * @param {object} store
+ */
+function writeUsageStore(store) {
+  utils.writeJsonFileSecure(config.usagePath, store);
+}
+
+/**
+ * [METERING] A billing account's generation count for one month.
+ * @param {string} email - Billing account email.
+ * @param {string} [monthKey] - Defaults to the current month.
+ * @returns {number}
+ */
+function getMonthlyUsage(email, monthKey = usageMonthKey()) {
+  const store = readUsageStore();
+  const rec = store[String(email || "").trim().toLowerCase()];
+  const n = rec ? rec[monthKey] : 0;
+  return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * [METERING] Resolves whether an account may generate right now.
+ * @param {string} email - The acting (signed-in) user's email.
+ * @returns {{metered:boolean, billingEmail?:string, plan?:string,
+ *   hasOwnKey?:boolean, allotment?:number, used?:number, allowed?:boolean,
+ *   reason?:string}} reason is "ok" | "no_plan" | "cap_reached" when metered.
+ */
+function resolveGenerationAllowance(email) {
+  email = String(email || "").trim().toLowerCase();
+  if (!email || email === EXTENSION_OPERATOR_EMAIL) return { metered: false };
+  const ws = getWorkspaceFor(email);
+  const billingEmail = ws ? ws.owner : email;
+  const { plan } = getBillingPlan(billingEmail);
+  const hasOwnKey = hasUserGeminiKey(billingEmail);
+  const allotment = getMonthlyAllotment(plan, hasOwnKey);
+  const used = getMonthlyUsage(billingEmail);
+  const allowed = used < allotment;
+  return {
+    metered: true, billingEmail, plan, hasOwnKey, allotment, used, allowed,
+    reason: allowed ? 'ok' : (allotment === 0 ? 'no_plan' : 'cap_reached')
+  };
+}
+
+/**
+ * [METERING] Records one completed generation against the acting user's
+ * billing account for the current month. Call ONLY after a generation has
+ * succeeded — failed generations never count.
+ * @param {string} email - The acting (signed-in) user's email.
+ * @returns {object} The post-increment allowance snapshot.
+ */
+function recordGeneration(email) {
+  const allowance = resolveGenerationAllowance(email);
+  if (!allowance.metered) return allowance;
+  const store = readUsageStore();
+  const monthKey = usageMonthKey();
+  const rec = store[allowance.billingEmail] || {};
+  rec[monthKey] = (Number.isFinite(rec[monthKey]) ? rec[monthKey] : 0) + 1;
+  store[allowance.billingEmail] = rec;
+  writeUsageStore(store);
+  return { ...allowance, used: rec[monthKey] };
+}
+
+/**
+ * [METERING] Usage summary for surfacing in API responses (e.g. /api/team).
+ * @param {string} email - The acting (signed-in) user's email.
+ * @returns {{used:number, limit:number, plan:string, period:string}|null}
+ */
+function buildUsageSummary(email) {
+  const allowance = resolveGenerationAllowance(email);
+  if (!allowance.metered) return null;
+  return {
+    used: allowance.used,
+    limit: allowance.allotment,
+    plan: allowance.plan,
+    period: usageMonthKey()
+  };
+}
+
+/**
+ * [METERING] The refusal for a metered account that may not generate.
+ * Copy rules: a keyless free account hears both doors (own key in Settings
+ * for 10 free listings/month, or subscribe). A free account already on its
+ * own key hears only the paid-plan pitch. A paid account at its cap hears
+ * the own-key escape (the BYOK valve).
+ * @param {object} allowance - Result of resolveGenerationAllowance.
+ * @returns {{status:number, body:object}}
+ */
+function generationRefusal(allowance) {
+  const usage = {
+    used: allowance.used, limit: allowance.allotment,
+    plan: allowance.plan, period: usageMonthKey()
+  };
+  if (allowance.reason === 'no_plan') {
+    return { status: 403, body: {
+      error: "SUBSCRIPTION_REQUIRED",
+      message: "Your free account doesn't include listing generation. Add your own Gemini API key in Settings to generate 10 listings a month free, or subscribe to Pro (300 listings/month) or Power Seller (1,000 listings/month).",
+      usage
+    } };
+  }
+  if (allowance.plan === 'starter') {
+    return { status: 403, body: {
+      error: "LISTING_LIMIT_REACHED",
+      message: `You've used your ${allowance.allotment} free listings for this month. Subscribe to Pro (300 listings/month) or Power Seller (1,000 listings/month) to keep generating.`,
+      usage
+    } };
+  }
+  const planName = allowance.plan === 'power_seller' ? 'Power Seller' : 'Pro';
+  return { status: 403, body: {
+    error: "LISTING_LIMIT_REACHED",
+    message: `You've used all ${allowance.allotment} listings in your ${planName} plan for this month. Add your own Gemini API key in Settings to keep generating, or wait until next month.`,
+    usage
+  } };
+}
+
+/**
+ * [METERING] Writes a generation refusal response in the app's error style.
+ * @param {http.ServerResponse} res
+ * @param {object} allowance - Result of resolveGenerationAllowance.
+ */
+function refuseGeneration(res, allowance) {
+  const refusal = generationRefusal(allowance);
+  res.writeHead(refusal.status, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify(refusal.body));
+}
+
 const activeSessions = new Map();
 
 // Metrics tracking structure
@@ -1805,7 +2022,7 @@ function startWebGuiServer(port = 45900) {
       const maxSeats = getTeamMaxSeats(billing.plan);
       if (!ws) {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ role: "none", owner: null, plan: billing.plan, maxSeats, members: [] }));
+        res.end(JSON.stringify({ role: "none", owner: null, plan: billing.plan, maxSeats, members: [], usage: buildUsageSummary(user.email) }));
         return;
       }
       const store = readTeamStore();
@@ -1815,7 +2032,8 @@ function startWebGuiServer(port = 45900) {
         role: ws.role, owner: ws.owner, plan: billing.plan,
         maxSeats: getTeamMaxSeats("power_seller"),
         usedSeats: countUsedSeats(record),
-        members: record.members
+        members: record.members,
+        usage: buildUsageSummary(user.email)
       }));
       return;
     }
@@ -2244,8 +2462,18 @@ function startWebGuiServer(port = 45900) {
 
       // Helper function to handle Gemini fallback
       const handleGeminiListingFallback = async (keywords, response) => {
+        // [METERING] A keywords -> listing generation counts exactly like a
+        // photo generation: gate on the caller's monthly allotment first.
+        // (Reached only when no eBay item was found to import directly.)
+        const allowance = resolveGenerationAllowance(user && user.email);
+        if (allowance.metered && !allowance.allowed) {
+          refuseGeneration(response, allowance);
+          return;
+        }
         try {
           const geminiListing = await geminiClient.generateListingFromKeywords(keywords);
+          // [METERING] Count only completed generations (failures never count).
+          if (allowance.metered) recordGeneration(user.email);
           let stockPhotos = [];
           try {
             stockPhotos = await ebayClient.searchCatalogStockPhotos(geminiListing.title || keywords);
@@ -3221,6 +3449,14 @@ function startWebGuiServer(port = 45900) {
             return;
           }
 
+          // [METERING] Plan-cap gate: signed-in accounts generate only within
+          // their monthly allotment (unmetered when no account is signed in).
+          const allowance = resolveGenerationAllowance(user && user.email);
+          if (allowance.metered && !allowance.allowed) {
+            refuseGeneration(res, allowance);
+            return;
+          }
+
           // Validate payload schema
           if (typeof payload !== 'object' || payload === null) {
             res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -3293,6 +3529,10 @@ function startWebGuiServer(port = 45900) {
             upcData,
             { persona: payload.persona, template: payload.template }
           );
+          // [METERING] Count only completed generations — a generation that
+          // throws above never reaches this line and is never counted.
+          if (allowance.metered) recordGeneration(user.email);
+
           const categorySuggestions = await ebayClient.getCategorySuggestions(listing.title);
           const imageUrls = await uploadImagesConcurrently(tempPaths, 2);
 
@@ -4556,7 +4796,20 @@ module.exports = {
   removeTeamMember,
   acceptTeamInvite,
   leaveTeam,
-  getWorkspaceFor
+  getWorkspaceFor,
+  // [METERING] Exported for unit tests
+  LISTING_ALLOTMENT_BY_PLAN,
+  STARTER_BYOK_ALLOTMENT,
+  getUserGeminiKey,
+  hasUserGeminiKey,
+  getMonthlyAllotment,
+  usageMonthKey,
+  readUsageStore,
+  getMonthlyUsage,
+  resolveGenerationAllowance,
+  recordGeneration,
+  buildUsageSummary,
+  generationRefusal
 };
 
 if (require.main === module) {
