@@ -1483,6 +1483,11 @@
       Sync Queue
       <span class="nav-badge" id="dlqCountBadge" style="display:none;">0</span>
     </button>
+    <!-- [BYOK] Per-user Gemini API key -->
+    <button class="nav-item" id="nav-settings" onclick="switchView('settings')">
+      <span class="nav-icon" aria-hidden="true">⚙</span>
+      Settings
+    </button>
 
     <span class="nav-section-label" style="margin-top:8px;">Channels</span>
     <button class="nav-item" onclick="openOnboardingWizard('ebay')">
@@ -2169,6 +2174,50 @@
         <div class="empty-state__icon">👥</div>
         Loading team…
       </div>
+    </div>
+  </main>
+
+  <!-- ── SETTINGS VIEW ───────────────────────────── -->
+  <main class="content" id="settings-view" style="display:none;" aria-label="Settings">
+    <div class="section-header">
+      <div class="section-header__left">
+        <h1 class="section-title">⚙ Settings</h1>
+        <p class="section-subtitle">Your account options</p>
+      </div>
+    </div>
+
+    <!-- [BYOK] Your own Gemini API key -->
+    <div class="card" style="max-width:720px;">
+      <div class="card__title"><span class="card__title-dot"></span>Your Gemini API Key</div>
+      <p style="font-size:0.88rem; color:var(--text-muted); line-height:1.55; margin:6px 0 12px;">
+        ListAI Pro uses Google's Gemini AI to write your listings. You can plug in your
+        <strong>own free Gemini API key</strong> from Google AI Studio:
+      </p>
+      <ul style="font-size:0.88rem; color:var(--text-muted); line-height:1.6; margin:0 0 14px; padding-left:20px;">
+        <li><strong>On the free plan</strong>, a saved key is how you generate — 10 listings a month, running on your key.</li>
+        <li><strong>On Pro or Power Seller</strong>, your plan's listings run on us. If you reach your monthly limit, your key lets you keep generating — those extra generations aren't counted against your plan.</li>
+      </ul>
+      <p id="geminiKeyStatus" style="font-size:0.88rem; margin:0 0 10px;">Checking…</p>
+      <label for="geminiKeyInput" style="font-size:0.82rem; font-weight:600; display:block; margin-bottom:4px;">Gemini API key</label>
+      <input type="password" id="geminiKeyInput" placeholder="Paste your Gemini API key…" autocomplete="off" spellcheck="false"
+             style="width:100%; margin-bottom:10px;" />
+      <div style="display:flex; gap:10px; flex-wrap:wrap;">
+        <button class="btn btn--primary btn--sm" id="saveGeminiKeyBtn" onclick="saveGeminiKey()">Save Key</button>
+        <button class="btn btn--ghost btn--sm" id="clearGeminiKeyBtn" onclick="clearGeminiKey()" style="display:none;">Remove Key</button>
+      </div>
+      <p style="font-size:0.78rem; color:var(--text-muted); margin:12px 0 0;">
+        Your key is stored on your account and never shown again after saving — only its last 4 characters.
+        If Google rejects your key, we'll tell you here and in the generation error; nothing is ever charged to your plan for a failed generation.
+      </p>
+      <details style="margin-top:16px;">
+        <summary style="cursor:pointer; font-size:0.88rem; font-weight:600;">How to get a free Gemini API key (about a minute)</summary>
+        <ol style="font-size:0.88rem; color:var(--text-muted); line-height:1.65; padding-left:20px; margin:10px 0 4px;">
+          <li>Go to <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">Google AI Studio's API key page</a> and sign in with your Google account.</li>
+          <li>Click <strong>Create API key</strong> (if asked, create it in a new project).</li>
+          <li>Copy the key Google shows you — it's one long string starting with "AIza".</li>
+          <li>Paste it in the box above and click <strong>Save Key</strong>. That's it — creating the key is free.</li>
+        </ol>
+      </details>
     </div>
   </main>
 
@@ -2976,13 +3025,14 @@
   function switchView(view) {
     closeSidebar();
     currentView = view;
-    const titles = { create: 'New Listing', history: 'Listing History', team: 'Team Seats', dlq: 'Sync Queue' };
+    const titles = { create: 'New Listing', history: 'Listing History', team: 'Team Seats', dlq: 'Sync Queue', settings: 'Settings' };
     document.getElementById('topbarTitle').textContent = titles[view] || view;
 
     document.getElementById('create-view').style.display  = view === 'create'  ? 'block' : 'none';
     document.getElementById('history-view').style.display = view === 'history' ? 'block' : 'none';
     document.getElementById('team-view').style.display    = view === 'team'    ? 'block' : 'none'; // [WAVE1-D]
     document.getElementById('dlq-view').style.display      = view === 'dlq'     ? 'block' : 'none';
+    document.getElementById('settings-view').style.display = view === 'settings' ? 'block' : 'none'; // [BYOK]
 
     document.querySelectorAll('.nav-item').forEach(b => {
       b.classList.remove('active');
@@ -2994,6 +3044,70 @@
     if (view === 'history') loadHistory();
     if (view === 'team') loadTeam(); // [WAVE1-D]
     if (view === 'dlq') loadDlqQueue(true);
+    if (view === 'settings') loadGeminiKeySettings(); // [BYOK]
+  }
+
+  /* ── [BYOK] Your Gemini API key (Settings) ─────── */
+  // The server only ever returns { saved, masked } — the full key is never
+  // rendered here; the input is a write-only paste box.
+  async function loadGeminiKeySettings() {
+    const statusEl = document.getElementById('geminiKeyStatus');
+    const clearBtn = document.getElementById('clearGeminiKeyBtn');
+    try {
+      const res = await fetch('/api/user/gemini-key');
+      if (!res.ok) throw new Error('not signed in');
+      const data = await res.json();
+      if (data.saved) {
+        statusEl.textContent = '✅ A key is saved on your account: ';
+        const strong = document.createElement('strong');
+        strong.textContent = data.masked || '••••••';
+        statusEl.appendChild(strong);
+        clearBtn.style.display = '';
+      } else {
+        statusEl.textContent = 'No key saved yet. Paste one below to generate on your own key.';
+        clearBtn.style.display = 'none';
+      }
+    } catch (err) {
+      statusEl.textContent = 'Sign in to manage your Gemini API key.';
+      clearBtn.style.display = 'none';
+    }
+  }
+
+  async function saveGeminiKey() {
+    const input = document.getElementById('geminiKeyInput');
+    const btn = document.getElementById('saveGeminiKeyBtn');
+    const key = input.value.trim();
+    if (!key) { showToast('warn', 'No key pasted', 'Paste your Gemini API key first.', 4000); return; }
+    btn.disabled = true;
+    try {
+      const res = await fetch('/api/user/gemini-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ apiKey: key })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to save key');
+      input.value = '';
+      showToast('success', 'Key Saved', 'Your Gemini API key is saved (' + (data.masked || '••••••') + ').', 4000);
+      loadGeminiKeySettings();
+    } catch (err) {
+      showToast('error', 'Save Failed', err.message, 5000);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function clearGeminiKey() {
+    try {
+      const res = await fetch('/api/user/gemini-key', { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Failed to remove key');
+      document.getElementById('geminiKeyInput').value = '';
+      showToast('success', 'Key Removed', 'Your saved Gemini API key has been removed.', 4000);
+      loadGeminiKeySettings();
+    } catch (err) {
+      showToast('error', 'Remove Failed', err.message, 5000);
+    }
   }
 
   /* ── File uploads ─────────────────────────────── */

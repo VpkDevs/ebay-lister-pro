@@ -2,14 +2,15 @@
 
 > Status: **DECIDED** (recorded 2026-10-18, Wave 1A).
 > Implementation status: **metering implemented** (2026-10-24, [METERING] in
-> webServer.js). Per-user monthly generation counts and plan-cap enforcement
-> now exist in code: POST /api/analyze and the /api/ebay/import Gemini
-> fallback are metered; /api/enhance is not (Policy 1). Allotments in code:
-> Pro 300/month, Power Seller 1,000/month, Starter 0 — or 10/month when the
-> account has saved its own Gemini key (BYOK-gated free tier; the key-storage
-> field itself lands with the BYOK build). Only successful generations
-> consume. Counts are keyed by billing account + month; Power Seller seats
-> count against the workspace owner's shared pool. <!-- [WAVE1-A] -->
+> webServer.js); **BYOK implemented** (2026-10-26, [BYOK] in webServer.js,
+> geminiClient.js, and the Settings view). Per-user monthly generation
+> counts and plan-cap enforcement now exist in code: POST /api/analyze and
+> the /api/ebay/import Gemini fallback are metered; /api/enhance is not
+> (Policy 1). Allotments in code: Pro 300/month, Power Seller 1,000/month,
+> Starter 0 — or 10/month when the account has saved its own Gemini key
+> (BYOK-gated free tier, Policy 4). Only successful generations consume.
+> Counts are keyed by billing account + month; Power Seller seats count
+> against the workspace owner's shared pool. <!-- [WAVE1-A] -->
 
 ## Policy 1 — Edits never consume credits
 
@@ -58,12 +59,47 @@
   store, so every seat inherently sees the same listings. A true multi-tenant
   split is future work, not a launch blocker.
 
+## Policy 4 — Bring your own key (BYOK) <!-- [BYOK] implemented 2026-10-26 -->
+
+**A user may save their own Google Gemini API key; the software is the
+product, the key is fuel the user may supply. There is no BYOK discount
+and no separate BYOK plan.**
+
+- **Storage:** the key lives in the `geminiApiKey` field of the account's
+  billing record (Settings → Your Gemini API Key, `/api/user/gemini-key`).
+  It is a secret: never logged, never returned to a client — the Settings
+  surface only ever shows a masked form (bullets + last 4 characters).
+  Keys are keyed to the billing account: a Power Seller seat shares the
+  owner's pool and the owner's key.
+- **Free tier:** a Starter account with a saved key generates **on its
+  own key**, counting toward the 10/month free allotment (a product limit,
+  not a cost limit). Without a saved key, a Starter account generates 0.
+- **Paid tiers below the cap:** generations run on the house key and
+  count as usual — a saved key changes nothing until the cap.
+- **Overflow valve (paid tiers at the cap):** with a saved key, the
+  account keeps generating **on its own key, uncounted**, at no AI cost
+  to the operator. There is no dollar overage charge for this (see Open
+  questions). A free account at its 10 gets no valve — it hears the
+  paid-plan pitch.
+- **Failure rules:** a call made on the user's key **never falls back to
+  the house key**, and a failed generation is never counted. If Google
+  rejects the key, the user hears exactly that in plain language ("Your
+  Gemini API key was rejected by Google — check it in Settings") with
+  error code `USER_KEY_REJECTED`; other failures on their key return
+  `USER_KEY_FAILED`. Raw provider errors are never forwarded to the
+  client (request URLs carry keys).
+- **Edits:** /api/enhance stays uncounted (Policy 1), but when an
+  account's generations run on its own key (free tier, or paid at cap),
+  the polish runs on that key too, so free-tier AI work stays off the
+  house key. Keyless accounts enhance on the house key, as before.
+
 ## Open questions (not decided)
 
-- Overage pricing beyond the cap. (Allotments themselves are now decided
-  and implemented — see the implementation status above. At the cap,
-  generation is refused; a paid account is pointed at the own-key BYOK
-  valve, a free BYOK account at the paid plans.)
+- Dollar overage pricing beyond the cap. (Allotments themselves are now
+  decided and implemented — see the implementation status above. At the
+  cap, generation is refused unless the paid account uses the own-key
+  BYOK valve, Policy 4; a free BYOK account at its 10 is pointed at the
+  paid plans.)
 - Grace behavior when a subscription lapses mid-dunning (Stripe retry
   schedule vs. immediate feature cutoff).
 

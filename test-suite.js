@@ -4914,3 +4914,462 @@ test('Metering: per-user generation counts and plan caps', async (t) => {
   if (hadGoogleClientSecret) process.env.GOOGLE_CLIENT_SECRET = savedGoogleClientSecret;
   else delete process.env.GOOGLE_CLIENT_SECRET;
 });
+
+// ==========================================
+// [BYOK] Bring-your-own-key: storage, routing, overflow valve
+// ==========================================
+test('BYOK: key storage, generation routing, and the overflow valve', async (t) => {
+  // Hermetic setup, mirroring the metering block: usage store redirected
+  // into the sandbox; team + billing stores backed up and restored.
+  const originalUsagePath = config.usagePath;
+  config.usagePath = path.join(testDir, 'test-usage-byok.json');
+  const teamBackup = fs.existsSync(config.teamPath)
+    ? fs.readFileSync(config.teamPath, 'utf8') : null;
+  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  const billingBackup = fs.existsSync(billingDbPath)
+    ? fs.readFileSync(billingDbPath, 'utf8') : null;
+  const savedGoogleClientId = process.env.GOOGLE_CLIENT_ID;
+  const hadGoogleClientId = Object.prototype.hasOwnProperty.call(process.env, 'GOOGLE_CLIENT_ID');
+  const savedGoogleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+  const hadGoogleClientSecret = Object.prototype.hasOwnProperty.call(process.env, 'GOOGLE_CLIENT_SECRET');
+  delete process.env.GOOGLE_CLIENT_ID;
+  delete process.env.GOOGLE_CLIENT_SECRET;
+
+  function resetBilling(obj) { utils.writeJsonFileSecure(billingDbPath, obj); }
+  function resetTeam(obj) { utils.writeJsonFileSecure(config.teamPath, obj); }
+  function resetUsage(obj) { utils.writeJsonFileSecure(config.usagePath, obj); }
+  const monthKey = webServer.usageMonthKey();
+
+  await t.test('key storage: save, masked status, clear — the raw key never leaves the server', () => {
+    resetTeam({});
+    resetBilling({});
+    // Nothing saved initially.
+    assert.deepStrictEqual(webServer.getGeminiKeyStatus('saver@test.com'), { saved: false, masked: null });
+    // Save trims and lands on the billing record (storage contract).
+    const status = webServer.saveUserGeminiKey('saver@test.com', '  user-key-abcd1234  ');
+    assert.strictEqual(status.saved, true);
+    assert.strictEqual(status.masked, '••••••1234');
+    assert.ok(!JSON.stringify(status).includes('user-key-abcd1234'), 'status never carries the raw key');
+    assert.strictEqual(webServer.getUserGeminiKey('saver@test.com'), 'user-key-abcd1234');
+    const rec = webServer.readBillingStore()['saver@test.com'];
+    assert.strictEqual(rec.geminiApiKey, 'user-key-abcd1234');
+    assert.strictEqual(rec.plan, 'starter'); // starter record created for a new account
+    // Masking: only bullets + last 4, ever.
+    assert.strictEqual(webServer.maskGeminiKey('user-key-abcd1234'), '••••••1234');
+    assert.strictEqual(webServer.maskGeminiKey('ab'), '••••••');
+    assert.strictEqual(webServer.maskGeminiKey(''), null);
+    assert.strictEqual(webServer.maskGeminiKey(null), null);
+    // Saving preserves an existing premium record's fields.
+    resetBilling({ 'pro2@test.com': { premium: true, subscriptionId: 'sub-9', plan: 'pro' } });
+    webServer.saveUserGeminiKey('pro2@test.com', 'pro-key-7777');
+    const proRec = webServer.readBillingStore()['pro2@test.com'];
+    assert.strictEqual(proRec.premium, true);
+    assert.strictEqual(proRec.subscriptionId, 'sub-9');
+    assert.strictEqual(proRec.plan, 'pro');
+    assert.strictEqual(proRec.geminiApiKey, 'pro-key-7777');
+    // A saved key switches the free tier on; clearing switches it off.
+    resetBilling({});
+    resetUsage({});
+    assert.strictEqual(webServer.resolveGenerationAllowance('saver@test.com').allotment, 0);
+    webServer.saveUserGeminiKey('saver@test.com', 'user-key-abcd1234');
+    assert.strictEqual(webServer.resolveGenerationAllowance('saver@test.com').allotment, 10);
+    const cleared = webServer.clearUserGeminiKey('saver@test.com');
+    assert.deepStrictEqual(cleared, { saved: false, masked: null });
+    assert.strictEqual(webServer.hasUserGeminiKey('saver@test.com'), false);
+    assert.ok(!('geminiApiKey' in webServer.readBillingStore()['saver@test.com']));
+    assert.strictEqual(webServer.resolveGenerationAllowance('saver@test.com').allotment, 0);
+    // Validation: empty, whitespace, non-string, and space-containing keys are refused.
+    assert.throws(() => webServer.saveUserGeminiKey('saver@test.com', ''), /Paste your Gemini API key/);
+    assert.throws(() => webServer.saveUserGeminiKey('saver@test.com', '   '), /Paste your Gemini API key/);
+    assert.throws(() => webServer.saveUserGeminiKey('saver@test.com', 42), /Paste your Gemini API key/);
+    assert.throws(() => webServer.saveUserGeminiKey('saver@test.com', 'has spaces init'), /doesn't look like a Gemini API key/);
+  });
+
+  await t.test('route resolution: whose key runs a generation, and whether it counts', () => {
+    resetTeam({});
+    // Keyless starter: refused outright.
+    resetBilling({});
+    resetUsage({});
+    let r = webServer.resolveGenerationRoute('free@test.com');
+    assert.strictEqual(r.refused, true);
+    assert.strictEqual(r.allowance.reason, 'no_plan');
+    // Starter with a key: own key, counted, toward the 10.
+    resetBilling({ 'free@test.com': { premium: false, plan: 'starter', geminiApiKey: 'free-key-1' } });
+    r = webServer.resolveGenerationRoute('free@test.com');
+    assert.strictEqual(r.refused, false);
+    assert.strictEqual(r.usingOwnKey, true);
+    assert.strictEqual(r.apiKey, 'free-key-1');
+    assert.strictEqual(r.countGeneration, true);
+    assert.strictEqual(r.overflow, false);
+    // Starter at 10 with a key: still refused — no valve on the free tier.
+    resetUsage({ 'free@test.com': { [monthKey]: 10 } });
+    r = webServer.resolveGenerationRoute('free@test.com');
+    assert.strictEqual(r.refused, true);
+    assert.strictEqual(r.allowance.reason, 'cap_reached');
+    // Paid below cap without a key: house key, counted.
+    resetBilling({ 'pro@test.com': { premium: true, subscriptionId: 's', plan: 'pro' } });
+    resetUsage({});
+    r = webServer.resolveGenerationRoute('pro@test.com');
+    assert.strictEqual(r.refused, false);
+    assert.strictEqual(r.apiKey, null);
+    assert.strictEqual(r.usingOwnKey, false);
+    assert.strictEqual(r.countGeneration, true);
+    // Paid below cap WITH a saved key: still the house key (the valve is
+    // only for past-the-cap), still counted.
+    resetBilling({ 'pro@test.com': { premium: true, subscriptionId: 's', plan: 'pro', geminiApiKey: 'pro-key-2' } });
+    r = webServer.resolveGenerationRoute('pro@test.com');
+    assert.strictEqual(r.refused, false);
+    assert.strictEqual(r.apiKey, null);
+    assert.strictEqual(r.countGeneration, true);
+    // Paid at cap without a key: refused.
+    resetBilling({ 'pro@test.com': { premium: true, subscriptionId: 's', plan: 'pro' } });
+    resetUsage({ 'pro@test.com': { [monthKey]: 300 } });
+    r = webServer.resolveGenerationRoute('pro@test.com');
+    assert.strictEqual(r.refused, true);
+    // Paid at cap WITH a key: the overflow valve — own key, NOT counted.
+    resetBilling({ 'pro@test.com': { premium: true, subscriptionId: 's', plan: 'pro', geminiApiKey: 'pro-key-2' } });
+    r = webServer.resolveGenerationRoute('pro@test.com');
+    assert.strictEqual(r.refused, false);
+    assert.strictEqual(r.overflow, true);
+    assert.strictEqual(r.usingOwnKey, true);
+    assert.strictEqual(r.apiKey, 'pro-key-2');
+    assert.strictEqual(r.countGeneration, false);
+    // Power Seller at 1,000 with a key: same valve.
+    resetBilling({ 'ps@test.com': { premium: true, subscriptionId: 's', plan: 'power_seller', geminiApiKey: 'ps-key-3' } });
+    resetUsage({ 'ps@test.com': { [monthKey]: 1000 } });
+    r = webServer.resolveGenerationRoute('ps@test.com');
+    assert.strictEqual(r.overflow, true);
+    assert.strictEqual(r.apiKey, 'ps-key-3');
+    // Unmetered identities: house key, uncounted, never refused.
+    r = webServer.resolveGenerationRoute(null);
+    assert.strictEqual(r.refused, false);
+    assert.strictEqual(r.apiKey, null);
+    assert.strictEqual(r.countGeneration, false);
+    r = webServer.resolveGenerationRoute('extension@local.lister');
+    assert.strictEqual(r.countGeneration, false);
+    // Enhance key: mirrors the generation key choice, minus counting.
+    resetBilling({ 'free@test.com': { premium: false, plan: 'starter', geminiApiKey: 'free-key-1' } });
+    resetUsage({});
+    assert.strictEqual(webServer.resolveEnhanceKey('free@test.com'), 'free-key-1');
+    resetBilling({ 'pro@test.com': { premium: true, subscriptionId: 's', plan: 'pro', geminiApiKey: 'pro-key-2' } });
+    resetUsage({});
+    assert.strictEqual(webServer.resolveEnhanceKey('pro@test.com'), null); // below cap: house key
+    resetUsage({ 'pro@test.com': { [monthKey]: 300 } });
+    assert.strictEqual(webServer.resolveEnhanceKey('pro@test.com'), 'pro-key-2'); // at cap: own key
+    resetBilling({});
+    assert.strictEqual(webServer.resolveEnhanceKey('pro@test.com'), null); // no key saved
+  });
+
+  await t.test('geminiClient threads the override key and tags rejections (mocked fetch)', async () => {
+    const originalFetch = global.fetch;
+    const seenUrls = [];
+    const listingText = JSON.stringify({
+      title: 'Client Level Listing', detectedUPC: '', detectedDefects: [],
+      description: 'A description', brand: 'B', model: 'M', suggestedPrice: 12.5,
+      condition: 'USED_GOOD', weightMajor: 1, weightMinor: 2,
+      packageLength: 10, packageWidth: 8, packageHeight: 6, aspects: {}
+    });
+    const okGemini = async (url) => {
+      if (String(url).includes('generativelanguage.googleapis.com')) {
+        return { ok: true, status: 200, headers: { get: () => null },
+          json: async () => ({ candidates: [{ content: { parts: [{ text: listingText }] } }] }) };
+      }
+      return { ok: false, status: 404, headers: { get: () => null }, json: async () => ({}) };
+    };
+    const rejectingGemini = async (url) => {
+      if (String(url).includes('generativelanguage.googleapis.com')) {
+        return { ok: false, status: 400, headers: { get: () => null },
+          json: async () => ({ error: { code: 400, message: 'API key not valid. Please pass a valid API key.', status: 'INVALID_ARGUMENT' } }) };
+      }
+      return { ok: false, status: 404, headers: { get: () => null }, json: async () => ({}) };
+    };
+    let responder = okGemini;
+    global.fetch = async (url, opts) => { seenUrls.push(String(url)); return responder(url, opts); };
+    try {
+      // Keywords flow: the override key reaches the Google URL.
+      seenUrls.length = 0;
+      const kw = await geminiClient.generateListingFromKeywords('Vintage Camera', { apiKey: 'user-key-abc-123' });
+      assert.strictEqual(kw.title, 'Client Level Listing');
+      assert.ok(seenUrls.some(u => u.includes('key=user-key-abc-123')), 'user key threaded into the request');
+      // Without an override, the house key is used.
+      seenUrls.length = 0;
+      await geminiClient.generateListingFromKeywords('Vintage Camera');
+      assert.ok(seenUrls.some(u => u.includes('key=test-gemini-key')), 'house key used without an override');
+      assert.ok(!seenUrls.some(u => u.includes('user-key-abc-123')));
+      // Photo orchestration: the override key reaches both passes.
+      seenUrls.length = 0;
+      const listing = await geminiClient.runAIOrchestration([Buffer.from('img')], ['a.png'], null, null, null, { apiKey: 'orch-user-key-555' });
+      assert.strictEqual(listing.title, 'Client Level Listing');
+      assert.ok(seenUrls.filter(u => u.includes('key=orch-user-key-555')).length >= 2, 'user key on both passes');
+      // Enhance: the override key threads through too.
+      seenUrls.length = 0;
+      await geminiClient.enhanceListingDraft({ title: 'raw', description: '<p>raw</p>', apiKey: 'enh-user-key-321' });
+      assert.ok(seenUrls.some(u => u.includes('key=enh-user-key-321')), 'user key threaded into enhance');
+      // Rejection on a user key: coded error, key scrubbed from the message.
+      responder = rejectingGemini;
+      await assert.rejects(
+        () => geminiClient.generateListingFromKeywords('X', { apiKey: 'bad-user-key-777' }),
+        (err) => {
+          assert.strictEqual(err.code, 'USER_KEY_REJECTED');
+          assert.ok(!err.message.includes('bad-user-key-777'), 'key never appears in the error');
+          return true;
+        }
+      );
+      await assert.rejects(
+        () => geminiClient.runAIOrchestration([Buffer.from('img')], ['a.png'], null, null, null, { apiKey: 'bad-orch-key-999' }),
+        (err) => {
+          assert.strictEqual(err.code, 'USER_KEY_REJECTED');
+          assert.ok(!err.message.includes('bad-orch-key-999'), 'key never appears in the error');
+          return true;
+        }
+      );
+      // The same rejection on the HOUSE key is NOT retagged (existing behavior).
+      await assert.rejects(
+        () => geminiClient.generateListingFromKeywords('X'),
+        (err) => {
+          assert.notStrictEqual(err.code, 'USER_KEY_REJECTED');
+          assert.match(err.message, /API key not valid/);
+          return true;
+        }
+      );
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
+  await t.test('HTTP: settings endpoints and routed generation end to end', async () => {
+    const testPort = 45962;
+    const server = webServer.startWebGuiServer(testPort);
+    process.env.GOOGLE_CLIENT_ID = 'mock-client-id';
+    process.env.GOOGLE_CLIENT_SECRET = 'mock-client-secret';
+    global.fetch = REAL_FETCH;
+
+    const processedDir = path.join(testDir, 'processed');
+    if (!fs.existsSync(processedDir)) fs.mkdirSync(processedDir, { recursive: true });
+    const pngPath = path.join(processedDir, 'byok-analyze.png');
+    const pngBuf = Buffer.alloc(32);
+    pngBuf.writeUInt32BE(0x89504E47, 0);
+    pngBuf.writeUInt32BE(0x0D0A1A0A, 4);
+    pngBuf.writeUInt32BE(13, 8);
+    pngBuf.writeUInt32BE(0x49484452, 12);
+    pngBuf.writeUInt32BE(600, 16);
+    pngBuf.writeUInt32BE(600, 20);
+    fs.writeFileSync(pngPath, pngBuf);
+
+    const originalOrchestration = geminiClient.runAIOrchestration;
+    const originalKeywords = geminiClient.generateListingFromKeywords;
+    const originalRefresh = ebayClient.refreshEbayAccessToken;
+    const originalFetchWithRetry = ebayClient.fetchWithRetry;
+    const originalSearchItemId = ebayClient.searchItemIdByKeywords;
+    const originalStockPhotos = ebayClient.searchCatalogStockPhotos;
+
+    const orchCalls = [];
+    let orchBehavior = 'ok'; // 'ok' | 'rejected' | 'failed'
+    geminiClient.runAIOrchestration = async (buffers, names, barcode, notes, upcData, options) => {
+      orchCalls.push(options || {});
+      if (orchBehavior === 'rejected') {
+        const e = new Error('Your Gemini API key was rejected by Google.');
+        e.code = 'USER_KEY_REJECTED';
+        throw e;
+      }
+      if (orchBehavior === 'failed') {
+        const e = new Error('The Gemini call failed while using your saved API key.');
+        e.code = 'USER_KEY_CALL_FAILED';
+        throw e;
+      }
+      return { title: 'BYOK Test Listing', description: 'Test', suggestedPrice: 9.99, condition: 'USED_GOOD', aspects: {}, categoryId: '111422' };
+    };
+    const keywordCalls = [];
+    geminiClient.generateListingFromKeywords = async (keywords, options) => {
+      keywordCalls.push(options || {});
+      return { title: 'Keyword BYOK Listing', suggestedPrice: 5.5, condition: 'NEW', brand: 'B', model: 'M', description: 'D', categoryId: '111422', aspects: {} };
+    };
+    ebayClient.refreshEbayAccessToken = async () => {};
+    ebayClient.fetchWithRetry = async (url, options) => {
+      const urlStr = String(url);
+      if (urlStr.includes('tmpfiles.org') || urlStr.includes('file.io')) {
+        return { ok: true, status: 200, json: async () => ({ status: 'success', data: { url: 'https://tmpfiles.org/dl/mock.jpg' } }) };
+      }
+      return originalFetchWithRetry(url, options);
+    };
+    ebayClient.searchItemIdByKeywords = async () => null; // force the Gemini fallback path
+    ebayClient.searchCatalogStockPhotos = async () => [];
+
+    async function loginAs(email) {
+      const prevFetch = global.fetch;
+      global.fetch = async (url) => {
+        const urlStr = String(url);
+        if (urlStr.includes('oauth2.googleapis.com/token')) {
+          return { status: 200, ok: true, json: async () => ({ access_token: 'mock-google-token' }) };
+        }
+        if (urlStr.includes('googleapis.com/oauth2/v3/userinfo')) {
+          return { status: 200, ok: true, json: async () => ({ email, name: 'BYOK Test', picture: '' }) };
+        }
+        return { status: 404, ok: false, json: async () => ({}) };
+      };
+      try {
+        const res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/auth/google/callback?code=test-code`, { redirect: 'manual' });
+        assert.strictEqual(res.status, 302);
+        const m = (res.headers.get('set-cookie') || '').match(/sessionId=([^;]+)/);
+        assert.ok(m, 'session cookie issued');
+        return `sessionId=${m[1]}`;
+      } finally {
+        global.fetch = prevFetch;
+      }
+    }
+
+    const analyzeReq = (cookie) => REAL_FETCH(`http://127.0.0.1:${testPort}/api/analyze`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Cookie': cookie },
+      body: JSON.stringify({ images: ['/uploads/processed/byok-analyze.png'] })
+    });
+    const keyReq = (cookie, method, body) => REAL_FETCH(`http://127.0.0.1:${testPort}/api/user/gemini-key`, {
+      method,
+      headers: { 'Content-Type': 'application/json', ...(cookie ? { 'Cookie': cookie } : {}) },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {})
+    });
+
+    try {
+      resetTeam({});
+      resetUsage({});
+
+      // --- Settings endpoints: auth, save, mask, clear. ----------------
+      resetBilling({});
+      let res = await keyReq(null, 'GET');
+      assert.strictEqual(res.status, 401);
+      await res.json();
+
+      const apiCookie = await loginAs('byok-api@test.com');
+      res = await keyReq(apiCookie, 'GET');
+      assert.strictEqual(res.status, 200);
+      assert.deepStrictEqual(await res.json(), { saved: false, masked: null });
+
+      res = await keyReq(apiCookie, 'POST', { apiKey: '  user-secret-key-9876  ' });
+      assert.strictEqual(res.status, 200);
+      let keyBodyText = await res.text();
+      assert.ok(!keyBodyText.includes('user-secret-key-9876'), 'POST response never echoes the key');
+      let keyBody = JSON.parse(keyBodyText);
+      assert.strictEqual(keyBody.saved, true);
+      assert.strictEqual(keyBody.masked, '••••••9876');
+      assert.strictEqual(webServer.getUserGeminiKey('byok-api@test.com'), 'user-secret-key-9876');
+      assert.strictEqual(webServer.resolveGenerationAllowance('byok-api@test.com').allotment, 10);
+
+      res = await keyReq(apiCookie, 'GET');
+      keyBodyText = await res.text();
+      assert.ok(!keyBodyText.includes('user-secret-key-9876'), 'GET response never echoes the key');
+      assert.strictEqual(JSON.parse(keyBodyText).masked, '••••••9876');
+
+      res = await keyReq(apiCookie, 'POST', { apiKey: '' });
+      assert.strictEqual(res.status, 400);
+      await res.json();
+      res = await keyReq(apiCookie, 'POST', { apiKey: 'has spaces init' });
+      assert.strictEqual(res.status, 400);
+      await res.json();
+      assert.strictEqual(webServer.getUserGeminiKey('byok-api@test.com'), 'user-secret-key-9876'); // unchanged
+
+      res = await keyReq(apiCookie, 'DELETE');
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual((await res.json()).saved, false);
+      assert.strictEqual(webServer.hasUserGeminiKey('byok-api@test.com'), false);
+      assert.strictEqual(webServer.resolveGenerationAllowance('byok-api@test.com').allotment, 0);
+
+      // --- Free BYOK generation runs on the user's key and counts. -----
+      resetBilling({ 'free-gen@test.com': { premium: false, plan: 'starter', geminiApiKey: 'free-user-key-1' } });
+      resetUsage({});
+      const freeCookie = await loginAs('free-gen@test.com');
+      orchCalls.length = 0;
+      webServer.resetRateLimits();
+      res = await analyzeReq(freeCookie);
+      assert.strictEqual(res.status, 200);
+      await res.json();
+      assert.strictEqual(orchCalls.length, 1);
+      assert.strictEqual(orchCalls[0].apiKey, 'free-user-key-1');
+      assert.strictEqual(webServer.getMonthlyUsage('free-gen@test.com'), 1);
+
+      // --- Paid below cap WITH a saved key: house key runs it, counts. -
+      resetBilling({ 'paid-gen@test.com': { premium: true, subscriptionId: 's', plan: 'pro', geminiApiKey: 'paid-user-key-2' } });
+      resetUsage({});
+      const paidCookie = await loginAs('paid-gen@test.com');
+      orchCalls.length = 0;
+      webServer.resetRateLimits();
+      res = await analyzeReq(paidCookie);
+      assert.strictEqual(res.status, 200);
+      await res.json();
+      assert.strictEqual(orchCalls.length, 1);
+      assert.ok(!orchCalls[0].apiKey, 'below cap the house key runs it, not the user key');
+      assert.strictEqual(webServer.getMonthlyUsage('paid-gen@test.com'), 1);
+
+      // --- Overflow: paid at cap WITH a key generates uncounted. -------
+      resetUsage({ 'paid-gen@test.com': { [monthKey]: 300 } });
+      orchCalls.length = 0;
+      webServer.resetRateLimits();
+      res = await analyzeReq(paidCookie);
+      assert.strictEqual(res.status, 200);
+      await res.json();
+      assert.strictEqual(orchCalls.length, 1);
+      assert.strictEqual(orchCalls[0].apiKey, 'paid-user-key-2');
+      assert.strictEqual(webServer.getMonthlyUsage('paid-gen@test.com'), 300); // overflow is not counted
+
+      // Overflow through the keywords fallback routes the same way.
+      keywordCalls.length = 0;
+      res = await REAL_FETCH(`http://127.0.0.1:${testPort}/api/ebay/import?itemIdOrUrl=some%20overflow%20keywords`, {
+        headers: { 'Cookie': paidCookie }
+      });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual((await res.json()).title, 'Keyword BYOK Listing');
+      assert.strictEqual(keywordCalls.length, 1);
+      assert.strictEqual(keywordCalls[0].apiKey, 'paid-user-key-2');
+      assert.strictEqual(webServer.getMonthlyUsage('paid-gen@test.com'), 300);
+
+      // --- Rejected user key: plain error, no fallback, not counted. ---
+      orchBehavior = 'rejected';
+      orchCalls.length = 0;
+      webServer.resetRateLimits();
+      res = await analyzeReq(paidCookie);
+      assert.strictEqual(res.status, 400);
+      let body = await res.json();
+      assert.strictEqual(body.error, 'USER_KEY_REJECTED');
+      assert.match(body.message, /rejected by Google/);
+      assert.match(body.message, /Settings/);
+      assert.strictEqual(orchCalls.length, 1); // exactly one attempt — no house-key fallback
+      assert.strictEqual(webServer.getMonthlyUsage('paid-gen@test.com'), 300);
+
+      // --- Other failure on the user's key: also no fallback/count. ----
+      // (resetBilling replaces the whole store, so re-seed the free user.)
+      resetBilling({ 'free-gen@test.com': { premium: false, plan: 'starter', geminiApiKey: 'free-user-key-1' } });
+      resetUsage({ 'free-gen@test.com': { [monthKey]: 1 } });
+      orchBehavior = 'failed';
+      webServer.resetRateLimits();
+      res = await analyzeReq(freeCookie);
+      assert.strictEqual(res.status, 502);
+      body = await res.json();
+      assert.strictEqual(body.error, 'USER_KEY_FAILED');
+      assert.strictEqual(webServer.getMonthlyUsage('free-gen@test.com'), 1); // unchanged
+      orchBehavior = 'ok';
+    } finally {
+      geminiClient.runAIOrchestration = originalOrchestration;
+      geminiClient.generateListingFromKeywords = originalKeywords;
+      ebayClient.refreshEbayAccessToken = originalRefresh;
+      ebayClient.fetchWithRetry = originalFetchWithRetry;
+      ebayClient.searchItemIdByKeywords = originalSearchItemId;
+      ebayClient.searchCatalogStockPhotos = originalStockPhotos;
+      global.fetch = REAL_FETCH;
+      try { fs.unlinkSync(pngPath); } catch (e) {}
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  // Restore pre-block state.
+  if (teamBackup === null) { try { fs.unlinkSync(config.teamPath); } catch (e) {} }
+  else fs.writeFileSync(config.teamPath, teamBackup, 'utf8');
+  if (billingBackup === null) { try { fs.unlinkSync(billingDbPath); } catch (e) {} }
+  else fs.writeFileSync(billingDbPath, billingBackup, 'utf8');
+  try { fs.unlinkSync(config.usagePath); } catch (e) {}
+  try { fs.unlinkSync(`${config.usagePath}.tmp`); } catch (e) {}
+  try { fs.unlinkSync(`${config.usagePath}.bak`); } catch (e) {}
+  config.usagePath = originalUsagePath;
+  if (hadGoogleClientId) process.env.GOOGLE_CLIENT_ID = savedGoogleClientId;
+  else delete process.env.GOOGLE_CLIENT_ID;
+  if (hadGoogleClientSecret) process.env.GOOGLE_CLIENT_SECRET = savedGoogleClientSecret;
+  else delete process.env.GOOGLE_CLIENT_SECRET;
+});

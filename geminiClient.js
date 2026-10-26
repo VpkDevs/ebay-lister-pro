@@ -8,6 +8,70 @@ const config = require('./config');
 const utils = require('./utils');
 const ebayClient = require('./ebayClient');
 
+/* ============================================================================
+ * [BYOK] Per-user Gemini API key support (bring your own key).
+ *
+ * webServer resolves the caller's saved key (getUserGeminiKey) and passes it
+ * as an override (`options.apiKey` / `draft.apiKey`); when present, it
+ * replaces the house key for that call only. A call made on a user's key
+ * NEVER falls back to the house key: failures are rethrown as coded errors
+ * (USER_KEY_REJECTED when Google refused the key, USER_KEY_CALL_FAILED
+ * otherwise) with the key itself scrubbed out, so callers can answer in
+ * plain language and keys never reach responses or logs.
+ * ========================================================================== */
+
+/**
+ * [BYOK] Normalizes a would-be user key override: a trimmed string, or ''.
+ * @param {*} value
+ * @returns {string}
+ */
+function userKeyFrom(value) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+/**
+ * [BYOK] The key a Gemini call runs on: the user's override when one was
+ * passed, otherwise the house key from config.
+ * @param {*} overrideKey
+ * @returns {string|undefined}
+ */
+function resolveGeminiKey(overrideKey) {
+  return userKeyFrom(overrideKey) || config.getGEMINI_API_KEY();
+}
+
+/**
+ * [BYOK] Whether a Gemini failure looks like Google refusing the API key
+ * itself (bad/revoked key, key not enabled for the API) as opposed to a
+ * bad request or a transient Google-side failure.
+ * @param {string} text - Error text (already key-scrubbed).
+ * @returns {boolean}
+ */
+function looksLikeKeyRejection(text) {
+  return /api key not valid|invalid api key|api_key_invalid|api keys are not supported|api_key_service_blocked|permission_denied|unauthenticated/i.test(text);
+}
+
+/**
+ * [BYOK] Retags a failure from a user-key call: scrubs the key out of the
+ * original message (it is logged server-side only), then returns a coded
+ * error whose message is safe to show the user and never contains the key.
+ * @param {Error} err - The original failure.
+ * @param {string} key - The user's key (used only for scrubbing).
+ * @returns {Error} Coded error: USER_KEY_REJECTED or USER_KEY_CALL_FAILED.
+ */
+function tagUserKeyError(err, key) {
+  const raw = String((err && err.message) || err || '');
+  const scrubbed = key ? raw.split(key).join('[key hidden]') : raw;
+  try { utils.logAudit("WARN", `Gemini call on a user-supplied key failed: ${scrubbed.slice(0, 300)}`); } catch (e) {}
+  if (looksLikeKeyRejection(scrubbed)) {
+    const tagged = new Error('Your Gemini API key was rejected by Google.');
+    tagged.code = 'USER_KEY_REJECTED';
+    return tagged;
+  }
+  const tagged = new Error('The Gemini call failed while using your saved API key.');
+  tagged.code = 'USER_KEY_CALL_FAILED';
+  return tagged;
+}
+
 /**
  * Retrieves up to 3 similar past listings from local history to act as few-shot style examples.
  * @param {string} draftTitle - The temporary draft title from Pass 1.
@@ -69,7 +133,7 @@ function getSimilarListingsFromHistory(draftTitle, limit = 3) {
  * @returns {Promise<object>} The validated and formatted listing object.
  * @throws {Error} If parameters are invalid or Gemini API call fails.
  */
-async function runAIOrchestration(photoBuffers, filenames, barcode = null, customNotes = null, upcData = null, options = {}) {
+async function runAIOrchestrationImpl(photoBuffers, filenames, barcode = null, customNotes = null, upcData = null, options = {}) {
   // Parameter validation
   if (!Array.isArray(photoBuffers) || photoBuffers.length === 0) {
     throw new Error("Validation Error: photoBuffers must be a non-empty array of Buffers.");
@@ -92,10 +156,10 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
     throw new Error("Validation Error: upcData must be an object or null.");
   }
 
-  // [BYOK SEAM] House key read — a per-user key override threads in here:
-  // webServer resolves the caller's saved key (getUserGeminiKey) and passes
-  // it via `options` instead of this house key when one applies.
-  const geminiKey = config.getGEMINI_API_KEY();
+  // [BYOK] Key read: webServer resolves the caller's saved key
+  // (getUserGeminiKey) and passes it via `options.apiKey`; when present it
+  // replaces the house key for this call (see resolveGeminiKey).
+  const geminiKey = resolveGeminiKey(options && options.apiKey);
   if (!geminiKey) {
     throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");
   }
@@ -387,6 +451,21 @@ async function runAIOrchestration(photoBuffers, filenames, barcode = null, custo
 }
 
 /**
+ * [BYOK] Public entry point: runs the orchestration on the caller's own key
+ * when `options.apiKey` carries one, tagging any failure from that call as a
+ * coded user-key error (never falling back to the house key).
+ */
+async function runAIOrchestration(photoBuffers, filenames, barcode = null, customNotes = null, upcData = null, options = {}) {
+  const userKey = userKeyFrom(options && options.apiKey);
+  try {
+    return await runAIOrchestrationImpl(photoBuffers, filenames, barcode, customNotes, upcData, options);
+  } catch (err) {
+    if (userKey) throw tagUserKeyError(err, userKey);
+    throw err;
+  }
+}
+
+/**
  * Safely parses a JSON string, stripping markdown fences if present and falling back to default values or regex extraction.
  * @param {string} text - The raw text input.
  * @param {object} [defaultValue={}] - The default value to return if parsing fails.
@@ -563,7 +642,7 @@ function buildEnhancePrompt(title, description, context = null) {
  * @returns {Promise<{title:string, description:string}>} The polished title and description.
  * @throws {Error} If parameters are invalid or the Gemini API call fails.
  */
-async function enhanceListingDraft({ title, description, context = null }) {
+async function enhanceListingDraftImpl({ title, description, context = null, apiKey = null }) {
   if (typeof title !== 'string' || typeof description !== 'string') {
     throw new Error("Validation Error: title and description must be strings.");
   }
@@ -571,8 +650,9 @@ async function enhanceListingDraft({ title, description, context = null }) {
     throw new Error("Validation Error: context must be a string or null.");
   }
 
-  // [BYOK SEAM] House key read — a per-user key override (BYOK) threads in here.
-  const geminiKey = config.getGEMINI_API_KEY();
+  // [BYOK] Key read: the caller's saved key (draft.apiKey) replaces the
+  // house key for this call when webServer resolved one.
+  const geminiKey = resolveGeminiKey(apiKey);
   if (!geminiKey) {
     throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");
   }
@@ -618,13 +698,29 @@ async function enhanceListingDraft({ title, description, context = null }) {
 }
 
 /**
+ * [BYOK] Public entry point: polishes on the caller's own key when
+ * `draft.apiKey` carries one, tagging failures from that call as coded
+ * user-key errors (never falling back to the house key).
+ */
+async function enhanceListingDraft(draft) {
+  const userKey = userKeyFrom(draft && draft.apiKey);
+  try {
+    return await enhanceListingDraftImpl(draft);
+  } catch (err) {
+    if (userKey) throw tagUserKeyError(err, userKey);
+    throw err;
+  }
+}
+
+/**
  * Generates an optimized eBay listing draft from plain text keywords/title using Gemini.
  * @param {string} keywords - Product search term/title.
  * @returns {Promise<object>} Generated listing details matching the editor schema.
  */
-async function generateListingFromKeywords(keywords) {
-  // [BYOK SEAM] House key read — a per-user key override (BYOK) threads in here.
-  const geminiKey = config.getGEMINI_API_KEY();
+async function generateListingFromKeywordsImpl(keywords, options = {}) {
+  // [BYOK] Key read: the caller's saved key (options.apiKey) replaces the
+  // house key for this call when webServer resolved one.
+  const geminiKey = resolveGeminiKey(options && options.apiKey);
   if (!geminiKey) {
     throw new Error("GEMINI_API_KEY is not defined in your environment or .env file.");
   }
@@ -712,6 +808,20 @@ async function generateListingFromKeywords(keywords) {
   return generated;
 }
 
+/**
+ * [BYOK] Public entry point: generates on the caller's own key when
+ * `options.apiKey` carries one, tagging failures from that call as coded
+ * user-key errors (never falling back to the house key).
+ */
+async function generateListingFromKeywords(keywords, options = {}) {
+  const userKey = userKeyFrom(options && options.apiKey);
+  try {
+    return await generateListingFromKeywordsImpl(keywords, options);
+  } catch (err) {
+    if (userKey) throw tagUserKeyError(err, userKey);
+    throw err;
+  }
+}
 
 module.exports = {
   runAIOrchestration,

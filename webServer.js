@@ -656,12 +656,12 @@ const STARTER_BYOK_ALLOTMENT = 10;
 const EXTENSION_OPERATOR_EMAIL = "extension@local.lister";
 
 /**
- * [BYOK SEAM] Returns the account's saved Gemini API key, or null when none
- * is saved. Key storage is populated by the BYOK feature (next build);
- * metering only checks presence today. Storage contract: the
- * `geminiApiKey` field on the account's billing record
- * (scratch/billing_status.json) — the BYOK build writes it there, or
- * updates this one function if it stores the key elsewhere.
+ * [BYOK] Returns the account's saved Gemini API key, or null when none
+ * is saved. Storage contract: the `geminiApiKey` field on the account's
+ * billing record (scratch/billing_status.json), written by
+ * saveUserGeminiKey (Settings → Your Gemini API Key) and read here.
+ * The key is a secret: it is never logged and never returned to a client
+ * (the Settings surface exposes only getGeminiKeyStatus's masked form).
  * @param {string} email - Account email.
  * @returns {string|null}
  */
@@ -837,6 +837,217 @@ function refuseGeneration(res, allowance) {
   const refusal = generationRefusal(allowance);
   res.writeHead(refusal.status, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(refusal.body));
+}
+
+/* ============================================================================
+ * [BYOK] Bring-your-own-key: per-user Gemini key storage, Settings surface,
+ * and generation routing.
+ *
+ * Routing (docs/billing-policy.md Policy 4):
+ *   - Free (starter) WITH a saved key: generations run on the user's key
+ *     and COUNT toward the 10/month free allotment.
+ *   - Free without a key: no generations (the metering refusal).
+ *   - Paid below the plan cap: the house key runs it; the generation counts.
+ *   - Paid AT the cap WITH a saved key (the overflow valve): generations
+ *     run on the user's key and are NOT counted.
+ *   - A failed call on the user's key NEVER falls back to the house key
+ *     and is never counted; the user hears a plain-language key error.
+ *
+ * Keys live on the billing account (workspace-resolved, like the metering
+ * pool): a Power Seller seat shares the owner's pool and the owner's key.
+ * ========================================================================== */
+
+/**
+ * [BYOK] Reads the billing store: { [email]: record }.
+ * @returns {object}
+ */
+function readBillingStore() {
+  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  return utils.readJsonFileSecure(billingDbPath, {});
+}
+
+/**
+ * [BYOK] Persists the billing store.
+ * @param {object} store
+ */
+function writeBillingStore(store) {
+  const billingDbPath = path.join(process.cwd(), 'scratch', 'billing_status.json');
+  utils.writeJsonFileSecure(billingDbPath, store);
+}
+
+/**
+ * [BYOK] The billing account an acting user's key belongs to — the
+ * workspace owner for seat members, otherwise the user themself (the same
+ * resolution metering applies to the usage pool).
+ * @param {string} email - The acting (signed-in) user's email.
+ * @returns {string|null}
+ */
+function resolveBillingEmail(email) {
+  email = String(email || "").trim().toLowerCase();
+  if (!email) return null;
+  const ws = getWorkspaceFor(email);
+  return ws ? ws.owner : email;
+}
+
+/**
+ * [BYOK] Masked display form of a key: a fixed bullet run plus the last 4
+ * characters — enough for the owner to recognize their key, never enough
+ * to use it. The full key is never sent to a client.
+ * @param {string|null} key
+ * @returns {string|null} Null when no key is saved.
+ */
+function maskGeminiKey(key) {
+  if (!key || typeof key !== 'string') return null;
+  const trimmed = key.trim();
+  if (!trimmed) return null;
+  return trimmed.length > 4 ? `••••••${trimmed.slice(-4)}` : '••••••';
+}
+
+/**
+ * [BYOK] Key status for the Settings surface: whether a key is saved, and
+ * its masked form. NEVER includes the key itself.
+ * @param {string} email - The acting user's email.
+ * @returns {{saved:boolean, masked:string|null}}
+ */
+function getGeminiKeyStatus(email) {
+  const billingEmail = resolveBillingEmail(email);
+  if (!billingEmail) return { saved: false, masked: null };
+  const key = getUserGeminiKey(billingEmail);
+  return { saved: !!key, masked: maskGeminiKey(key) };
+}
+
+/**
+ * [BYOK] Saves (or replaces) the account's Gemini API key on its billing
+ * record, creating a Starter record when the account has none yet.
+ * @param {string} email - The acting user's email.
+ * @param {*} key - The key as pasted by the user.
+ * @returns {{saved:boolean, masked:string|null}} Post-save key status.
+ * @throws {Error} Plain-language validation errors.
+ */
+function saveUserGeminiKey(email, key) {
+  const billingEmail = resolveBillingEmail(email);
+  if (!billingEmail) throw new Error("Login required.");
+  if (typeof key !== 'string' || !key.trim()) {
+    throw new Error("Paste your Gemini API key first.");
+  }
+  const trimmed = key.trim();
+  if (/\s/.test(trimmed) || trimmed.length > 500) {
+    throw new Error("That doesn't look like a Gemini API key — it should be one long string with no spaces. Copy it from Google AI Studio and try again.");
+  }
+  const store = readBillingStore();
+  const rec = store[billingEmail] || { premium: false, plan: 'starter' };
+  rec.geminiApiKey = trimmed;
+  store[billingEmail] = rec;
+  writeBillingStore(store);
+  utils.logAudit("INFO", `Gemini API key saved for billing account ${billingEmail} (value not logged).`);
+  return getGeminiKeyStatus(email);
+}
+
+/**
+ * [BYOK] Removes the account's saved Gemini API key, if any.
+ * @param {string} email - The acting user's email.
+ * @returns {{saved:boolean, masked:string|null}} Post-clear key status.
+ */
+function clearUserGeminiKey(email) {
+  const billingEmail = resolveBillingEmail(email);
+  if (!billingEmail) return { saved: false, masked: null };
+  const store = readBillingStore();
+  const rec = store[billingEmail];
+  if (rec && Object.prototype.hasOwnProperty.call(rec, 'geminiApiKey')) {
+    delete rec.geminiApiKey;
+    store[billingEmail] = rec;
+    writeBillingStore(store);
+    utils.logAudit("INFO", `Gemini API key removed for billing account ${billingEmail}.`);
+  }
+  return getGeminiKeyStatus(email);
+}
+
+/**
+ * [BYOK] Resolves how one generation runs for an acting user: refused, or
+ * on the house key, or on the user's own key — and whether it counts
+ * against the monthly allotment. Wraps resolveGenerationAllowance with
+ * the overflow valve (Policy 4).
+ * @param {string} email - The acting (signed-in) user's email.
+ * @returns {{refused:boolean, allowance:object, usingOwnKey:boolean,
+ *   apiKey:string|null, countGeneration:boolean, overflow:boolean}}
+ *   apiKey is null when the house key runs the call.
+ */
+function resolveGenerationRoute(email) {
+  const allowance = resolveGenerationAllowance(email);
+  const route = {
+    refused: false, allowance, usingOwnKey: false,
+    apiKey: null, countGeneration: false, overflow: false
+  };
+  if (!allowance.metered) return route; // local owner mode / extension operator: house key, uncounted
+  if (allowance.allowed) {
+    route.countGeneration = true;
+    if (allowance.plan === 'starter') {
+      // An allowed starter always has a saved key (its allotment is 0
+      // without one): free generations run on the user's key and count.
+      route.apiKey = getUserGeminiKey(allowance.billingEmail);
+      route.usingOwnKey = !!route.apiKey;
+    }
+    return route;
+  }
+  // Not allowed. The overflow valve: a paid account at its cap with a saved
+  // key keeps generating on its own key, uncounted. (A free account at its
+  // 10 stays refused — the valve is a paid-tier escape.)
+  if (allowance.reason === 'cap_reached' && allowance.plan !== 'starter' && allowance.hasOwnKey) {
+    route.apiKey = getUserGeminiKey(allowance.billingEmail);
+    if (route.apiKey) {
+      route.usingOwnKey = true;
+      route.overflow = true;
+      return route;
+    }
+  }
+  route.refused = true;
+  return route;
+}
+
+/**
+ * [BYOK] The key an EDIT (/api/enhance — never counted, Policy 1) runs on:
+ * the user's own key when their generations would run on it (free tier
+ * with a key, or a paid account at its cap with a key), otherwise null
+ * (house key). Keeps free-tier AI work off the house key without changing
+ * who may edit: keyless accounts still enhance on the house key, as
+ * before.
+ * @param {string} email - The acting user's email.
+ * @returns {string|null}
+ */
+function resolveEnhanceKey(email) {
+  const allowance = resolveGenerationAllowance(email);
+  if (!allowance.metered || !allowance.hasOwnKey) return null;
+  if (allowance.plan === 'starter') return getUserGeminiKey(allowance.billingEmail);
+  if (!allowance.allowed) return getUserGeminiKey(allowance.billingEmail);
+  return null;
+}
+
+/**
+ * [BYOK] Answers a failed generation that ran on the user's own key, in
+ * plain language. The raw provider error is never forwarded (it can name
+ * internals — and request URLs carry keys), nothing was counted, and the
+ * house key was not touched.
+ * @param {http.ServerResponse} res
+ * @param {Error} err - The (coded) failure from geminiClient.
+ * @param {string} [email] - Acting user, for the usage summary.
+ */
+function refuseUserKeyFailure(res, err, email) {
+  const usage = email ? buildUsageSummary(email) : null;
+  if (err && err.code === 'USER_KEY_REJECTED') {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      error: "USER_KEY_REJECTED",
+      message: "Your Gemini API key was rejected by Google — check it in Settings and try again. This generation was not counted.",
+      ...(usage ? { usage } : {})
+    }));
+    return;
+  }
+  res.writeHead(502, { 'Content-Type': 'application/json' });
+  res.end(JSON.stringify({
+    error: "USER_KEY_FAILED",
+    message: "That generation couldn't be completed using your saved Gemini API key, so nothing was counted. Check your key in Settings, or try again in a moment.",
+    ...(usage ? { usage } : {})
+  }));
 }
 
 const activeSessions = new Map();
@@ -1859,6 +2070,61 @@ function startWebGuiServer(port = 45900) {
       return;
     }
 
+    // [BYOK] API: the signed-in account's own Gemini API key (Settings).
+    // The key itself is a secret: GET returns only { saved, masked }, POST
+    // never echoes it back, and DELETE removes it from the billing record.
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/user/gemini-key') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(getGeminiKeyStatus(user.email)));
+      return;
+    }
+
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/user/gemini-key') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        let payload;
+        try {
+          payload = JSON.parse(body || '{}');
+        } catch (e) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+          return;
+        }
+        try {
+          const status = saveUserGeminiKey(user.email, payload && payload.apiKey);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, ...status }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    if (req.method === 'DELETE' && parsedUrl.pathname === '/api/user/gemini-key') {
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "Login required." }));
+        return;
+      }
+      const status = clearUserGeminiKey(user.email);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: true, ...status }));
+      return;
+    }
+
     // API: Session info
     if (req.method === 'GET' && parsedUrl.pathname === '/api/auth/session') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2462,18 +2728,20 @@ function startWebGuiServer(port = 45900) {
 
       // Helper function to handle Gemini fallback
       const handleGeminiListingFallback = async (keywords, response) => {
-        // [METERING] A keywords -> listing generation counts exactly like a
-        // photo generation: gate on the caller's monthly allotment first.
+        // [METERING + BYOK] A keywords -> listing generation routes exactly
+        // like a photo generation: allotment gate, house key or the caller's
+        // own key (free tier; paid overflow valve past the cap).
         // (Reached only when no eBay item was found to import directly.)
-        const allowance = resolveGenerationAllowance(user && user.email);
-        if (allowance.metered && !allowance.allowed) {
-          refuseGeneration(response, allowance);
+        const route = resolveGenerationRoute(user && user.email);
+        if (route.refused) {
+          refuseGeneration(response, route.allowance);
           return;
         }
         try {
-          const geminiListing = await geminiClient.generateListingFromKeywords(keywords);
-          // [METERING] Count only completed generations (failures never count).
-          if (allowance.metered) recordGeneration(user.email);
+          const geminiListing = await geminiClient.generateListingFromKeywords(keywords, { apiKey: route.apiKey || undefined });
+          // [METERING] Count only completed, countable generations
+          // (failures never count; overflow generations never count).
+          if (route.countGeneration) recordGeneration(user.email);
           let stockPhotos = [];
           try {
             stockPhotos = await ebayClient.searchCatalogStockPhotos(geminiListing.title || keywords);
@@ -2498,6 +2766,12 @@ function startWebGuiServer(port = 45900) {
             imageUrls: stockPhotos
           }));
         } catch (geminiErr) {
+          // [BYOK] A failed call on the user's own key: plain-language key
+          // error, no house-key fallback, nothing counted.
+          if (route.usingOwnKey) {
+            refuseUserKeyFailure(response, geminiErr, user && user.email);
+            return;
+          }
           response.writeHead(500, { 'Content-Type': 'application/json' });
           response.end(JSON.stringify({ error: `Listing generation failed: ${geminiErr.message}` }));
         }
@@ -3449,11 +3723,13 @@ function startWebGuiServer(port = 45900) {
             return;
           }
 
-          // [METERING] Plan-cap gate: signed-in accounts generate only within
-          // their monthly allotment (unmetered when no account is signed in).
-          const allowance = resolveGenerationAllowance(user && user.email);
-          if (allowance.metered && !allowance.allowed) {
-            refuseGeneration(res, allowance);
+          // [METERING + BYOK] Generation route: signed-in accounts generate
+          // only within their monthly allotment — on the house key, or on
+          // their own saved key (free tier; paid overflow valve past the
+          // cap). Unmetered when no account is signed in.
+          const route = resolveGenerationRoute(user && user.email);
+          if (route.refused) {
+            refuseGeneration(res, route.allowance);
             return;
           }
 
@@ -3521,17 +3797,30 @@ function startWebGuiServer(port = 45900) {
             tempPaths.push(...materialized.tempPaths);
           }
 
-          const listing = await geminiClient.runAIOrchestration(
-            fileBuffers, 
-            tempPaths.map(p => path.basename(p)), 
-            payload.barcode, 
-            payload.notes, 
-            upcData,
-            { persona: payload.persona, template: payload.template }
-          );
-          // [METERING] Count only completed generations — a generation that
-          // throws above never reaches this line and is never counted.
-          if (allowance.metered) recordGeneration(user.email);
+          let listing;
+          try {
+            listing = await geminiClient.runAIOrchestration(
+              fileBuffers,
+              tempPaths.map(p => path.basename(p)),
+              payload.barcode,
+              payload.notes,
+              upcData,
+              { persona: payload.persona, template: payload.template, apiKey: route.apiKey || undefined }
+            );
+          } catch (genErr) {
+            // [BYOK] A failed call on the user's own key: plain-language
+            // key error, no house-key fallback, nothing counted.
+            if (route.usingOwnKey) {
+              tempPaths.forEach(p => { try { fs.unlinkSync(p); } catch (e) {} });
+              refuseUserKeyFailure(res, genErr, user && user.email);
+              return;
+            }
+            throw genErr;
+          }
+          // [METERING] Count only completed generations the route marks
+          // countable — a generation that throws above never reaches this
+          // line, and overflow (own-key) generations never count.
+          if (route.countGeneration) recordGeneration(user.email);
 
           const categorySuggestions = await ebayClient.getCategorySuggestions(listing.title);
           const imageUrls = await uploadImagesConcurrently(tempPaths, 2);
@@ -3596,11 +3885,26 @@ function startWebGuiServer(port = 45900) {
             return;
           }
 
-          const enhanced = await geminiClient.enhanceListingDraft({
-            title: payload.title,
-            description: payload.description,
-            context: payload.context || null
-          });
+          // [BYOK] Edits are never counted (Policy 1), but when the
+          // account's generations run on its own key (free tier, or a paid
+          // account at its cap), the polish runs on that key too — free-tier
+          // AI work stays off the house key.
+          const enhanceKey = resolveEnhanceKey(user && user.email);
+          let enhanced;
+          try {
+            enhanced = await geminiClient.enhanceListingDraft({
+              title: payload.title,
+              description: payload.description,
+              context: payload.context || null,
+              apiKey: enhanceKey || undefined
+            });
+          } catch (genErr) {
+            if (enhanceKey) {
+              refuseUserKeyFailure(res, genErr, user && user.email);
+              return;
+            }
+            throw genErr;
+          }
 
           res.writeHead(200, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(enhanced));
@@ -4809,7 +5113,16 @@ module.exports = {
   resolveGenerationAllowance,
   recordGeneration,
   buildUsageSummary,
-  generationRefusal
+  generationRefusal,
+  // [BYOK] Exported for unit tests
+  readBillingStore,
+  resolveBillingEmail,
+  maskGeminiKey,
+  getGeminiKeyStatus,
+  saveUserGeminiKey,
+  clearUserGeminiKey,
+  resolveGenerationRoute,
+  resolveEnhanceKey
 };
 
 if (require.main === module) {
