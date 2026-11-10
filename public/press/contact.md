@@ -1,7 +1,5 @@
 # Media & Press Contact
 
-For all press inquires, interview requests, or review copy key provisions:
-
-- **Email**: press@ebaylisterpro.com
-- **SLA**: Response guaranteed within 12 hours.
-- **Availability**: Vincent Kinney is available for interviews, podcast appearances, and technical deep-dives on zero-dependency JavaScript engineering and reseller economics.
+- **Contact**: Vincent Kinney (founder) — via the support/contact address published on the ListAI Pro site, or the founder's Indie Hackers / X profiles linked from the landing page.
+- **Response time**: best effort within 2 business days. (No guaranteed SLA is promised; you will reach the founder personally, not a PR firm.)
+- **Availability**: interviews, podcasts, and written Q&As on solo-founder economics, AI tooling for resellers, and verification-first shipping.

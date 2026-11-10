@@ -5805,3 +5805,146 @@ test('Hardening: free-premium paths closed, checkout/webhook correct, analyze de
   }
   global.fetch = REAL_FETCH;
 });
+
+// ==========================================
+// 12. Atlas Round-4 Regression: /api/config/save auth
+// ==========================================
+test('Atlas R4: config/save requires an authenticated user even in a clean-env boot', async (t) => {
+  const envPath = config.envPath;
+  const envBackup = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : null;
+  const savedEnv = {};
+  for (const key of ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'API_KEY', 'STRIPE_SECRET_KEY']) {
+    savedEnv[key] = process.env[key];
+  }
+  // Clean-env boot: no Google client (the global auth gate is conditional on
+  // it) and no operator API key. Before the [ATLAS-R4] fix, an anonymous POST
+  // to /api/config/save rewrote the deployment's secrets in this state.
+  delete process.env.GOOGLE_CLIENT_ID;
+  delete process.env.GOOGLE_CLIENT_SECRET;
+  delete process.env.API_KEY;
+  if (envBackup === null) { try { fs.unlinkSync(envPath); } catch (e) {} }
+
+  const testPort = 45972;
+  const server = webServer.startWebGuiServer(testPort);
+  const base = `http://127.0.0.1:${testPort}`;
+  try {
+    await t.test('anonymous config/save is refused and .env is untouched', async () => {
+      webServer.resetRateLimits();
+      const res = await REAL_FETCH(`${base}/api/config/save`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ STRIPE_SECRET_KEY: 'sk_test_atlas_attacker' })
+      });
+      assert.strictEqual(res.status, 401);
+      assert.strictEqual((await res.json()).error, 'LOGIN_REQUIRED');
+      assert.strictEqual(fs.existsSync(envPath), envBackup !== null);
+      if (envBackup !== null) assert.strictEqual(fs.readFileSync(envPath, 'utf8'), envBackup);
+      assert.notStrictEqual(process.env.STRIPE_SECRET_KEY, 'sk_test_atlas_attacker');
+    });
+
+    await t.test('account deletion also removes team data (Atlas R4 legal)', async () => {
+      // Seed a billing record (via the BYOK helper) + team records on disk.
+      webServer.saveUserGeminiKey('delete-me@example.com', 'sk-delete-me-key');
+      const teamPath = config.teamPath;
+      const teamBackup = fs.existsSync(teamPath) ? fs.readFileSync(teamPath, 'utf8') : null;
+      fs.writeFileSync(teamPath, JSON.stringify({
+        'delete-me@example.com': { members: [{ email: 'member@example.com', status: 'active', addedAt: '2026-01-01T00:00:00.000Z' }] },
+        'owner@example.com': { members: [{ email: 'delete-me@example.com', status: 'active', addedAt: '2026-01-01T00:00:00.000Z' }] }
+      }), 'utf8');
+      // Sign in as the user (mocked Google, same pattern as other suites).
+      process.env.GOOGLE_CLIENT_ID = 'atlas-r4-client';
+      process.env.GOOGLE_CLIENT_SECRET = 'atlas-r4-secret';
+      const prevFetch = global.fetch;
+      global.fetch = async (url, options) => {
+        const u = String(url);
+        if (u.includes('oauth2.googleapis.com/token')) return { ok: true, json: async () => ({ access_token: 'r4-access' }) };
+        if (u.includes('openidconnect.googleapis.com') || u.includes('googleapis.com/oauth2')) return { ok: true, json: async () => ({ email: 'delete-me@example.com', name: 'Delete Me' }) };
+        return REAL_FETCH(url, options);
+      };
+      try {
+        const loginRes = await REAL_FETCH(`${base}/api/auth/google/callback?code=r4-code`, { redirect: 'manual' });
+        const match = (loginRes.headers.get('set-cookie') || '').match(/sessionId=([^;]+)/);
+        assert.ok(match, 'login should set a session cookie');
+        const del = await REAL_FETCH(`${base}/api/user/account`, { method: 'DELETE', headers: { Cookie: `sessionId=${match[1]}` } });
+        assert.strictEqual(del.status, 200);
+        assert.strictEqual(webServer.getGeminiKeyStatus('delete-me@example.com').saved, false, 'billing record (incl. BYOK key) must be deleted');
+        const store = webServer.readTeamStore();
+        assert.ok(!store['delete-me@example.com'], 'own workspace record must be deleted');
+        assert.ok(!(store['owner@example.com'].members || []).some(m => m.email === 'delete-me@example.com'), 'membership in other workspaces must be removed');
+      } finally {
+        global.fetch = prevFetch;
+        delete process.env.GOOGLE_CLIENT_ID;
+        delete process.env.GOOGLE_CLIENT_SECRET;
+        if (teamBackup === null) { try { fs.unlinkSync(teamPath); } catch (e) {} }
+        else fs.writeFileSync(teamPath, teamBackup, 'utf8');
+      }
+    });
+
+    await t.test('no shipped file still carries the old public default API key (Atlas R4 security)', () => {
+      // The extension once hardcoded "lister-secret-key-12345" — the value the
+      // whole internet could read in the public repo. It must never come back
+      // in any shipped (non-test) file.
+      const shipped = ['chrome-extension/popup.js', 'chrome-extension/popup.html', 'chrome-extension/manifest.json', 'config.js', 'webServer.js', 'public/index.html', 'public/landing.html'];
+      for (const rel of shipped) {
+        const content = fs.readFileSync(path.join(__dirname, rel), 'utf8');
+        assert.ok(!content.includes('lister-secret-key-12345'), `${rel} must not contain the old public default key`);
+      }
+      const popup = fs.readFileSync(path.join(__dirname, 'chrome-extension/popup.js'), 'utf8');
+      assert.ok(popup.includes('chrome.storage.local'), 'extension must load its API key from chrome.storage, not source');
+    });
+
+    await t.test('the configured operator API key can still save config', async () => {
+      process.env.API_KEY = 'atlas-r4-operator-key';
+      try {
+        webServer.resetRateLimits();
+        const res = await REAL_FETCH(`${base}/api/config/save`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-lister-api-key': 'atlas-r4-operator-key' },
+          body: JSON.stringify({ SKU_PREFIX: 'ATLAS-' })
+        });
+        assert.strictEqual(res.status, 200);
+        assert.strictEqual((await res.json()).success, true);
+        assert.ok(fs.readFileSync(envPath, 'utf8').includes('SKU_PREFIX=ATLAS-'));
+      } finally {
+        delete process.env.API_KEY;
+      }
+    });
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    if (envBackup === null) { try { fs.unlinkSync(envPath); } catch (e) {} }
+    else fs.writeFileSync(envPath, envBackup, 'utf8');
+    for (const key of Object.keys(savedEnv)) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+    global.fetch = REAL_FETCH;
+  }
+});
+
+test('§13 Atlas R4 Phase 8: email plumbing no-ops safely unconfigured; FAQ page serves', async (t) => {
+  const emailModule = require('./email');
+
+  await t.test('welcome email is a clean no-op without a provider key', async () => {
+    delete process.env.RESEND_API_KEY;
+    delete process.env.EMAIL_FROM;
+    assert.strictEqual(emailModule.isEmailConfigured(), false);
+    const result = await emailModule.sendWelcomeEmail('someone@example.com');
+    assert.strictEqual(result.sent, false);
+    assert.strictEqual(result.reason, 'EMAIL_NOT_CONFIGURED');
+  });
+
+  await t.test('GET /faq serves the top-20 FAQ', async () => {
+    const server = webServer.startWebGuiServer(0);
+    await new Promise((resolve) => server.on('listening', resolve));
+    try {
+      const port = server.address().port;
+      const res = await REAL_FETCH(`http://127.0.0.1:${port}/faq`);
+      assert.strictEqual(res.status, 200);
+      const body = await res.text();
+      assert.ok(body.includes('Frequently Asked Questions'));
+      assert.ok(body.includes('What counts as one listing?'));
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+});

@@ -1,13 +1,16 @@
-eBay Multi-Channel Lister Pro is an enterprise-grade, local-first cross-listing desktop application engineered for e-commerce resellers and merchants. 
+ListAI Pro — the listing desk for eBay resellers, without the desk work.
 
-### Zero-Dependency Performance
-Lister Pro is written entirely in raw Node.js utilizing native modules. It has zero external package dependencies—no Express, no database drivers, no heavy UI framework assets. This results in startup times under 10 milliseconds, low RAM utilization, and complete exemption from npm package supply-chain vulnerabilities.
+THE PROBLEM
+Reselling economics break at the listing desk. Photographing an item takes two minutes; turning it into a good marketplace listing — title, description, item specifics, pricing research — takes ten or more. For a seller with a backlog ("death pile") of hundreds of items, the typing, not the sourcing, is the bottleneck.
 
-### Local-First Security & Privacy
-With traditional cloud-based cross-listers charging expensive monthly subscriptions, sellers must host their shop API credentials and inventory history on remote servers. Lister Pro runs locally on the merchant's machine, saving store access keys in a private local environment file. 
+THE PRODUCT
+ListAI Pro is a subscription web application. The seller uploads product photos; Google Gemini vision models identify the item, note condition and defects, extract item specifics, and draft the complete listing. A pricing step checks live sold-listing comparables and suggests a price inside the real range — always showing the comps it used, because a price without evidence is just a guess. The seller reviews and edits the draft (nothing publishes unreviewed), then posts to eBay directly, cross-posts to Shopify, WooCommerce, or Etsy, or exports formatted files for Mercari and Poshmark. Bulk CSV import, batch generation, and a Chrome extension that turns marketplace product pages into drafts round out the workflow.
 
-### Concurrency & Outlier Comps
-Lister Pro publishes inventory concurrently to eBay, Shopify, WooCommerce, and Etsy in under 90 seconds. To protect against transaction failures, failed sync operations queue in a local Dead-Letter Queue (DLQ) for automatic exponential backoff retry. During listing creation, the comp analyzer executes real-time queries against active listings, automatically filtering out the top and bottom 10% outliers to suggest true market pricing.
+BUSINESS MODEL
+Metered subscriptions, priced against measured AI cost per listing (cents, not dollars): Pro at $19/month for 300 generated listings, Power Seller at $49/month for 1,000 with team seats. A free tier exists — 10 listings a month — gated on the seller's own free Gemini API key, an arrangement that makes free usage cost the company nothing at any scale. When paid users hit their cap, they can plug in their own key and keep going rather than being cut off mid-batch.
 
-### Automatic Double-Selling Protection
-Inventory sync services run continuously in the background. When an item sells on eBay, Lister Pro immediately detects the transaction and updates Shopify, WooCommerce, and Etsy, keeping inventory aligned across channels.
+THE FOUNDER AND THE LAUNCH STORY
+ListAI Pro is built by Vincent Kinney, an independent software builder and practicing reseller in San Antonio, Texas. Before launch, the product was run through an end-to-end AI audit ("Atlas") that found and proved real ways to obtain premium access for free; the launch was blocked until those holes were closed, the fixes shipped with regression tests, and the whole suite passed (182 tests). The audit also caught the product's Chrome extension still shipping a long-public default API key, which was removed. That audit-first launch discipline — verify, then ship — is the company's operating signature.
+
+AVAILABILITY
+Launching on the web (see the press page for the live URL and date). Media contact and founder availability are listed in contact.md.

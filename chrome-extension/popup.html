@@ -154,7 +154,14 @@
   </div>
 
   <button class="btn" id="sendBtn">Save Draft to Dashboard</button>
-  
+
+  <div class="form-group" style="margin-top: 14px; border-top: 1px solid var(--border); padding-top: 10px;">
+    <label for="serverUrl">Extension Settings — Server URL</label>
+    <input type="text" id="serverUrl" placeholder="http://127.0.0.1:45900">
+    <label for="apiKey" style="margin-top: 6px;">Operator API Key (the API_KEY from your server .env)</label>
+    <input type="password" id="apiKey" placeholder="Paste your API_KEY">
+  </div>
+
   <div id="status"></div>
 
   <script src="popup.js"></script>

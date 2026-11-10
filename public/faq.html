@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FAQ — ListAI Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Syne:wght@700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:       #050810;
+      --bg2:      #0a1120;
+      --surface:  #0f1929;
+      --surface2: #162036;
+      --border:   rgba(255,255,255,0.06);
+      --border2:  rgba(255,255,255,0.11);
+      --brand:    #6366f1;
+      --brand2:   #4f46e5;
+      --glow:     rgba(99,102,241,0.30);
+      --light:    #818cf8;
+      --cyan:     #22d3ee;
+      --text:     #f0f4fc;
+      --muted:    #94a3b8;
+      --dim:      #475569;
+    }
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 60px 24px; position: relative; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+    
+    .bg-grid {
+      position: fixed; inset: 0; pointer-events: none; z-index: 0;
+      background-image: linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+                        linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px);
+      background-size: 48px 48px;
+    }
+    .orb { position: fixed; border-radius: 50%; filter: blur(130px); pointer-events: none; z-index: 0; }
+    .orb-1 { width: 500px; height: 500px; background: radial-gradient(circle, rgba(99,102,241,0.08) 0%, transparent 70%); top: -100px; left: -100px; }
+    
+    .card {
+      max-width: 800px; width: 100%; background: var(--bg2); border: 1px solid var(--border); border-radius: 20px; padding: 40px; z-index: 10; position: relative; box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+    }
+    
+    .h1 { font-family: 'Syne', sans-serif; font-size: clamp(2rem, 4vw, 3rem); font-weight: 800; margin-bottom: 8px; background: linear-gradient(135deg, #a5b4fc 0%, #818cf8 30%, #22d3ee 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text; }
+    .subtitle { color: var(--muted); font-size: 0.95rem; margin-bottom: 30px; display: block; }
+    
+    h2 { font-family: 'Syne', sans-serif; font-size: 1.4rem; font-weight: 700; margin: 30px 0 12px; color: var(--light); }
+    p { color: var(--muted); margin-bottom: 16px; font-size: 0.98rem; }
+    ul { margin-left: 20px; margin-bottom: 16px; color: var(--muted); }
+    li { margin-bottom: 8px; }
+    
+    .disclaimer-box {
+      background: rgba(245,158,11,0.06); border: 1px solid rgba(245,158,11,0.25); border-radius: 12px; padding: 20px; margin: 24px 0; color: #f59e0b;
+    }
+    
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      padding: 12px 24px; border-radius: 10px; font-size: 0.9rem; font-weight: 700; cursor: pointer; border: none;
+      background: linear-gradient(135deg, var(--brand), var(--brand2)); color: #fff; text-decoration: none; margin-top: 30px;
+      transition: all 0.2s ease;
+    }
+    .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 24px var(--glow); }
+  </style>
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <div class="orb orb-1"></div>
+  
+  <main class="card">
+    <h1 class="h1">Frequently Asked Questions</h1>
+    <span class="subtitle">ListAI Pro — the top 20, answered plainly</span>
+    <h2>1. What counts as one listing?</h2>
+    <p>One completed AI generation. Edits are free, and a generation that fails is never counted. Your counter only moves when you actually receive a listing.</p>
+    <h2>2. How does the free tier work?</h2>
+    <p>Free accounts get 10 generations a month, and they run on your own Google Gemini API key (free from Google AI Studio). Save your key in Settings → the app shows it masked and never displays it in full. Without a saved key, free accounts can't generate — that's what keeps the free tier free to operate.</p>
+    <h2>3. How do I get a Gemini API key?</h2>
+    <p>Go to Google AI Studio (aistudio.google.com), sign in, and choose 'Get API key'. It's free. Paste it into ListAI Pro under Settings. The in-app guide walks you through it.</p>
+    <h2>4. Where does the suggested price come from?</h2>
+    <p>Live sold-listing comparables for the item the AI identified. The price always arrives with the comps behind it — open the panel and check the evidence before you trust the number.</p>
+    <h2>5. Which marketplaces can I publish to?</h2>
+    <p>eBay directly. Shopify, WooCommerce, and Etsy are built-in cross-posts. Mercari and Poshmark don't offer real posting APIs, so ListAI generates formatted export files for them instead of pretending to post.</p>
+    <h2>6. Is my eBay account safe?</h2>
+    <p>We connect through eBay's official OAuth — never your password — and nothing publishes without you approving the draft. There is no auto-publish mode.</p>
+    <h2>7. What's the refund policy?</h2>
+    <p>Subscription fees are non-refundable except where the law requires it. Duplicate or erroneous charges are always refunded in full. If the service is materially broken in your first 7 days and we can't fix it, contact support for a refund of that first payment. Full text: Terms of Service, section 4.</p>
+    <h2>8. How do I cancel?</h2>
+    <p>Dashboard → Billing → Cancel, or through the Stripe billing portal linked there. Cancellation takes effect at the end of the paid period; you keep access until then. No email-to-support required.</p>
+    <h2>9. Do unused listings roll over?</h2>
+    <p>Plan allotments are per calendar month and reset monthly. (If rollover matters to you, tell support — it's the most-requested policy question and it's under active consideration.)</p>
+    <h2>10. What are team seats?</h2>
+    <p>Power Seller includes team seats so up to 3 people can work in one workspace. Invite from the Team section; members you invite get their own sign-ins.</p>
+    <h2>11. I'm on a paid plan and hit my cap. Now what?</h2>
+    <p>You can plug in your own Gemini key (Settings) and keep generating past the cap — generations on your key aren't counted against your plan. Or upgrade; Pro is 300/month, Power Seller 1,000.</p>
+    <h2>12. What happens to my photos?</h2>
+    <p>They're processed by Google Gemini to build your listing and, when you publish to eBay, temporarily hosted (tmpfiles.org / file.io) so eBay can fetch them. The Privacy Policy names every processor — no vague 'service providers' language.</p>
+    <h2>13. Do you train AI on my listings?</h2>
+    <p>No. Your content is processed to serve you and is not used to train models by us.</p>
+    <h2>14. The AI got my item wrong. What now?</h2>
+    <p>Regenerate with a clearer photo of the label, tag, or serial plate — identification drives everything downstream, including price. And edit the draft freely; it's yours.</p>
+    <h2>15. A generation failed. Was I charged a listing?</h2>
+    <p>No. Only completed generations count. If failures repeat, check the error code shown — a rejected API key (yours or expired) is the common cause, and the message says so plainly.</p>
+    <h2>16. How does the Chrome extension work?</h2>
+    <p>It scrapes the product page you're viewing and saves it as a draft in your ListAI dashboard. It needs your server's operator API key: extension Settings → paste the API_KEY from your server .env. The extension ships with no built-in key.</p>
+    <h2>17. Can I import my existing inventory?</h2>
+    <p>Yes — CSV import and batch generation are built in. See the dashboard's Import section for the column format.</p>
+    <h2>18. How do I delete my account and data?</h2>
+    <p>Dashboard → delete account, or call DELETE /api/user/account. It removes your profile, subscription and usage records, saved API key, and team data.</p>
+    <h2>19. Who runs ListAI Pro?</h2>
+    <p>One person: Vincent Kinney, a solo founder and practicing reseller in San Antonio, Texas. Support reaches him personally.</p>
+    <h2>20. How do I reach support?</h2>
+    <p>Through the support contact published in the dashboard. Response target: within 2 business days, usually much faster — and the person answering wrote the code.</p>
+    <a href="/" class="btn">Return to Dashboard</a>
+  </main>
+</body>
+</html>

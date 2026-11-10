@@ -157,6 +157,7 @@ async function runInventoryCrossSync() {
 }
 
 const crypto = require('crypto');
+const emailModule = require('./email');
 
 // [WAVE1-B] Allowed statuses for bulk updates (subset of statuses used in history).
 const BULK_ALLOWED_STATUSES = ["ACTIVE", "DRAFT", "ENDED", "SOLD"];
@@ -1541,6 +1542,10 @@ function startWebGuiServer(port = 45900) {
         res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
         res.setHeader('X-XSS-Protection', '1; mode=block');
         res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+        // [ATLAS-R4] HSTS was the one standard header missing. Browsers
+        // ignore it over plain HTTP (local dev); behind HTTPS termination
+        // (Railway) it pins clients to HTTPS for a year.
+        res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
 
         if (req.method === 'OPTIONS') {
           res.writeHead(200);
@@ -1607,6 +1612,7 @@ function startWebGuiServer(port = 45900) {
       '/landing', '/landing.html',
       '/privacy', '/privacy.html',
       '/terms', '/terms.html',
+      '/faq', '/faq.html',
       '/press', '/press.html',
       '/health',
       '/api/status',
@@ -1641,7 +1647,48 @@ function startWebGuiServer(port = 45900) {
       }
       return;
     }
-    
+
+    // [ATLAS-R4] Serve individual press-kit files (/press/<file>) — before
+    // this run the kit existed on disk but every file 404'd; only the press
+    // landing page was reachable. Whitelisted extensions + a hard traversal
+    // guard keep this from becoming a generic file server.
+    if (req.method === 'GET' && parsedUrl.pathname.startsWith('/press/')) {
+      const pressDir = path.join(__dirname, 'public', 'press');
+      const rel = decodeURIComponent(parsedUrl.pathname.slice('/press/'.length));
+      const ext = path.extname(rel).toLowerCase();
+      const PRESS_TYPES = { '.md': 'text/markdown; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.gif': 'image/gif' };
+      const filePath = path.join(pressDir, rel);
+      if (!PRESS_TYPES[ext] || rel.includes('..') || !filePath.startsWith(pressDir)) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not found');
+        return;
+      }
+      try {
+        const content = fs.readFileSync(filePath);
+        res.writeHead(200, { 'Content-Type': PRESS_TYPES[ext] });
+        res.end(content);
+      } catch (err) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not found');
+      }
+      return;
+    }
+
+    // [ATLAS-R4] SEO basics that 404'd before this run.
+    if (req.method === 'GET' && parsedUrl.pathname === '/robots.txt') {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(`User-agent: *\nAllow: /\nSitemap: ${getAppBaseUrl(port)}/sitemap.xml\n`);
+      return;
+    }
+    if (req.method === 'GET' && parsedUrl.pathname === '/sitemap.xml') {
+      const base = getAppBaseUrl(port);
+      const pages = ['/', '/landing', '/press', '/terms', '/privacy', '/faq'];
+      const body = `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${pages.map(p => `  <url><loc>${base}${p}</loc></url>`).join('\n')}\n</urlset>\n`;
+      res.writeHead(200, { 'Content-Type': 'application/xml; charset=utf-8' });
+      res.end(body);
+      return;
+    }
+
     // Serve Privacy Page
     if (req.method === 'GET' && (parsedUrl.pathname === '/privacy' || parsedUrl.pathname === '/privacy.html')) {
       const privacyPath = path.join(__dirname, 'public', 'privacy.html');
@@ -1652,6 +1699,20 @@ function startWebGuiServer(port = 45900) {
       } catch (err) {
         res.writeHead(500, { 'Content-Type': 'text/plain' });
         res.end(`Error loading privacy policy: ${err.message}`);
+      }
+      return;
+    }
+
+    // [ATLAS-R4] Serve FAQ Page (Phase 8 support automation)
+    if (req.method === 'GET' && (parsedUrl.pathname === '/faq' || parsedUrl.pathname === '/faq.html')) {
+      const faqPath = path.join(__dirname, 'public', 'faq.html');
+      try {
+        const content = fs.readFileSync(faqPath, 'utf8');
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(content);
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'text/plain' });
+        res.end(`Error loading FAQ: ${err.message}`);
       }
       return;
     }
@@ -2034,6 +2095,14 @@ function startWebGuiServer(port = 45900) {
         const sessionId = crypto.randomBytes(32).toString('hex');
         const userObj = { email, name: userInfo.name, picture: userInfo.picture, isPremium };
         activeSessions.set(sessionId, { user: userObj, expiresAt: Date.now() + 86400000 });
+
+        // [ATLAS-R4] Welcome-email trigger: first time we have ever seen
+        // this account (no billing/usage record existed before this login).
+        // Fire-and-forget; email.js no-ops cleanly until RESEND_API_KEY +
+        // EMAIL_FROM are configured, so this is safe pre-provider.
+        if (!billingHistory[email]) {
+          emailModule.sendWelcomeEmail(email).catch(() => {});
+        }
         
         res.writeHead(302, {
           'Set-Cookie': `sessionId=${sessionId}; Path=/; HttpOnly; SameSite=Lax`,
@@ -2080,6 +2149,22 @@ function startWebGuiServer(port = 45900) {
           delete billingHistory[email];
           utils.writeJsonFileSecure(billingDbPath, billingHistory);
         }
+        // [ATLAS-R4] Account deletion must cover team data too: the user's
+        // own workspace record and their membership in other workspaces.
+        // (Billing record removal above already covers plan, usage counters,
+        // and the saved BYOK Gemini key, which live in that record.)
+        try {
+          const lower = String(email).toLowerCase();
+          const store = readTeamStore();
+          let changed = false;
+          for (const owner of Object.keys(store)) {
+            if (owner.toLowerCase() === lower) { delete store[owner]; changed = true; continue; }
+            const members = Array.isArray(store[owner].members) ? store[owner].members : [];
+            const kept = members.filter(m => String(m.email || '').toLowerCase() !== lower);
+            if (kept.length !== members.length) { store[owner].members = kept; changed = true; }
+          }
+          if (changed) writeTeamStore(store);
+        } catch (e) { /* best-effort alongside the billing deletion */ }
         utils.logAudit("INFO", `Account data deleted for user: ${email}`);
       }
 
@@ -2087,7 +2172,7 @@ function startWebGuiServer(port = 45900) {
         'Set-Cookie': `sessionId=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT`,
         'Content-Type': 'application/json'
       });
-      res.end(JSON.stringify({ success: true, message: "User session and billing record deleted." }));
+      res.end(JSON.stringify({ success: true, message: "User session, billing record (plan, usage, saved API key), and team data deleted." }));
       return;
     }
 
@@ -3631,6 +3716,21 @@ function startWebGuiServer(port = 45900) {
 
     // API: Save configuration keys
     if (req.method === 'POST' && parsedUrl.pathname === '/api/config/save') {
+      // [ATLAS-R4] This route rewrites the deployment's secrets (.env +
+      // process.env: Stripe, Gemini, eBay, marketplace tokens). It relied
+      // solely on the global auth gate, which is conditional on
+      // GOOGLE_CLIENT_ID being configured — in a clean-env boot the gate
+      // is off and ANY unauthenticated caller could rewrite every secret
+      // (live-proven in the Atlas round-4 run, 2026-10-26). Require the
+      // same per-route authenticated user the generation and BYOK routes
+      // already require. The bootstrap wizard (bootstrap.js) remains the
+      // unauthenticated local first-run setup path; it writes .env
+      // directly and never used this route.
+      if (!user || !user.email) {
+        res.writeHead(401, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "LOGIN_REQUIRED", message: "Please log in to save configuration." }));
+        return;
+      }
       let bodyData = '';
       req.on('data', chunk => bodyData += chunk);
       req.on('end', async () => {

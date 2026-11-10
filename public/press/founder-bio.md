@@ -1,15 +1,10 @@
 # Founder Biography — Vincent Kinney
 
-Vincent Kinney is the creator of eBay Multi-Channel Lister Pro.
+## 1-Line Bio
+Vincent Kinney is an independent software builder and reseller in San Antonio, Texas, and the founder of ListAI Pro.
 
----
+## 50-Word Bio
+Vincent Kinney builds software the way he sells: measure first, ship second. An independent product builder in San Antonio, Texas, and an active e-commerce reseller, he created ListAI Pro after timing his own listing workflow and finding the typing — not the selling — was eating his business.
 
-## ⚡ 50-Word Bio
-Vincent Kinney is an independent developer and active e-commerce reseller. Frustrated by expensive subscription cross-listers and sync lags, he built Lister Pro—a zero-dependency, local-first utility designed to help merchants cross-list and sync inventory privately and securely without monthly fees.
-
----
-
-## ⚡ 150-Word Bio
-Vincent Kinney is a software engineer and e-commerce merchant who has been reselling on eBay and Shopify for over six years. Experiencing first-hand the recurring cost overhead and database security risks of popular cloud-based cross-listing tools, Vincent decided to develop a zero-dependency, local-first alternative. 
-
-Using raw Node.js modules and Windows-native GDI+ scripts, he built eBay Multi-Channel Lister Pro. Vincent's goal is to empower resellers to maintain complete ownership of their listing data and credentials while cutting overhead expenses to zero. He continues to maintain Lister Pro as an open, self-hostable project while providing managed upgrades for premium sellers.
+## 150-Word Bio
+Vincent Kinney is an independent software builder (he prefers "agentic engineer") based in San Antonio, Texas. Working solo, he designs and builds AI-native products end-to-end — and, unusually, sells as a practicing eBay reseller himself, which is where ListAI Pro came from: a timed experiment showed a 20-item listing batch took over three hours, almost none of it photography. His approach to products is verification-first: ListAI Pro's launch was deliberately delayed while an automated audit he runs ("Atlas") proved out real billing-security holes in the app, and it shipped only after those were fixed and covered by tests. He writes publicly about building and selling as a solo founder, including the numbers when they're unflattering.

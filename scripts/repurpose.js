@@ -1,77 +1,45 @@
+#!/usr/bin/env node
 /**
- * @file repurpose.js
- * @description Content Repurposing Engine for Phase 6. Takes a pillar post draft and formats it into multiple channels.
+ * repurpose.js — Atlas Phase 6 content repurposing engine.
+ * (The module spec names repurpose.ts; this codebase is CommonJS Node, so
+ * the script ships as .js to run with zero build step.)
+ *
+ * Takes a pillar post (markdown) and emits derivative drafts:
+ *   1. an X thread (hook + one post per H2 section + CTA)
+ *   2. a short post (first ~240 chars of the intro, tightened)
+ *   3. a newsletter section (intro + section bullets + link line)
+ *
+ * Usage: node scripts/repurpose.js <pillar.md> [productUrl]
+ * Output: markdown to stdout. Drafts, not auto-posts — a human fires them.
  */
-
+'use strict';
 const fs = require('fs');
-const path = require('path');
 
-function repurposePillarText(title, valuePoints, ctaUrl) {
-  const cleanTitle = title.trim();
-  const points = valuePoints.map(p => p.trim());
-  const url = ctaUrl.trim();
+function main() {
+  const file = process.argv[2];
+  if (!file) { console.error('usage: node scripts/repurpose.js <pillar.md> [productUrl]'); process.exit(1); }
+  const url = process.argv[3] || '';
+  const md = fs.readFileSync(file, 'utf8');
+  const title = (md.match(/^#\s+(.+)$/m) || [null, 'Untitled'])[1].trim();
+  const sections = [];
+  const re = /^##\s+(.+)$/gm;
+  let m;
+  while ((m = re.exec(md)) !== null) sections.push(m[1].trim());
+  const intro = md.split(/^##\s+/m)[0].replace(/^#.*$/m, '').trim().replace(/\s+/g, ' ');
 
-  // 1. Format for Twitter/X Thread
-  let twitterThread = `🧵 NEW PILLAR: ${cleanTitle}\n\nHere is what you need to know:\n\n`;
-  points.forEach((p, idx) => {
-    twitterThread += `${idx + 1}/ ${p}\n\n`;
-  });
-  twitterThread += `Read the full guide here: ${url}`;
-
-  // 2. Format for LinkedIn (Long-form)
-  let linkedinPost = `⚡ ${cleanTitle.toUpperCase()} ⚡\n\n`;
-  linkedinPost += `Reselling inventory across platforms is painful. Success comes down to focus and data control.\n\n`;
-  linkedinPost += `Here are the key takeaways:\n\n`;
-  points.forEach(p => {
-    linkedinPost += `👉 ${p}\n`;
-  });
-  linkedinPost += `\nWhat is your experience managing cross-listing feeds? Let's discuss in the comments.\n\n`;
-  linkedinPost += `Learn more about local-first cross-listing: ${url}`;
-
-  // 3. Format for Instagram/Carousel text
-  let instagramPost = `⚡ ${cleanTitle} ⚡\n\n`;
-  points.forEach((p, idx) => {
-    instagramPost += `Slide ${idx + 2}: ${p}\n`;
-  });
-  instagramPost += `\n🔗 Link in Bio to read more: ${url}\n\n#reselling #ebaylister #shopify #dropshipping #ecommerce`;
-
-  return {
-    twitterThread,
-    linkedinPost,
-    instagramPost
-  };
+  const out = [];
+  out.push(`# Repurposed derivatives — "${title}"\n`);
+  out.push('## X thread');
+  out.push(`1/ ${title} — the full version is linked at the end. What I actually learned writing it:`);
+  sections.slice(0, 5).forEach((s, i) => out.push(`${i + 2}/ ${s}`));
+  out.push(`${Math.min(sections.length, 5) + 2}/ Full piece${url ? `: ${url}` : ' (link the pillar post here)'}. Replies with your numbers are the best part of these.`);
+  out.push('\n## Short post');
+  out.push(intro.length > 240 ? intro.slice(0, 237).trimEnd() + '…' : intro);
+  out.push('\n## Newsletter section');
+  out.push(`### ${title}`);
+  out.push(intro);
+  sections.forEach(s => out.push(`- ${s}`));
+  out.push(url ? `\nRead the full piece: ${url}` : '\n(link the pillar post)');
+  console.log(out.join('\n'));
 }
-
-// CLI Execution Support
-if (require.main === module) {
-  const args = process.argv.slice(2);
-  if (args.length < 1) {
-    console.log("Usage: node scripts/repurpose.js \"<Pillar Title>\" \"<Point1|Point2|Point3>\" \"<CTA URL>\"");
-    process.exit(1);
-  }
-
-  const title = args[0] || "Zero-Dependency Multi-Channel Lister";
-  const rawPoints = args[1] || "Eliminate package bloat|Keep store credentials local|Concurrently upload to major platforms";
-  const url = args[2] || "https://ebaylisterpro.com";
-
-  const points = rawPoints.split('|');
-  const results = repurposePillarText(title, points, url);
-
-  console.log("\n======================================================");
-  console.log("🐦 TWITTER/X THREAD DRAFT");
-  console.log("======================================================");
-  console.log(results.twitterThread);
-
-  console.log("\n======================================================");
-  console.log("💼 LINKEDIN LONG-FORM DRAFT");
-  console.log("======================================================");
-  console.log(results.linkedinPost);
-
-  console.log("\n======================================================");
-  console.log("📸 INSTAGRAM CAROUSEL TEXT DRAFT");
-  console.log("======================================================");
-  console.log(results.instagramPost);
-  console.log("======================================================\n");
-}
-
-module.exports = { repurposePillarText };
+main();

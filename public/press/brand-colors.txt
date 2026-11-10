@@ -1,4 +1,4 @@
-eBay Multi-Channel Lister Pro Brand Colors (HEX):
+ListAI Pro Brand Colors (HEX):
 
 - Primary Background: #050810 (Navy Dark)
 - Secondary Background: #0a1120
