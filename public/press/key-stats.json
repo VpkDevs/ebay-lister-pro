@@ -1,0 +1,9 @@
+{
+  "updated_at": "2026-10-26",
+  "status": "pre-launch",
+  "users": 0,
+  "paying_customers": 0,
+  "mrr_usd": 0,
+  "pricing": { "pro_usd_month": 19, "pro_listings": 300, "power_seller_usd_month": 49, "power_seller_listings": 1000, "free_listings_per_month": 10, "free_tier_requires": "user's own Gemini API key" },
+  "engineering": { "test_suite": "182/182 passing (run clone, 2026-10-26)", "pre_launch_audit": "full Atlas pass; launch blocked until billing-security findings fixed" }
+}

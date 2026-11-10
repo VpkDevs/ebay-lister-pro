@@ -154,7 +154,9 @@ module.exports = {
   /** @returns {string|undefined} */
   getGOOGLE_CLIENT_SECRET: () => process.env.GOOGLE_CLIENT_SECRET,
   /** @returns {string} */
-  getGOOGLE_REDIRECT_URI: () => process.env.GOOGLE_REDIRECT_URI || "http://localhost:45911/api/auth/google/callback",
+  // [ATLAS-R4] Default aligned to the server's default port (45900). The old
+  // 45911 default guaranteed a broken Google login on a default install.
+  getGOOGLE_REDIRECT_URI: () => process.env.GOOGLE_REDIRECT_URI || "http://localhost:45900/api/auth/google/callback",
   /** @returns {string|undefined} */
   getSTRIPE_SECRET_KEY: () => process.env.STRIPE_SECRET_KEY,
   /** @returns {string|undefined} */

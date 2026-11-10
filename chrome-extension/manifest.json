@@ -5,9 +5,11 @@
   "description": "Scrapes product pages from Amazon, eBay, Shopify, Poshmark, and Mercari, and saves them directly as drafts on your local multichannel dashboard.",
   "permissions": [
     "activeTab",
-    "scripting"
+    "scripting",
+    "storage"
   ],
   "host_permissions": [
+    "http://127.0.0.1:45900/*",
     "http://127.0.0.1:45911/*",
     "<all_urls>"
   ],

@@ -1,33 +1,41 @@
-# Compliance Checklist
+# ListAI Pro — Compliance Checklist (Atlas Phase 3, 2026-10-26)
 
-This checklist tracks ongoing compliance obligations and audit points for **eBay Multi-Channel Lister Pro**.
+Product category: SaaS (subscription web app) + AI content generation +
+marketplace publishing + browser extension. Founder jurisdiction: Texas, US.
+Users may be anywhere (GDPR/CCPA handled by design, see below).
 
----
+## Documents & routes
+- [x] Terms of Service — product-specific, served at `/terms` (public/terms.html; canonical text: docs/legal/TERMS_OF_SERVICE.md)
+- [x] Privacy Policy — names actual processors, served at `/privacy` (public/privacy.html; canonical: docs/legal/PRIVACY_POLICY.md)
+- [x] Refund policy stated in ToS §4 *(policy text drafted by Atlas in the 2026-10-26 run; confirmed by founder 2026-11-10)*
+- [x] AI output disclaimer in ToS §6 (FTC guidance + EU AI Act transparency) ✅ High confidence
+- [x] AI processing disclosure in Privacy §2 (provider, data types, purpose, opt-out) ✅ High confidence
+- [x] Governing law: Texas (ToS §9) ✅ High confidence
+- [ ] **Lawyer review recommended** before scale: ToS §8 liability cap + §4 refund policy — ⚠️ Medium confidence (standard shapes, jurisdiction-dependent)
 
-## 🚦 Regulatory Audits & Status
+## Data rights
+- [x] Account deletion endpoint `DELETE /api/user/account` — deletes session, billing/usage record, saved BYOK key, and (since this run) team data; covered by regression tests
+- [x] No advertising/analytics cookies → no consent banner required; one functional session cookie disclosed in Privacy §4
+- [x] Data-sale posture: none (no sale of personal data; CCPA "sale" opt-out N/A, disclosed)
 
-### 1. FTC AI & Marketing Compliance
-- [x] AI-generated disclaimer text placed adjacent to comp results and suggestions.
-- [x] Clear warning to verify pricing, aspects, and category suggestions manually.
-- [x] Marketing claims (e.g., in README/landing page) verified to avoid inflating AI accuracy.
+## Category obligations
+- [ ] **DMCA designated agent registration** — userMust `um-dmca-agent` (founder step, $6, ~15 min, copyright.gov). Product processes user photos = UGC-adjacent. ToS §5 carries the takedown procedure; safe harbor starts at registration.
+- [x] Marketplace rules: acceptable-use clause covers VeRO/counterfeit/restricted items (ToS §3)
+- [x] Extension: manifest permissions are activeTab/scripting/storage + hosts; extension stores the operator key in browser-local storage only (fixed this run); Chrome Web Store privacy disclosure must match Privacy Policy when listed — ⚠️ at listing time
+- [x] CAN-SPAM: no marketing email is sent by the product today; if added, include address + opt-out — ongoing obligation below
 
-### 2. GDPR/CCPA Data Governance
-- [x] Implemented `DELETE /api/user/account` endpoint to wipe user session and Stripe mapping.
-- [x] Privacy Policy specifically names third-party services (Stripe, Google OAuth, Gemini, Shopify, Etsy, WooCommerce).
-- [x] Data storage uses secure file locks and clean local folder separation.
+## Risk radar (Phase 3)
+| Risk | Sev | Likelihood | Fix | Owner |
+|---|---|---|---|---|
+| Photos pass through third-party temp hosts (tmpfiles.org/file.io) at eBay publish | 🟡 Med | Certain (by design) | Disclosed in Privacy §3; consider eBay's own image service (EPS) post-launch | Atlas disclosed; founder roadmap |
+| AI-generated listing errors → marketplace policy strikes against sellers | 🟡 Med | Medium | ToS §6 disclaimer + review-before-publish design; never auto-publish | Done |
+| EU AI Act transparency for AI output | 🟢 Low | Low (minimal-risk category) | Disclaimer + "Powered by AI" disclosures in place | Done |
+| Stripe tax/VAT obligations as sales grow | 🟡 Med | Medium | Stripe Tax evaluation at first revenue; Texas SaaS taxability check | Founder/accountant at revenue |
+| WCAG 2.1 AA full compliance | 🟡 Med | — | Automated pass done (all imgs have alt); contrast + keyboard-nav manual review still open | Founder/manual review |
 
-### 3. IP and DMCA Copyright Actions
-- [x] DMCA designated legal agent information listed in the Terms of Service.
-- [x] DMCA notice format requirement instructions documented.
-- [x] VeRO case-insensitive check library updated with 30+ top restricted brands to prevent intellectual property violations on drafts.
-
----
-
-## 📅 Actionable Checklist
-
-| Compliance Area | Action Required | Frequency | Target |
-|---|---|---|---|
-| Privacy Policy Review | Update third-party processors if new channels are integrated | Annual | Vincent Kinney |
-| VeRO Brand List | Fetch and update restricted eBay brand list | Quarterly | Automated script |
-| GDPR Data Requests | Process incoming erase/delete requests within 30 days | On-demand | `DELETE /api/user/account` |
-| Cookie Consent Review | Check if tracking pixels are added | On-demand | Developer |
+## Ongoing obligations
+- GDPR deletion/ access requests: respond ≤30 days (endpoint covers deletion; other requests via support contact)
+- CCPA requests: respond ≤45 days
+- Privacy policy review: annually, and whenever a processor is added/removed
+- If email sending or analytics are ever added: update Privacy §3/§4 and re-run this checklist
+- DMCA: keep agent registration current with the Copyright Office directory

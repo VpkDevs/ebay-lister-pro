@@ -77,10 +77,23 @@ function logAudit(level, message, data = null, traceId = null) {
  */
 function safeResolvePath(targetPath) {
   const resolved = path.resolve(targetPath);
-  const cwd = path.resolve(process.cwd());
-  const relative = path.relative(cwd, resolved);
-  
-  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+  const allowedRoots = [path.resolve(process.cwd())];
+  // [FINDING-B FIX] The configured persistent state root (LISTER_STATE_DIR,
+  // or RAILWAY_VOLUME_MOUNT_PATH on Railway) legitimately lives OUTSIDE the
+  // process working directory in the shipped Docker/Railway layout (WORKDIR
+  // /usr/src/app, state volume mounted at /data). Allow exactly that one
+  // configured root — and nothing else outside cwd — so state reads/writes
+  // (billing, usage, listing history) work in the container without
+  // weakening the traversal guard for arbitrary paths.
+  if (config.stateRoot) {
+    const root = path.resolve(config.stateRoot);
+    if (!allowedRoots.includes(root)) allowedRoots.push(root);
+  }
+  const inside = allowedRoots.some((root) => {
+    const rel = path.relative(root, resolved);
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+  });
+  if (!inside) {
     throw new Error(`Directory traversal attempt detected: ${targetPath}`);
   }
   return resolved;

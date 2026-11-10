@@ -1,36 +1,32 @@
-# Terms of Service
+# Terms of Service — ListAI Pro
+Last Updated: October 26, 2026. Operator: Vincent Kinney. Served at /terms (public/terms.html).
 
-Last Updated: June 25, 2026
+## 1. The Service
+ListAI Pro turns product photos into marketplace listing drafts using AI, helps price them, and publishes them to marketplaces you connect (eBay, Shopify, WooCommerce, Etsy). You review and approve every listing before publication.
 
-Welcome to **eBay Multi-Channel Lister Pro** ("the Service"). Please read these Terms of Service ("Terms") carefully before using the Service.
+## 2. Accounts
+Google sign-in. You are responsible for activity under your account and your team's use of included seats.
 
----
+## 3. Acceptable Use
+No infringing listings (incl. eBay VeRO brands); no bypassing rate limiters or unauthorized scraping; no counterfeit/restricted/hazardous items or marketplace-rule violations; no reselling/sharing account access beyond plan seats.
 
-## 1. Acceptable Use
-You agree not to use the Service to:
-- Publish listings that violate the intellectual property rights of others (including brands listed on the eBay VeRO list).
-- Bypass rate limiting or perform unauthorized crawling or API scraping against the Service or connected marketplace channels.
-- List counterfeit, prohibited, or restricted items as defined by eBay, Shopify, WooCommerce, or Etsy policies.
+## 4. Subscriptions, Billing & Refunds
+Billed in advance via Stripe, auto-renewing monthly until canceled. Pro $19/mo (300 generations/mo); Power Seller $49/mo (1,000/mo); free tier 10/mo on your own Gemini key. Cancel anytime (dashboard or Stripe portal), effective at period end with access until then. **Refunds: fees non-refundable except where required by law; duplicate/erroneous charges refunded in full; material breakage in the first 7 days that we cannot fix is refunded on request.**
 
-## 2. Payment & Subscriptions
-- Premium subscription billing is processed securely via Stripe. 
-- You agree to pay all charges associated with your selected tier.
-- Subscriptions automatically renew monthly unless canceled through the dashboard billing management console.
+## 5. User Content & DMCA
+You own your uploads; we take the limited license to process/publish at your direction. Takedown notices per 17 U.S.C. §512(c)(3) to the DMCA contact published in the dashboard.
 
-## 3. User-Generated Content & DMCA Takedown Notice
-- The Service allows you to upload product images and descriptions ("User Content"). You retain all ownership rights to your User Content.
-- If you believe that any content served by the Service infringes your copyrights, please submit a DMCA takedown notice to:
-  - **Email**: legal@ebaylisterpro.local
-  - **Address**: Attn: Vincent Kinney, Legal Dept., US Central Time Region
-- Your notice must include a physical or electronic signature, identification of the infringed work, identification of the infringing material, and contact details.
+## 6. AI Output Disclaimer
+The Service uses Google Gemini to inspect photos, extract specifications, and suggest prices. AI output may contain errors or invented facts; review before publishing. We are not liable for suspensions, pricing inaccuracies, or losses from unreviewed AI content.
 
-## 4. AI-Generated Output & Disclaimers (FTC Compliance)
-- **AI Processing**: The Service utilizes Google Gemini artificial intelligence to inspect listing images, identify defects, extract aspects, and suggest pricing conditions.
-- **AI Inaccuracy Disclaimer**: **AI output is generated automatically and may contain errors, inaccuracies, or outdated advice. Do not rely on AI-generated suggestions (including suggested comp pricing, aspect extraction, or category suggestions) for critical business or financial decisions without independent verification.**
-- Vincent Kinney and the Service are not liable for any listing suspensions, pricing losses, or business interruptions caused by inaccurate AI recommendations.
+## 7. Termination
+Delete your account anytime (dashboard or DELETE /api/user/account). We may suspend/terminate for Terms violations, with notice where practical. §§5, 6, 8, 9 survive.
 
-## 5. Limitation of Liability
-TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE SERVICE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND. VINCENT KINNEY SHALL NOT BE LIABLE FOR ANY INDIRECT, INCIDENTAL, SPECIAL, OR CONSEQUENTIAL DAMAGES ARISING OUT OF THE USE OR INABILITY TO USE THE SERVICE.
+## 8. Limitation of Liability
+Provided "as is". Liability capped at amounts paid in the prior 12 months; no indirect/incidental/consequential damages, including lost marketplace sales or account standing.
 
-## 6. Governing Law
-These Terms shall be governed by and construed in accordance with the laws of the State of Texas (or US Federal law where applicable), without regard to its conflict of law provisions.
+## 9. Governing Law
+State of Texas, without regard to conflict-of-law provisions.
+
+## 10. Changes & Contact
+Material changes announced in-Service before taking effect. Contact via the support address published in the dashboard.

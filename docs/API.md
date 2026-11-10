@@ -1,244 +1,173 @@
-# 🔌 eBay Multi-Channel Lister Pro — API Documentation
+# ListAI Pro — API Documentation
 
-This document describes all API endpoints exposed by the zero-dependency web dashboard server (default port: `45900`).
+The HTTP API exposed by `webServer.js` (default port **45900**, override with `PORT`).
 
----
-
-## 🔒 Authentication & Rate Limits
-
-1. **Local Authentication Mode**:
-   - Exposes access tokens using the `X-Lister-API-Key` HTTP Header or `?apiKey=` query parameter.
-   - When `GOOGLE_CLIENT_ID` is set, non-open routes require a valid `sessionId` cookie generated via Google Sign-In.
-2. **Rate Limiting**:
-   - Standard endpoints: Token bucket rate limited (60 requests/minute per client IP).
-   - `/api/analyze` endpoint: 5 requests/minute per client IP to prevent AI billing spikes.
+> Regenerated in the Atlas round-4 run (2026-10-26) from the actual route
+> handlers in `webServer.js`. The previous version described a removed
+> "local authentication mode" and a product name that is no longer used.
+> The endpoint inventory below is complete (66 method+path pairs); detailed
+> request/response notes are included for the primary flows and were
+> verified live or against the test suite during the run.
 
 ---
 
-## 📂 Endpoints Directory
+## Authentication & Rate Limits
 
-### 1. General & System Routes
+Two identities exist:
 
-#### `GET /health`
-- **Description**: Lightweight health status endpoint for load balancers/monitors.
-- **Authentication**: None (Bypassed)
-- **Response Shape**:
-  ```json
-  {
-    "status": "ok",
-    "timestamp": "2026-06-25T17:00:00.000Z",
-    "version": "1.0.0"
-  }
-  ```
+1. **Google session** — a `sessionId` cookie issued by `/api/auth/google/callback`
+   after Google Sign-In. Requires `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+   If Google Sign-In is not configured, the login route fails closed (503
+   `LOGIN_NOT_CONFIGURED`) — it never mints a session.
+2. **Operator API key** — the `x-lister-api-key` header (or `?apiKey=`) is
+   accepted **only** when the operator has configured `API_KEY`. There is no
+   shipped default key: an unconfigured deployment accepts no key, and a bare
+   or wrong header never authenticates. This identity represents the operator
+   (used by the Chrome extension) and is premium.
 
-#### `GET /api/status`
-- **Description**: Returns circuit breaker connectivity details, pre-flight diagnostics, and channel authentication status.
-- **Authentication**: None (Bypassed)
-- **Response Shape**:
-  ```json
-  {
-    "status": "CONNECTED",
-    "circuitBreaker": {
-      "active": false,
-      "failures": 0,
-      "lastFailureTime": 0
-    },
-    "diagnostics": "OK",
-    "ebayAuthenticated": true,
-    "shopifyConnected": false
-  }
-  ```
+Enforcement, precisely:
 
-#### `GET /api/metrics`
-- **Description**: Returns latency histograms, CPU usage, memory heap allocations, and request metrics.
-- **Authentication**: None (Bypassed)
-- **Response Shape**:
-  ```json
-  {
-    "uptime": 125,
-    "totalRequests": 14,
-    "endpointCounts": { "GET /api/status": 10 },
-    "endpointErrors": {},
-    "latency": {},
-    "memory": { "rss": 42000000, "heapUsed": 15000000 },
-    "cpu": { "user": 12000, "system": 4000 }
-  }
-  ```
+- A global gate requires one of the above identities for every non-open
+  route **when `GOOGLE_CLIENT_ID` is configured**.
+- Generation, billing, team, BYOK-key, and config routes additionally check
+  the identity **inside the handler** and refuse anonymous calls (401
+  `LOGIN_REQUIRED`) in every configuration. `/api/config/save` gained its
+  in-handler check in the Atlas round-4 run — before it, the route relied
+  solely on the conditional global gate and rewrote deployment secrets for
+  anonymous callers in clean-env boots.
+- **Operational consequence:** a production deployment MUST set
+  `GOOGLE_CLIENT_ID` (plus `APP_URL` and `GOOGLE_REDIRECT_URI` matching the
+  real port/host) — without it, routes that rely on the global gate alone
+  are unauthenticated. See `docs/founder/RUNBOOK.md`.
 
-#### `GET /api/logs`
-- **Description**: Returns the active local structured audit log tail.
-- **Authentication**: Required
-- **Response Shape**:
-  ```json
-  {
-    "logs": "[2026-06-25 12:00:00] INFO: Server started on port 45900\n"
-  }
-  ```
+Open routes (no identity): `/health`, `/api/status`, `/api/metrics`,
+`/api/auth/google/login`, `/api/auth/google/callback`, `/api/billing/webhook`
+(Stripe-signature verified instead), and the static pages.
 
-#### `POST /api/logs` | `DELETE /api/logs`
-- **Description**: Writes a custom message to the audit log (POST) or clears the log file (DELETE).
-- **Authentication**: Required
-- **Payload (POST)**: `{"level": "INFO", "message": "Custom event"}`
-- **Response Shape**: `{"success": true}`
+Rate limiting (token bucket, per client IP): standard routes — capacity 60,
+refill 1/sec; `POST /api/analyze` — capacity 5, refill 5 per 60s.
 
 ---
 
-### 2. User Authentication & Billing
+## Primary flows
 
-#### `GET /api/auth/google/login`
-- **Description**: Redirects users to the Google Accounts consent page. In local development without Google credentials, it automatically logs in a mock user and redirects home.
-- **Authentication**: None (Bypassed)
+### `POST /api/analyze` — photo → listing generation (metered)
+Body: `{ images: [data-URL or URL, ...], ... }`. Requires an authenticated
+user. Counts 1 against the caller's monthly allotment when it completes
+(Pro 300/mo, Power Seller 1,000/mo; free accounts generate only on their own
+saved Gemini key, 10/mo). Anonymous → 401 `LOGIN_REQUIRED`. At cap without a
+saved key → 403 (`LISTING_LIMIT_REACHED` / `SUBSCRIPTION_REQUIRED`). Runs
+without any eBay connection — eBay is only needed at publish time.
 
-#### `GET /api/auth/google/callback`
-- **Description**: OAuth authorization code flow callback. Exchange code for Google ID token, checks billing database, registers a session, and sets a cookie.
-- **Authentication**: None (Bypassed)
-- **Query Params**: `?code=OAUTH_CODE`
+### `GET /api/ebay/import?itemIdOrUrl=...` — import or keyword generation
+Imports an existing eBay item by ID/URL (not a generation). On a miss, falls
+back to AI keyword generation, which is metered exactly like `/api/analyze`
+and refuses anonymous callers.
 
-#### `POST /api/auth/logout`
-- **Description**: Destroys active user session.
-- **Authentication**: Required
-- **Response Shape**: `{"success": true}`
+### Billing
+- `POST /api/billing/create-checkout-session` `{ plan: "pro" | "power_seller" }`
+  → `{ url }`. Fails closed (503 `BILLING_NOT_CONFIGURED`) when Stripe is not
+  configured — there is no mock checkout. Amounts come from the plan config
+  (Pro $19.00, Power Seller $49.00) and the session carries `metadata.plan`.
+- `POST /api/billing/webhook` — Stripe webhook. Signature-verified whenever
+  Stripe is configured; unsigned or unverifiable events are rejected.
+  Handles checkout completion, subscription sync, cancellation, and
+  past-due revocation.
+- `POST /api/billing/cancel`, `POST /api/billing/portal` — act on the
+  signed-in user's own subscription only (in-handler identity check).
 
-#### `GET /api/auth/session`
-- **Description**: Checks session viability and returns current user details and feature flags.
-- **Authentication**: None (Bypassed)
-- **Response Shape**:
-  ```json
-  {
-    "authenticated": true,
-    "user": {
-      "email": "vincekinney1991@proton.me",
-      "name": "Vincent Kinney",
-      "isPremium": true
-    },
-    "googleLoginEnabled": false
-  }
-  ```
+### BYOK (bring your own key)
+- `GET /api/user/gemini-key` → masked status only (never returns the key).
+- `POST /api/user/gemini-key` `{ apiKey }` — saves the caller's own Gemini key.
+- `DELETE /api/user/gemini-key` — clears it.
+A rejected user key produces a coded error (`USER_KEY_REJECTED` /
+`USER_KEY_FAILED`); generation never falls back to the house key silently.
 
-#### `POST /api/billing/create-checkout-session`
-- **Description**: Initiates a Stripe Checkout Session for Lister Pro Premium. If `STRIPE_SECRET_KEY` is not configured, it redirects to a local mock success route.
-- **Authentication**: Required
-- **Response Shape**: `{"url": "https://checkout.stripe.com/..."}`
+### `POST /api/config/save` — operator configuration (secrets)
+Writes allow-listed keys to `.env` + `process.env` (Stripe, Gemini, eBay,
+marketplace tokens, preferences). **Requires an authenticated user
+(session or operator key) in every configuration** — see the auth section
+for the history. First-run local setup should use `node bootstrap.js`,
+which writes `.env` directly.
 
-#### `POST /api/billing/webhook`
-- **Description**: Receives incoming Stripe events (`checkout.session.completed` and `customer.subscription.deleted`) to manage subscriber entitlements.
-- **Authentication**: Cryptographic signature validation via `stripe-signature` header.
-
----
-
-### 3. Listing & Analysis Operations
-
-#### `POST /api/analyze`
-- **Description**: Triggers Google Gemini Vision AI to inspect local images, detect condition defects, extract model aspects, and look up matching UPC comps.
-- **Authentication**: Required
-- **Payload**:
-  ```json
-  {
-    "images": ["image1.jpg", "image2.jpg"],
-    "notes": "Optional extra item details"
-  }
-  ```
-- **Response Shape**:
-  ```json
-  {
-    "title": "Nike Air Max 90 Running Shoes Size 10",
-    "brand": "Nike",
-    "model": "Air Max 90",
-    "detectedUPC": "194956839211",
-    "flaws": "Minor scuffs on outsole",
-    "suggestedPrice": 59.99
-  }
-  ```
-
-#### `POST /api/publish`
-- **Description**: Concurrently cross-lists an item to eBay, Shopify, WooCommerce, and Etsy.
-- **Authentication**: Required
-- **Payload**:
-  ```json
-  {
-    "sku": "NIKE-AM90-001",
-    "listing": {
-      "title": "Nike Air Max 90 Size 10",
-      "description": "Nike Air Max 90 in excellent condition.",
-      "suggestedPrice": 59.99,
-      "brand": "Nike",
-      "model": "Air Max 90",
-      "upc": "194956839211",
-      "condition": "USED_EXCELLENT"
-    },
-    "imageUrls": ["https://tmpfiles.org/dl/..."],
-    "platforms": ["ebay", "shopify", "woocommerce", "etsy"]
-  }
-  ```
-- **Response Shape**:
-  ```json
-  {
-    "success": true,
-    "sku": "NIKE-AM90-001",
-    "ebay": { "success": true, "id": "110293849102" },
-    "shopify": { "success": true, "id": "9028381928" },
-    "woocommerce": { "success": true, "id": 1042 },
-    "etsy": { "success": true, "id": "182938492" }
-  }
-  ```
-
-#### `POST /api/save-draft`
-- **Description**: Saves or overwrites a draft listing to the local history database.
-- **Authentication**: Required
-- **Payload**: Same as `POST /api/publish` payload.
-- **Response Shape**: `{"success": true, "sku": "NIKE-AM90-001"}`
-
-#### `POST /api/publish-draft`
-- **Description**: Publishes an existing saved draft to active listings across channels.
-- **Authentication**: Required
-- **Payload**: `{"sku": "NIKE-AM90-001", "platforms": ["ebay"]}`
-
-#### `POST /api/end-listing`
-- **Description**: Withdraws and ends an active listing from eBay.
-- **Authentication**: Required
-- **Payload**: `{"sku": "NIKE-AM90-001", "offerId": "10029384910"}`
-- **Response Shape**: `{"success": true}`
-
-#### `GET /api/history`
-- **Description**: Returns all saved listings history.
-- **Authentication**: Required
-- **Response Shape**:
-  ```json
-  {
-    "listings": [
-      {
-        "sku": "NIKE-AM90-001",
-        "title": "Nike Air Max 90",
-        "status": "ACTIVE",
-        "ebayId": "110293849102"
-      }
-    ]
-  }
-  ```
-
-#### `POST /api/sync`
-- **Description**: Triggers a manual inventory sync from your active eBay listings.
-- **Authentication**: Required
+### `GET /health`
+Rich health report: `{ status, timestamp, version, details: { storage, system, ... } }`.
 
 ---
 
-### 4. Cross-Posting Platform Specifics
+## Complete endpoint inventory
 
-#### `POST /api/publish/woocommerce`
-- **Description**: Publishes direct product payload to WooCommerce.
-- **Authentication**: Required
-- **Payload**: `{"sku": "SKU", "listing": {...}, "imageUrls": [...]}`
+Auth key: **Open** = no identity · **Handler** = identity checked inside the
+route handler (all configurations) · **Gate** = identity required via the
+global gate (only when `GOOGLE_CLIENT_ID` is configured — see warning above).
 
-#### `POST /api/publish/etsy`
-- **Description**: Publishes direct product payload to Etsy. Truncates titles to Etsy's 140 character limit.
-- **Authentication**: Required
+| Method | Path | Auth |
+|---|---|---|
+| GET | /api/status | Open |
+| GET | /api/metrics | Open |
+| GET | /api/auth/google/login | Open |
+| GET | /api/auth/google/callback | Open |
+| POST | /api/billing/webhook | Open (Stripe signature) |
+| POST | /api/analyze | Handler |
+| GET | /api/analyze | Gate |
+| GET | /api/ebay/import | Handler (AI fallback) |
+| POST | /api/billing/cancel | Handler |
+| POST | /api/billing/portal | Handler |
+| GET | /api/team | Handler |
+| POST | /api/team/invite | Handler |
+| POST | /api/team/remove | Handler |
+| POST | /api/team/accept | Handler |
+| POST | /api/team/leave | Handler |
+| GET | /api/user/gemini-key | Handler |
+| POST | /api/user/gemini-key | Handler |
+| DELETE | /api/user/gemini-key | Handler |
+| POST | /api/config/save | Handler (since Atlas R4) |
+| GET | /api/auth/session | Gate |
+| POST | /api/auth/logout | Gate |
+| GET | /api/auth/ebay/login | Gate |
+| GET | /api/auth/ebay/callback | Gate |
+| POST | /api/billing/create-checkout-session | Gate (+ handler billing checks) |
+| GET | /api/categories/search | Gate |
+| GET | /api/dlq | Gate |
+| POST | /api/dlq/action | Gate |
+| POST | /api/dlq/process | Gate |
+| POST | /api/draft/autosave | Gate |
+| GET | /api/ebay/aspects | Gate |
+| GET | /api/ebay/conditions | Gate |
+| GET | /api/ebay/location | Gate |
+| POST | /api/ebay/location | Gate |
+| GET | /api/ebay/marketing/summary | Gate |
+| GET | /api/ebay/policies | Gate |
+| POST | /api/end-listing | Gate |
+| POST | /api/enhance | Gate (+ handler generation checks) |
+| GET | /api/history | Gate |
+| DELETE | /api/history | Gate |
+| POST | /api/images/import-urls | Gate |
+| GET | /api/images/spruce | Gate |
+| POST | /api/images/spruce | Gate |
+| POST | /api/listings/bulk-status | Gate |
+| GET | /api/listings/export.csv | Gate |
+| POST | /api/listings/import | Gate |
+| POST | /api/export/mercari | Gate |
+| POST | /api/export/poshmark | Gate |
+| GET | /api/logs | Gate |
+| POST/DELETE | /api/logs | Gate |
+| GET | /api/logs/stream | Gate |
+| GET | /api/notifications | Gate |
+| POST | /api/notifications/dismiss | Gate |
+| POST | /api/offers/auto-send | Gate |
+| POST | /api/publish | Gate (+ handler checks) |
+| POST | /api/publish-draft | Gate (+ handler checks) |
+| POST | /api/publish/etsy | Gate |
+| POST | /api/publish/woocommerce | Gate |
+| POST | /api/relist | Gate |
+| POST | /api/repricer | Gate |
+| POST | /api/repricer/run | Gate |
+| POST | /api/save-draft | Gate |
+| POST | /api/sync | Gate |
+| GET | /api/templates | Gate |
+| POST | /api/templates | Gate |
+| DELETE | /api/user/account | Gate |
+| GET | /api/vero-brands | Gate |
 
-#### `POST /api/offers/auto-send`
-- **Description**: Triggers sending discount offers to watching eBay customers.
-- **Authentication**: Required
-- **Payload**: `{"sku": "SKU", "discountPercentage": 10}`
-
-#### `POST /api/export/mercari` | `POST /api/export/poshmark`
-- **Description**: Returns pre-formatted titles, tags, and pricing descriptions optimized for manual copying/pasting onto Mercari or Poshmark.
-- **Authentication**: Required
-- **Payload**: `{"sku": "SKU"}`
+Static/open pages: `/` (dashboard), `/landing`, `/press`, `/terms`, `/privacy`, `/health`.

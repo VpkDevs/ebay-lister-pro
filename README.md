@@ -1,8 +1,8 @@
-# 🚀 eBay Multi-Channel Lister Pro (100% Zero-Dependency)
+# 🚀 ListAI Pro — eBay Multi-Channel Lister
 
-The ultimate, enterprise-grade, zero-dependency multichannel reselling platform. Scan folders, automatically spruce images, evaluate comps using IQR pricing filters, perform visual flaw analysis, check VeRO policies, and cross-list to eBay, Shopify, WooCommerce, Etsy, Mercari, and Poshmark.
+The multichannel reselling platform sold as **ListAI Pro**. Scan folders, automatically spruce images, evaluate comps using IQR pricing filters, perform visual flaw analysis, check VeRO policies, and cross-list to eBay, Shopify, WooCommerce, and Etsy, with file export to Mercari and Poshmark.
 
-Built entirely using native Node.js core APIs and vanilla frontend HTML/CSS/JS without any external package dependencies.
+Built on native Node.js core APIs and vanilla frontend HTML/CSS/JS, with exactly two runtime dependencies (`axios` for HTTP, `sharp` for image processing) — see `docs/DEPENDENCIES.md`.
 
 ---
 
@@ -52,7 +52,7 @@ Start the concurrent process runner to boot both the Web UI server and the backg
 node start.js
 ```
 The lister is now running!
-- **Dashboard Interface**: [http://127.0.0.1:45911](http://127.0.0.1:45911)
+- **Dashboard Interface**: [http://127.0.0.1:45900](http://127.0.0.1:45900) (default port; override with `PORT`)
 - **Watcher Daemon Scanner**: Watching the working directory for newly placed images.
 
 ---
@@ -72,7 +72,7 @@ Integrate Amazon, eBay, Shopify, Poshmark, and Mercari scrapers directly with yo
 
 - **Domain-Specific Circuit Breakers**: Isolates connectivity failures (eBay vs. Shopify). If one service encounters 5 consecutive network errors, it trips and immediately returns fallback comps or queue requests without blocking other functional channels.
 - **Dead-Letter Queue (DLQ)**: Failed WooCommerce, Etsy, or Shopify cross-posts are automatically queued in a DLQ (`pending-syncs.json`) with detailed error logs, and retried automatically every 5 minutes in the background.
-- **Zero-Dependency Rate Limiting**: Built-in sliding token bucket rate limiter intercepts API endpoints, returning 429 to prevent brute force or dashboard abuse.
+- **Built-In Rate Limiting**: Sliding token bucket rate limiter intercepts API endpoints, returning 429 to prevent brute force or dashboard abuse.
 - **Self-Healing Storage**: All listing database reads and writes enforce file locks, backing up copies to `.bak` files. If primary database corruption is ever detected, the system auto-recovers from the backup database cleanly.
 - **Structured Audit Logging**: Structured JSON logging propagates request trace IDs globally using `AsyncLocalStorage` for trace transparency.
 

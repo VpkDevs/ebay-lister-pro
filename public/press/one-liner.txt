@@ -1,1 +1,1 @@
-Zero-dependency local-first multi-channel cross-lister for eBay, Shopify, and Etsy.
+ListAI Pro turns a product photo into a priced, ready-to-post eBay listing.

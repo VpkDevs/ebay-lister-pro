@@ -67,36 +67,51 @@
   
   <main class="card">
     <h1 class="h1">Privacy Policy</h1>
-    <span class="subtitle">Last Updated: June 25, 2026</span>
-    
-    <p>Vincent Kinney ("we", "us", or "our") operates <strong>eBay Multi-Channel Lister Pro</strong> (the "Service"). This policy outlines our data collection, processing, and erasure terms under GDPR and CCPA.</p>
-    
+    <span class="subtitle">Last Updated: October 26, 2026</span>
+
+    <p>Vincent Kinney ("we", "us") operates <strong>ListAI Pro</strong> (the "Service"). This policy describes what data the Service actually collects, why, who processes it, and your rights — including under GDPR and CCPA.</p>
+
     <h2>1. Information We Collect</h2>
-    <p>We process only the data necessary to sync and cross-post listings:</p>
     <ul>
-      <li><strong>User Profile</strong>: Name, email address, and profile picture from Google Accounts OAuth sign-in.</li>
-      <li><strong>Listing Metadata</strong>: Titles, descriptions, condition aspects, pricing comps, and local photo directories.</li>
-      <li><strong>API Access Tokens</strong>: Cryptographically handled credentials for eBay, Shopify, WooCommerce, and Etsy.</li>
-      <li><strong>Operational Diagnostics</strong>: Uptime logs, endpoint request latencies, and client IP tailing.</li>
+      <li><strong>Account profile</strong>: name, email address, and profile picture from Google sign-in.</li>
+      <li><strong>Listing content</strong>: the product photos you upload and the listing drafts (titles, descriptions, prices, specifications) generated from them, plus your publishing history.</li>
+      <li><strong>Connected marketplace credentials</strong>: OAuth tokens for marketplaces you connect (eBay, Shopify, WooCommerce, Etsy), used only to publish at your direction.</li>
+      <li><strong>Your own Gemini API key</strong> (optional): if you save one, it is stored against your account, shown only masked, and used only for your generations.</li>
+      <li><strong>Usage data</strong>: counts of generated listings per month (used to enforce plan limits) and subscription status from Stripe.</li>
+      <li><strong>Operational logs</strong>: request logs and client IP addresses, used for security and debugging.</li>
     </ul>
-    
-    <h2>2. Third-Party Data Processing</h2>
-    <p>We transmit data to the following platforms to complete operations:</p>
+    <p>We do not run advertising or analytics trackers, and we do not sell personal data.</p>
+
+    <h2>2. AI Processing</h2>
+    <p>We use <strong>Google Gemini</strong> to process the photos and listing details you submit, for the purpose of generating listing drafts and price suggestions. If you generate on your own saved API key, that processing happens under your Google account and Google's terms for your key; otherwise it happens under ours. You can opt out of AI processing by not generating listings, or delete your account to remove your data.</p>
+
+    <h2>3. Third-Party Processors</h2>
     <ul>
-      <li><strong>Google Gemini</strong>: Listing photos and specifications are analyzed by Gemini AI to extract barcodes and suggest categories.</li>
-      <li><strong>Stripe</strong>: Processing payment subscriptions.</li>
-      <li><strong>Marketplace APIs</strong>: Committing drafts directly to eBay, Shopify, WooCommerce, and Etsy.</li>
-      <li><strong>Temp Image Hosts</strong>: Uploading listing photos to <em>tmpfiles.org</em> or <em>file.io</em> fallbacks for remote URL access.</li>
+      <li><strong>Google</strong> — sign-in (OAuth) and Gemini AI processing of photos/listing text you submit.</li>
+      <li><strong>Stripe</strong> — subscription payments. Your card details go directly to Stripe and never touch our servers.</li>
+      <li><strong>eBay, Shopify, WooCommerce, Etsy</strong> — receive listing content when you choose to publish there.</li>
+      <li><strong>tmpfiles.org and file.io</strong> — during eBay publishing, listing photos are temporarily hosted so eBay can fetch them (file.io copies are set to expire in 1 day).</li>
+      <li><strong>Photoroom / remove.bg</strong> — only if image background enhancement is enabled, photos are sent for background processing.</li>
+      <li><strong>Discogs</strong> — barcode/UPC lookups send the barcode only, no personal data.</li>
     </ul>
-    
-    <h2>3. GDPR Data Deletion & Erasure</h2>
+
+    <h2>4. Cookies</h2>
+    <p>The Service uses one functional session cookie to keep you signed in. There are no advertising or cross-site tracking cookies, so there is no cookie-consent banner to show you.</p>
+
+    <h2>5. Retention</h2>
+    <p>Account, listing, and usage data are kept while your account exists. Deleting your account removes your profile, subscription and usage records, saved API key, and team data. Operational logs rotate and are not kept indefinitely. Temporary photo-host copies expire per Section 3.</p>
+
+    <h2>6. Your Rights — Access, Correction, Deletion</h2>
     <div class="gdpr-box">
-      <strong>🔒 GDPR RIGHT TO ERASURE:</strong> You have the right to request deletion of all your profile, subscription, and inventory history. Since this tool operates locally, you can delete local files under `data/` at any time. To purge your session registry and billing mapping, call `DELETE /api/user/account` or click "Wipe Account" in your profile dashboard.
+      <strong>🔒 YOUR RIGHTS:</strong> You may access, correct, export, or delete your data at any time. Delete your account from the dashboard or via <code>DELETE /api/user/account</code> — deletion covers your profile, subscription/usage record, saved API key, and team data. For any other request (including CCPA requests), contact us via the support address published in the Service dashboard and we will respond within the time your jurisdiction requires (30 days GDPR, 45 days CCPA).
     </div>
-    
-    <h2>4. Contact Us</h2>
-    <p>For any privacy requests or GDPR erasure inquiries, email: <strong>privacy@ebaylisterpro.local</strong>.</p>
-    
+
+    <h2>7. Security</h2>
+    <p>Premium access is granted only from Stripe's cryptographically signed webhook events. API keys are never displayed in full after saving. No method of transmission or storage is perfectly secure, but we work to protect your data with current industry practice.</p>
+
+    <h2>8. Changes &amp; Contact</h2>
+    <p>Material changes to this policy will be announced in the Service before taking effect. Privacy questions: via the support address published in the Service dashboard.</p>
+
     <a href="/" class="btn">Return to Dashboard</a>
   </main>
 </body>

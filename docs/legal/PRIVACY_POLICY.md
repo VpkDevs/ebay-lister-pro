@@ -1,41 +1,26 @@
-# Privacy Policy
-
-Last Updated: June 25, 2026
-
-Vincent Kinney ("we", "us", or "our") operates **eBay Multi-Channel Lister Pro** ("the Service"). This Privacy Policy explains what data we collect, how it is used, and your rights under GDPR and CCPA.
-
----
+# Privacy Policy — ListAI Pro
+Last Updated: October 26, 2026. Operator: Vincent Kinney. Served at /privacy (public/privacy.html).
 
 ## 1. Information We Collect
+Account profile (name, email, picture from Google sign-in); listing content (photos you upload, generated drafts, publishing history); connected marketplace OAuth tokens; your own Gemini API key if you save one (stored per-account, shown masked, used only for your generations); usage counts for plan-limit enforcement and Stripe subscription status; operational logs incl. IP addresses. No advertising/analytics trackers. We do not sell personal data.
 
-We limit collection to what is technically necessary to perform multi-channel reselling operations:
-- **Profile Information**: Email address, name, and profile picture collected via Google Accounts OAuth.
-- **Listing Drafts & Data**: Product titles, descriptions, SKU, UPC barcodes, item condition, pricing data, brand, model, and local image file paths.
-- **Integration Credentials**: API keys and tokens for eBay, Shopify, WooCommerce, and Etsy (stored locally in your environment `.env` file).
-- **Billing Details**: Stripe subscription IDs and premium tier flags.
-- **Audit Logs**: Timestamps, requested endpoints, client IP addresses, and HTTP headers stored locally.
+## 2. AI Processing
+Google Gemini processes photos and listing details you submit to generate drafts and price suggestions. On your own saved key, processing is under your Google account/terms; otherwise under ours. Opt out by not generating, or delete your account.
 
----
+## 3. Third-Party Processors
+Google (sign-in + Gemini); Stripe (payments — card data never touches our servers); eBay/Shopify/WooCommerce/Etsy (publishing you initiate); tmpfiles.org and file.io (temporary photo hosting during eBay publishing; file.io copies expire in 1 day); Photoroom/remove.bg (only if background enhancement enabled); Discogs (barcode-only lookups).
 
-## 2. How We Share Your Data (Third-Party Processing)
+## 4. Cookies
+One functional session cookie. No advertising or cross-site tracking cookies.
 
-We share data with third-party processors only to execute listing operations:
-1. **Google Gemini API**: Image files and listing text inputs are sent to Google Gemini to extract metadata and perform defect analysis.
-2. **Stripe**: Billing transactions and subscription statuses are processed directly by Stripe.
-3. **Connected Marketplaces**: Your credentials and product payloads are sent directly to the marketplace APIs you configure (eBay, Shopify, WooCommerce, Etsy).
-4. **Temporary Image Hosts**: Product images are uploaded temporarily to `tmpfiles.org` or `file.io` to generate remote image URLs required by marketplace publishing systems.
+## 5. Retention
+Account/listing/usage data kept while the account exists; account deletion removes profile, subscription/usage records, saved API key, and team data. Logs rotate. Temp photo copies expire per §3.
 
----
+## 6. Your Rights
+Access, correct, export, or delete at any time. Deletion: dashboard or DELETE /api/user/account. Other requests (GDPR ≤30 days, CCPA ≤45 days) via the support address published in the dashboard.
 
-## 3. Data Retention & Deletion Rights (GDPR/CCPA)
+## 7. Security
+Premium is granted only from Stripe's signed webhook events. Saved API keys are never shown in full.
 
-- **Local Storage**: All draft history and logs reside locally on your host environment. You can wipe this data at any time by deleting the files inside the `data/` directory.
-- **GDPR Right to Erasure**: You have the right to request deletion of all profile data and billing subscription mappings.
-- **Self-Service Deletion**: You can request immediate deletion of your active session and billing record directly through the `/api/user/account` endpoint.
-
----
-
-## 4. Contact Information
-For any data inquiries, privacy questions, or erasure requests, contact:
-- **Email**: privacy@ebaylisterpro.local
-- **Operator**: Vincent Kinney
+## 8. Changes & Contact
+Material changes announced in-Service first. Contact via the dashboard support address.
