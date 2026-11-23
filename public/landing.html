@@ -21,11 +21,12 @@
     "name": "ListAI Pro",
     "applicationCategory": "BusinessApplication",
     "operatingSystem": "Web",
-    "description": "Turns product photos into priced, ready-to-post marketplace listings using AI vision and live sold comps.",
+    "description": "Turns product photos into priced, ready-to-post marketplace listings using AI vision, live sold comps, profit & tax accounting exports, and warehouse barcode bin labels.",
     "offers": [
       { "@type": "Offer", "name": "Free", "price": "0", "priceCurrency": "USD", "description": "10 listings/month on your own Gemini API key" },
-      { "@type": "Offer", "name": "Pro", "price": "19", "priceCurrency": "USD", "description": "300 listings/month" },
-      { "@type": "Offer", "name": "Power Seller", "price": "49", "priceCurrency": "USD", "description": "1,000 listings/month, team seats" }
+      { "@type": "Offer", "name": "Pro", "price": "19", "priceCurrency": "USD", "description": "300 listings/month ($190/yr with 2 months free)" },
+      { "@type": "Offer", "name": "Power Seller", "price": "49", "priceCurrency": "USD", "description": "1,000 listings/month, 3 team seats ($490/yr with 2 months free)" },
+      { "@type": "Offer", "name": "Agency", "price": "149", "priceCurrency": "USD", "description": "3,500 listings/month, 10 team seats ($1,490/yr with 2 months free)" }
     ]
   }
   </script>
@@ -789,17 +790,88 @@
 
       <div class="fc">
         <span class="fc-icon">📋</span>
-        <h3 class="fc-title">Mercari & Poshmark Export</h3>
-        <p class="fc-desc">Already listed on eBay? Hit the Mercari or Poshmark button and get a pre-formatted copy-paste package — title, description, tags, price — ready to paste directly into their apps. One listing, five platforms.</p>
+        <h3 class="fc-title">10-Channel Listing &amp; Export Suite</h3>
+        <p class="fc-desc">Publish directly via API to eBay, Shopify, Etsy, and WooCommerce — then one-click export formatted packages for Mercari, Poshmark, Depop, Grailed, Facebook Marketplace, and Whatnot live-show CSVs.</p>
       </div>
 
       <div class="fc">
-        <span class="fc-icon">🔐</span>
-        <h3 class="fc-title">Enterprise Auth & Multi-User</h3>
-        <p class="fc-desc">Google OAuth login, session management, per-user premium gating, and API key authentication for headless use. Rate limiting, CSP headers, and cooperative file locking are all baked in.</p>
-        <div class="fc-tags"><span class="fc-tag">Google OAuth</span><span class="fc-tag">Stripe billing</span><span class="fc-tag">Role gating</span></div>
+        <span class="fc-icon">🧾</span>
+        <h3 class="fc-title">QuickBooks &amp; Schedule C Tax Engine</h3>
+        <p class="fc-desc">Track Cost of Goods Sold (COGS), sourcing venues, category-exact eBay Final Value Fees, and net margins automatically. Export double-entry QuickBooks Desktop (.IIF) or Schedule C CSVs with one click.</p>
+        <div class="fc-tags"><span class="fc-tag">QuickBooks .IIF</span><span class="fc-tag">Schedule C CSV</span><span class="fc-tag">Venue ROI</span></div>
       </div>
 
+      <div class="fc">
+        <span class="fc-icon">🏷️</span>
+        <h3 class="fc-title">Warehouse Barcode Bin Labels &amp; Pick Lists</h3>
+        <p class="fc-desc">Assign physical bin locations (like A1-S2-B4) to every SKU, print scannable Code 128B SVG barcode labels, and generate walking-order warehouse pick lists sorted by aisle and shelf.</p>
+        <div class="fc-tags"><span class="fc-tag">Code 128B SVG</span><span class="fc-tag">Sorted Pick Lists</span><span class="fc-tag">Stale Stock Alerts</span></div>
+      </div>
+
+      <div class="fc">
+        <span class="fc-icon">🛡️</span>
+        <h3 class="fc-title">eBay Active Content &amp; VeRO Guard</h3>
+        <p class="fc-desc">Scans descriptions against 11 eBay policy rules (scripts, iframes, off-site contact links, HTTP assets) with one-click HTML auto-fix, plus real-time VeRO brand risk detection and COGS 15%-margin floor protection.</p>
+        <div class="fc-tags"><span class="fc-tag">11 Policy Rules</span><span class="fc-tag">1-Click Auto-Fix</span><span class="fc-tag">COGS Margin Guard</span></div>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ INTERACTIVE ROI CALCULATOR -->
+<section class="features-section" id="roi-calculator" aria-label="Reseller ROI Calculator" style="padding-top:20px;padding-bottom:60px;">
+  <div class="container">
+    <div class="demo-shell" style="padding:36px;max-width:980px;margin:0 auto;">
+      <div style="text-align:center;margin-bottom:28px;">
+        <div class="section-chip" style="justify-content:center;">Reseller Profit &amp; Time Calculator</div>
+        <h2 class="h2" style="margin-bottom:8px;">See how much your time is <span class="gradient-text">actually worth.</span></h2>
+        <p class="lead" style="font-size:0.98rem;">Adjust the sliders to match your weekly listing volume and average profit per item.</p>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:28px;align-items:center;">
+        <div style="display:flex;flex-direction:column;gap:18px;">
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:0.86rem;font-weight:600;margin-bottom:6px;">
+              <label for="roiItemsWeek">Items listed per week</label>
+              <span class="mono" id="roiItemsWeekVal" style="color:var(--cyan);">45 items/wk</span>
+            </div>
+            <input type="range" id="roiItemsWeek" min="5" max="400" step="5" value="45" style="width:100%;accent-color:var(--brand);" oninput="updateRoiCalculator()" />
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:0.86rem;font-weight:600;margin-bottom:6px;">
+              <label for="roiAvgProfit">Avg. net profit per sold item</label>
+              <span class="mono" id="roiAvgProfitVal" style="color:var(--green);">$22 / item</span>
+            </div>
+            <input type="range" id="roiAvgProfit" min="5" max="150" step="1" value="22" style="width:100%;accent-color:var(--brand);" oninput="updateRoiCalculator()" />
+          </div>
+          <div>
+            <div style="display:flex;justify-content:space-between;font-size:0.86rem;font-weight:600;margin-bottom:6px;">
+              <label for="roiManualMins">Manual time per listing (research + photos + typing)</label>
+              <span class="mono" id="roiManualMinsVal" style="color:var(--amber);">14 mins</span>
+            </div>
+            <input type="range" id="roiManualMins" min="5" max="30" step="1" value="14" style="width:100%;accent-color:var(--brand);" oninput="updateRoiCalculator()" />
+          </div>
+        </div>
+        <div style="background:var(--bg2);border:1px solid var(--border2);border-radius:16px;padding:24px;display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div>
+            <div style="font-size:0.74rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);">Hours Saved / Month</div>
+            <div class="h2 mono" id="roiHoursSaved" style="color:var(--cyan);font-size:2rem;margin-top:4px;">39.0 hrs</div>
+            <div style="font-size:0.75rem;color:var(--dim);">vs. 90 sec with ListAI Pro</div>
+          </div>
+          <div>
+            <div style="font-size:0.74rem;text-transform:uppercase;letter-spacing:0.06em;color:var(--muted);">Monthly Listings</div>
+            <div class="h2 mono" id="roiMonthlyListings" style="color:var(--light);font-size:2rem;margin-top:4px;">195 / mo</div>
+            <div style="font-size:0.75rem;color:var(--dim);" id="roiRecommendedPlan">Fits Pro ($19/mo)</div>
+          </div>
+          <div style="grid-column:span 2;border-top:1px solid var(--border);padding-top:14px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+            <div>
+              <div style="font-size:0.75rem;color:var(--muted);">Reinvested listing capacity value (at 50% sell-through)</div>
+              <div class="h3 mono" id="roiExtraProfit" style="color:var(--green);font-size:1.45rem;">+$2,145 / mo potential profit</div>
+            </div>
+            <a href="#pricing" class="btn btn--primary" style="padding:10px 20px;font-size:0.85rem;">Lock In Your Plan →</a>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </section>
@@ -809,11 +881,16 @@
   <div class="container">
     <div class="pricing-header">
       <div class="section-chip" style="justify-content:center;">Straightforward pricing</div>
-      <h2 class="h2" style="margin-bottom:0;">Three plans. No surprises.<br /><span class="gradient-text">Every feature in every plan.</span></h2>
+      <h2 class="h2" style="margin-bottom:0;">Four plans. No surprises.<br /><span class="gradient-text">Every feature in every plan.</span></h2>
     </div>
-    <p class="pricing-sub">Plans differ only in how many AI listings you generate each month — and whose Gemini key runs them. Editing listings is always free, on every plan. Cancel anytime, right in the app.</p>
+    <p class="pricing-sub">Plans differ only in how many AI listings you generate each month, team seats, and whose Gemini key runs them. Editing listings is always free, on every plan. Cancel anytime, right in the app.</p>
 
-    <div class="price-grid" id="priceGrid" style="grid-template-columns:repeat(3,1fr);max-width:1020px;margin-left:auto;margin-right:auto;">
+    <div style="display:flex;justify-content:center;align-items:center;gap:12px;margin-bottom:32px;">
+      <button type="button" id="billToggleMonth" class="btn btn--primary" style="padding:9px 20px;font-size:0.84rem;border-radius:99px;" onclick="setBillingInterval('month')">Monthly Billing</button>
+      <button type="button" id="billToggleYear" class="btn btn--outline" style="padding:9px 20px;font-size:0.84rem;border-radius:99px;" onclick="setBillingInterval('year')">Annual Billing <span class="badge badge--green" style="margin-left:6px;padding:2px 8px;font-size:0.68rem;">2 Months Free</span></button>
+    </div>
+
+    <div class="price-grid" id="priceGrid" style="grid-template-columns:repeat(auto-fit,minmax(240px,1fr));max-width:1160px;margin-left:auto;margin-right:auto;">
 
       <!-- Free -->
       <div class="pc">
@@ -830,8 +907,8 @@
           <li class="pc-feat"><span class="y">✓</span> <span><strong>10 AI listings</strong> / month, generated on your own Gemini key</span></li>
           <li class="pc-feat"><span class="y">✓</span> <span>Every feature included — the software is the product</span></li>
           <li class="pc-feat"><span class="y">✓</span> <span>Publish to eBay, Shopify, Etsy &amp; WooCommerce</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Live eBay comp pricing</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>AI defect detection reports</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Live eBay comp pricing + P&amp;L analytics</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>AI defect detection &amp; compliance scanner</span></li>
           <li class="pc-feat"><span class="n">✗</span> <span>Generations on our key (paid plans)</span></li>
         </ul>
         <div class="pc-cta">
@@ -846,21 +923,21 @@
         <div class="pc-tagline" style="color:var(--muted);">For active resellers listing every week.</div>
         <div class="pc-price">
           <span class="pc-curr">$</span>
-          <span class="pc-num">19</span>
+          <span class="pc-num" id="priceNumPro">19</span>
           <span class="pc-period">/mo</span>
         </div>
-        <div class="pc-billed">Billed monthly via Stripe</div>
+        <div class="pc-billed" id="priceBilledPro">Billed monthly via Stripe ($190/yr annual saves $38)</div>
         <div class="pc-divider"></div>
         <ul class="pc-features">
-          <li class="pc-feat"><span class="y">✓</span> <span><strong>300 AI listings</strong> / month on our key</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Everything in Free</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span><strong>300 AI listings</strong> / month on our key (~6.3¢/listing)</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Everything in Free + QuickBooks &amp; Schedule C exports</span></li>
           <li class="pc-feat"><span class="y">✓</span> <span>At the cap? Keep generating on your own key, uncounted</span></li>
           <li class="pc-feat"><span class="y">✓</span> <span>Publish to eBay, Shopify, Etsy &amp; WooCommerce</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Mercari + Poshmark export</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Mercari, Poshmark, Depop, Grailed, FB &amp; Whatnot export</span></li>
           <li class="pc-feat"><span class="y">✓</span> <span>Cancel anytime in the app</span></li>
         </ul>
         <div class="pc-cta">
-          <a href="/index.html" class="btn btn--primary btn--full" style="box-shadow:0 4px 24px rgba(99,102,241,0.4);">Start Pro Plan</a>
+          <a href="/index.html?upgrade=pro" id="ctaLinkPro" class="btn btn--primary btn--full" style="box-shadow:0 4px 24px rgba(99,102,241,0.4);">Start Pro Plan</a>
         </div>
       </div>
 
@@ -870,24 +947,56 @@
         <div class="pc-tagline">For high-volume sellers and small teams.</div>
         <div class="pc-price">
           <span class="pc-curr">$</span>
-          <span class="pc-num">49</span>
+          <span class="pc-num" id="priceNumPower">49</span>
           <span class="pc-period">/mo</span>
         </div>
-        <div class="pc-billed">Billed monthly via Stripe</div>
+        <div class="pc-billed" id="priceBilledPower">Billed monthly via Stripe ($490/yr annual saves $98)</div>
         <div class="pc-divider"></div>
         <ul class="pc-features">
-          <li class="pc-feat"><span class="y">✓</span> <span><strong>1,000 AI listings</strong> / month on our key</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Everything in Pro</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span><strong>1,000 AI listings</strong> / month on our key (~4.9¢/listing)</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Everything in Pro + Warehouse Barcode Bin Labels</span></li>
           <li class="pc-feat"><span class="y">✓</span> <span><strong>3 team seats</strong> sharing one listing pool</span></li>
           <li class="pc-feat"><span class="y">✓</span> <span>Own-key overflow past the cap, uncounted</span></li>
-          <li class="pc-feat"><span class="y">✓</span> <span>Bulk CSV import &amp; batch generation</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Bulk CSV import, pick lists &amp; batch generation</span></li>
           <li class="pc-feat"><span class="y">✓</span> <span>Cancel anytime in the app</span></li>
         </ul>
         <div class="pc-cta">
-          <a href="/index.html" class="btn btn--outline btn--full">Start Power Seller</a>
+          <a href="/index.html?upgrade=power_seller" id="ctaLinkPower" class="btn btn--outline btn--full">Start Power Seller</a>
         </div>
       </div>
 
+      <!-- Agency -->
+      <div class="pc">
+        <div class="pc-name" style="color:var(--cyan);">Agency / Consignment</div>
+        <div class="pc-tagline">For consignment shops, estate liquidators &amp; multi-VA operations.</div>
+        <div class="pc-price">
+          <span class="pc-curr">$</span>
+          <span class="pc-num" id="priceNumAgency">149</span>
+          <span class="pc-period">/mo</span>
+        </div>
+        <div class="pc-billed" id="priceBilledAgency">Billed monthly via Stripe ($1,490/yr annual saves $298)</div>
+        <div class="pc-divider"></div>
+        <ul class="pc-features">
+          <li class="pc-feat"><span class="y">✓</span> <span><strong>3,500 AI listings</strong> / month on our key (~4.2¢/listing)</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Everything in Power Seller</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span><strong>10 team seats</strong> for listers, photographers &amp; VAs</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Own-key overflow past 3,500, uncounted</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Multi-quantity channel reserve &amp; safety buffer sync</span></li>
+          <li class="pc-feat"><span class="y">✓</span> <span>Cancel anytime in the app</span></li>
+        </ul>
+        <div class="pc-cta">
+          <a href="/index.html?upgrade=agency" id="ctaLinkAgency" class="btn btn--outline btn--full">Start Agency Plan</a>
+        </div>
+      </div>
+
+    </div>
+
+    <div style="max-width:780px;margin:28px auto 0;padding:18px 24px;border-radius:14px;background:var(--surface);border:1px solid var(--border2);display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:14px;">
+      <div>
+        <div style="font-weight:700;font-size:0.95rem;">⚡ Need a one-time burst for an estate haul or Q4 inventory drop?</div>
+        <div style="font-size:0.83rem;color:var(--muted);">Instant Listing Credit Boost Packs are available inside the app: <strong>+100 AI Listings ($9)</strong> or <strong>+500 AI Listings ($29)</strong> — no plan change required.</div>
+      </div>
+      <a href="/index.html?upgrade=credits" class="btn btn--outline" style="padding:10px 18px;font-size:0.84rem;">Get Credit Boost →</a>
     </div>
   </div>
 </section>
@@ -904,24 +1013,26 @@
           <tr>
             <th>Feature</th>
             <th>Free</th>
-            <th class="col-hi">Pro</th>
-            <th>Power Seller</th>
+            <th class="col-hi">Pro ($19)</th>
+            <th>Power Seller ($49)</th>
+            <th>Agency ($149)</th>
           </tr>
         </thead>
         <tbody>
-          <tr><td>AI listings / month</td><td>10 (your own key)</td><td class="col-hi"><strong>300</strong></td><td>1,000</td></tr>
-          <tr><td>Gemini Vision (2-pass)</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Live eBay comp pricing</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Auto taxonomy aspect fill</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>UPC barcode auto-detection</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>AI defect detection report</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>eBay publishing</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Shopify / Etsy / WooCommerce cross-posting</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>DLQ retry queue for failed posts</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Mercari &amp; Poshmark export</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>One-way sync from eBay</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Generations past the cap on your own key</td><td class="no">✗</td><td class="col-hi yes">✓</td><td class="yes">✓</td></tr>
-          <tr><td>Team seats</td><td class="no">✗</td><td class="col-hi no">✗</td><td class="yes">3 seats</td></tr>
+          <tr><td>AI listings / month</td><td>10 (your own key)</td><td class="col-hi"><strong>300</strong></td><td>1,000</td><td><strong>3,500</strong></td></tr>
+          <tr><td>Annual billing discount (2 months free)</td><td>—</td><td class="col-hi">$190/yr (save $38)</td><td>$490/yr (save $98)</td><td>$1,490/yr (save $298)</td></tr>
+          <tr><td>Gemini Vision (2-pass + defect report)</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Live eBay comp pricing + COGS 15% margin guard</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Auto taxonomy aspect fill + UPC/ISBN scanner</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>eBay, Shopify, Etsy &amp; WooCommerce API publishing</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Mercari, Poshmark, Depop, Grailed, FB &amp; Whatnot export</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>QuickBooks (.IIF) &amp; Schedule C tax CSV accounting</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Code 128B warehouse barcode bin labels &amp; pick lists</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>eBay Active Content compliance scanner &amp; 1-click auto-fix</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Sourcing venue ROI &amp; stale dead-capital alerts</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Generations past the cap on your own key</td><td class="no">✗</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Instant credit top-up packs (+100 / +500 listings)</td><td class="yes">✓</td><td class="col-hi yes">✓</td><td class="yes">✓</td><td class="yes">✓</td></tr>
+          <tr><td>Team seats (shared workspace &amp; listing pool)</td><td class="no">✗</td><td class="col-hi no">✗</td><td class="yes">3 seats</td><td class="yes"><strong>10 seats</strong></td></tr>
         </tbody>
       </table>
     </div>
@@ -1053,6 +1164,65 @@
     const nav = document.querySelector('nav');
     if (nav) nav.style.boxShadow = window.scrollY > 20 ? '0 4px 32px rgba(0,0,0,0.4)' : '';
   }, { passive: true });
+
+  // ── Monthly / Annual Pricing Toggle ───────────────────────────────────────
+  function setBillingInterval(interval) {
+    const isYear = interval === 'year';
+    const btnM = document.getElementById('billToggleMonth');
+    const btnY = document.getElementById('billToggleYear');
+    if (btnM && btnY) {
+      btnM.className = isYear ? 'btn btn--outline' : 'btn btn--primary';
+      btnY.className = isYear ? 'btn btn--primary' : 'btn btn--outline';
+    }
+    const proNum = document.getElementById('priceNumPro');
+    const powNum = document.getElementById('priceNumPower');
+    const agyNum = document.getElementById('priceNumAgency');
+    if (proNum) proNum.textContent = isYear ? '16' : '19';
+    if (powNum) powNum.textContent = isYear ? '41' : '49';
+    if (agyNum) agyNum.textContent = isYear ? '124' : '149';
+
+    const proBill = document.getElementById('priceBilledPro');
+    const powBill = document.getElementById('priceBilledPower');
+    const agyBill = document.getElementById('priceBilledAgency');
+    if (proBill) proBill.textContent = isYear ? 'Billed $190/year via Stripe (2 months free — save $38)' : 'Billed monthly via Stripe ($190/yr annual saves $38)';
+    if (powBill) powBill.textContent = isYear ? 'Billed $490/year via Stripe (2 months free — save $98)' : 'Billed monthly via Stripe ($490/yr annual saves $98)';
+    if (agyBill) agyBill.textContent = isYear ? 'Billed $1,490/year via Stripe (2 months free — save $298)' : 'Billed monthly via Stripe ($1,490/yr annual saves $298)';
+
+    const q = isYear ? '&interval=year' : '';
+    const lPro = document.getElementById('ctaLinkPro');
+    const lPow = document.getElementById('ctaLinkPower');
+    const lAgy = document.getElementById('ctaLinkAgency');
+    if (lPro) lPro.href = `/index.html?upgrade=pro${q}`;
+    if (lPow) lPow.href = `/index.html?upgrade=power_seller${q}`;
+    if (lAgy) lAgy.href = `/index.html?upgrade=agency${q}`;
+  }
+
+  // ── Reseller ROI Calculator ───────────────────────────────────────────────
+  function updateRoiCalculator() {
+    const itemsWeek = Number(document.getElementById('roiItemsWeek')?.value || 45);
+    const avgProfit = Number(document.getElementById('roiAvgProfit')?.value || 22);
+    const manualMins = Number(document.getElementById('roiManualMins')?.value || 14);
+    document.getElementById('roiItemsWeekVal').textContent = `${itemsWeek} items/wk`;
+    document.getElementById('roiAvgProfitVal').textContent = `$${avgProfit} / item`;
+    document.getElementById('roiManualMinsVal').textContent = `${manualMins} mins`;
+
+    const monthlyListings = Math.round(itemsWeek * 4.33);
+    const savedMinsPerItem = Math.max(1, manualMins - 1.5);
+    const hoursSaved = ((monthlyListings * savedMinsPerItem) / 60).toFixed(1);
+    const potentialProfit = Math.round(monthlyListings * 0.5 * avgProfit);
+
+    document.getElementById('roiHoursSaved').textContent = `${hoursSaved} hrs`;
+    document.getElementById('roiMonthlyListings').textContent = `${monthlyListings.toLocaleString()} / mo`;
+    document.getElementById('roiExtraProfit').textContent = `+$${potentialProfit.toLocaleString()} / mo potential profit`;
+
+    const planEl = document.getElementById('roiRecommendedPlan');
+    if (planEl) {
+      if (monthlyListings <= 10) planEl.textContent = 'Fits Free Tier ($0/mo BYOK)';
+      else if (monthlyListings <= 300) planEl.textContent = 'Fits Pro ($19/mo · 6.3¢/item)';
+      else if (monthlyListings <= 1000) planEl.textContent = 'Fits Power Seller ($49/mo · 4.9¢/item)';
+      else planEl.textContent = 'Fits Agency ($149/mo · 3,500 items + 10 seats)';
+    }
+  }
 </script>
 </body>
 </html>

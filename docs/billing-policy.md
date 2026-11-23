@@ -134,6 +134,17 @@ and no separate BYOK plan.**
   mechanics of the grace question below; the grace *length* is Stripe's
   retry schedule, not an app setting.)
 
+## Policy 6 — Agency Tier, Annual Billing & Instant Credit Boost Packs <!-- [MONETIZATION-EXPANSION] implemented 2026-11-22 -->
+
+- **Agency / Consignment Plan (`agency`):** `$149/month` (`amountCents: 14900`) or `$1,490/year` (`annualAmountCents: 149000`). Grants **3,500 AI listings/month** on the house key and **10 team seats** (`TEAM_SEATS_BY_PLAN.agency = 10`).
+- **Annual Billing (2 Months Free — 10x Monthly Price):**
+  - `POST /api/billing/create-checkout-session` accepts `{ plan: "pro" | "power_seller" | "agency", interval?: "month" | "year" }`.
+  - When `interval === "year"`, Stripe checkout creates an annual recurring subscription at `$190/yr` (Pro), `$490/yr` (Power Seller), or `$1,490/yr` (Agency) and records `metadata.interval = "year"`.
+- **One-Time Instant Listing Credit Boost Packs (`CREDIT_PACKS`):**
+  - `boost_100`: `$9` one-time (`+100 AI Listings Boost`).
+  - `boost_500`: `$29` one-time (`+500 AI Listings Boost`).
+  - Created via `POST /api/billing/create-credit-pack-session` (`mode: "payment"`) and fulfilled by `POST /api/billing/webhook` (`checkout.session.completed` with `metadata.credit_pack`), which increments `rec.bonusListings[YYYY-MM]` and expands `resolveGenerationAllowance(email).allotment` immediately without altering the user's subscription tier.
+
 ## Open questions (not decided)
 
 - Dollar overage pricing beyond the cap. (Allotments themselves are now

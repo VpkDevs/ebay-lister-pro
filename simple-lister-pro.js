@@ -29,7 +29,12 @@ function cleanupTempFiles() {
     try {
       const files = fs.readdirSync(dir);
       for (const file of files) {
-        fs.unlinkSync(path.join(dir, file));
+        const fullPath = path.join(dir, file);
+        try {
+          if (fs.statSync(fullPath).isFile()) {
+            fs.unlinkSync(fullPath);
+          }
+        } catch (innerErr) {}
       }
     } catch (e) {}
   }

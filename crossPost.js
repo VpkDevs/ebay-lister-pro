@@ -131,7 +131,7 @@ async function crossPostToShopifyDirect(finalListing, imageUrls, sku) {
   const aspectTags = Object.entries(finalListing.aspects || {})
     .map(([key, val]) => {
       const displayVal = Array.isArray(val) ? val[0] : val;
-      return displayVal ? displayVal.trim() : null;
+      return displayVal ? String(displayVal).replace(/[,;"']/g, ' ').replace(/\s+/g, ' ').trim() : null;
     })
     .filter(val => val && val.length > 0 && val.length <= 40);
   const uniqueTags = [...new Set(aspectTags)];

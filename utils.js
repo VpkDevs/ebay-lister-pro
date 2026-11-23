@@ -30,6 +30,7 @@ function sanitizeLog(message) {
     { value: config.getEBAY_REFRESH_TOKEN(), label: '[REDACTED_REFRESH_TOKEN]' },
     { value: config.getSTRIPE_SECRET_KEY(), label: '[REDACTED_STRIPE_SECRET_KEY]' },
     { value: config.getSTRIPE_WEBHOOK_SECRET(), label: '[REDACTED_STRIPE_WEBHOOK_SECRET]' },
+    { value: typeof config.getSHOPIFY_ACCESS_TOKEN === 'function' ? config.getSHOPIFY_ACCESS_TOKEN() : null, label: '[REDACTED_SHOPIFY_TOKEN]' },
     { value: config.getWOOCOMMERCE_KEY(), label: '[REDACTED_WOOCOMMERCE_KEY]' },
     { value: config.getWOOCOMMERCE_SECRET(), label: '[REDACTED_WOOCOMMERCE_SECRET]' },
     { value: config.getETSY_ACCESS_TOKEN(), label: '[REDACTED_ETSY_ACCESS_TOKEN]' }
@@ -41,6 +42,16 @@ function sanitizeLog(message) {
       clean = clean.replace(new RegExp(escaped, 'g'), secret.label);
     }
   }
+
+  // Pattern-based secret scrubbing for tokens that may appear dynamically in error payloads
+  clean = clean
+    .replace(/shpat_[a-zA-Z0-9]{32}/g, '[REDACTED_SHOPIFY_TOKEN]')
+    .replace(/ck_[a-zA-Z0-9]{40}/g, '[REDACTED_WOOCOMMERCE_KEY]')
+    .replace(/cs_[a-zA-Z0-9]{40}/g, '[REDACTED_WOOCOMMERCE_SECRET]')
+    .replace(/AIza[0-9A-Za-z_-]{35}/g, '[REDACTED_GEMINI_KEY]')
+    .replace(/Basic\s+[A-Za-z0-9+/=]{16,}/g, 'Basic [REDACTED_AUTH]')
+    .replace(/Bearer\s+[A-Za-z0-9._\-]{20,}/g, 'Bearer [REDACTED_TOKEN]');
+
   return clean;
 }
 
@@ -612,6 +623,12 @@ function saveListingToHistory(sku, listingId, title, price, categoryId, offerId,
       priceFloor: existingEntry.priceFloor !== undefined ? existingEntry.priceFloor : null,
       priceCap: existingEntry.priceCap !== undefined ? existingEntry.priceCap : null,
       priceLocked: existingEntry.priceLocked !== undefined ? existingEntry.priceLocked : false,
+      costOfGoods: (listingDetails && listingDetails.costOfGoods !== undefined) ? listingDetails.costOfGoods : (existingEntry.costOfGoods !== undefined ? existingEntry.costOfGoods : null),
+      msrp: (listingDetails && listingDetails.msrp !== undefined) ? listingDetails.msrp : (existingEntry.msrp !== undefined ? existingEntry.msrp : null),
+      keywords: (listingDetails && Array.isArray(listingDetails.keywords)) ? listingDetails.keywords : (Array.isArray(existingEntry.keywords) ? existingEntry.keywords : []),
+      internalNotes: (listingDetails && typeof listingDetails.internalNotes === 'string') ? listingDetails.internalNotes : (existingEntry.internalNotes || ''),
+      binLocation: (listingDetails && typeof listingDetails.binLocation === 'string') ? listingDetails.binLocation : (existingEntry.binLocation || ''),
+      sourcingVenue: (listingDetails && typeof listingDetails.sourcingVenue === 'string') ? listingDetails.sourcingVenue : (existingEntry.sourcingVenue || ''),
       listingDetails: listingDetails || existingEntry.listingDetails || null
     };
     if (existingIndex !== -1) {
@@ -928,10 +945,33 @@ function computeProfit({ price = 0, fees = 0, cog = 0, shippingCost = 0 } = {}) 
   return { gross, net, profit, marginPct };
 }
 
+/**
+ * Computes seller net profit, estimated marketplace fees, margin %, and ROI %
+ * for a single listing at a given price and cost of goods.
+ * @param {object} [input]
+ * @param {number} [input.price=0]
+ * @param {number} [input.cog=0]
+ * @param {number} [input.shippingCost=0]
+ * @param {string} [input.marketplace='ebay']
+ * @returns {{gross:number, fee:number, net:number, profit:number, marginPct:number, roiPct:number, marketplace:string}}
+ */
+function estimateSellerNetProfit({ price = 0, cog = 0, shippingCost = 0, marketplace = 'ebay' } = {}) {
+  const gross = round2(Number(price) || 0);
+  const c = round2(Number(cog) || 0);
+  const s = round2(Number(shippingCost) || 0);
+  const mp = MARKETPLACE_FEES[marketplace] ? marketplace : 'ebay';
+  const fee = estimateMarketplaceFee(mp, gross);
+  const net = round2(gross - fee);
+  const profit = round2(gross - fee - c - s);
+  const marginPct = gross > 0 ? round2((profit / gross) * 100) : 0;
+  const roiPct = c > 0 ? round2((profit / c) * 100) : 0;
+  return { gross, fee, net, profit, marginPct, roiPct, marketplace: mp };
+}
+
 // [WAVE1-A] Private-field stripper for marketplace-bound payloads.
 /**
  * Returns a shallow copy of a listing with private-only fields removed.
- * Private fields (internalNotes, costOfGoods) must NEVER be sent to any
+ * Private fields (internalNotes, costOfGoods, binLocation, sourcingVenue) must NEVER be sent to any
  * marketplace or appear in copy-paste export payloads. Call this before
  * building any outbound payload (eBay, Shopify, WooCommerce, Etsy, exports).
  * @param {object} [listing] - Raw listing object (may carry private fields).
@@ -941,6 +981,8 @@ function sanitizeListingForMarketplace(listing) {
   const copy = { ...(listing || {}) };
   delete copy.internalNotes;
   delete copy.costOfGoods;
+  delete copy.binLocation;
+  delete copy.sourcingVenue;
   return copy;
 }
 
@@ -975,6 +1017,13 @@ function normalizeListingFields(listing) {
   }
   // internalNotes: always a string (private; never sent to marketplaces)
   listing.internalNotes = typeof listing.internalNotes === 'string' ? listing.internalNotes : '';
+  // Optional warehouse & sourcing fields (normalized in-place only when present)
+  if (listing.binLocation !== undefined) {
+    listing.binLocation = typeof listing.binLocation === 'string' ? listing.binLocation.trim() : '';
+  }
+  if (listing.sourcingVenue !== undefined) {
+    listing.sourcingVenue = typeof listing.sourcingVenue === 'string' ? listing.sourcingVenue.trim() : '';
+  }
   return listing;
 }
 
@@ -1084,6 +1133,7 @@ module.exports = {
   cleanOldTempFiles,
   // [WAVE1-A]
   computeProfit,
+  estimateSellerNetProfit,
   sanitizeListingForMarketplace,
   normalizeListingFields,
   // [WAVE1-B] notification helpers

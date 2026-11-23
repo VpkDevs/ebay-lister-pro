@@ -1112,10 +1112,14 @@ function getFallbackPrices(condition, keywords = "") {
     base = parseFloat((base * 0.3).toFixed(2));
   }
 
+  const minPrice = Math.max(0.99, parseFloat((base * 0.7).toFixed(2)));
+  const maxPrice = Math.max(0.99, parseFloat((base * 1.3).toFixed(2)));
+  const avgPrice = Math.max(0.99, base);
+
   return {
-    minPrice: parseFloat((base * 0.7).toFixed(2)),
-    maxPrice: parseFloat((base * 1.3).toFixed(2)),
-    avgPrice: base,
+    minPrice,
+    maxPrice,
+    avgPrice,
     source: "Condition & Category Rule Engine Defaults",
     items: [] // [WAVE1-C] No real comp items on the fallback path.
   };
@@ -1146,6 +1150,14 @@ async function runDailyRepricer() {
           } else {
             targetPrice = parseFloat((comps.avgPrice * 1.0).toFixed(2));
           }
+          // Enforce COGS + 15% minimum margin floor so repricer never sells below cost
+          const itemCogs = Number(item.costOfGoods ?? item.listingDetails?.costOfGoods) || 0;
+          if (itemCogs > 0) {
+            const cogsFloor = parseFloat((itemCogs * 1.15).toFixed(2));
+            if (targetPrice < cogsFloor) {
+              targetPrice = cogsFloor;
+            }
+          }
           // Apply pricing bounds if set
           if (item.priceFloor && targetPrice < item.priceFloor) {
             targetPrice = item.priceFloor;
@@ -1153,6 +1165,7 @@ async function runDailyRepricer() {
           if (item.priceCap && targetPrice > item.priceCap) {
             targetPrice = item.priceCap;
           }
+          targetPrice = Math.max(0.99, targetPrice);
 
           if (Math.abs(targetPrice - item.price) > 0.05) {
             utils.logAudit("INFO", `Repricing SKU ${item.sku} from $${item.price} to $${targetPrice} based on comps.`);

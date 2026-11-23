@@ -12,6 +12,13 @@ const config = require('./config');
 const utils = require('./utils');
 const ebayClient = require('./ebayClient');
 const geminiClient = require('./geminiClient');
+const analyticsEngine = require('./lib/analyticsEngine');
+const accountingExport = require('./lib/accountingExport');
+const binLocationManager = require('./lib/binLocationManager');
+const complianceScanner = require('./lib/complianceScanner');
+const sourcingAnalytics = require('./lib/sourcingAnalytics');
+const inventorySync = require('./lib/inventorySync');
+const repricerLib = require('./lib/repricer');
 
 function sendError(res, err, status = 500) {
   if (res.headersSent || res.writableEnded) return;
@@ -318,7 +325,9 @@ function validateImportRow(cells, headerIndex, seenSkus, historySkus) {
       costOfGoods: get("costOfGoods") === "" ? null : Number(get("costOfGoods")),
       keywords,
       internalNotes: get("internalNotes"),
-      categoryId: get("categoryId") || null
+      categoryId: get("categoryId") || null,
+      ...(get("binLocation") ? { binLocation: get("binLocation") } : {}),
+      ...(get("sourcingVenue") ? { sourcingVenue: get("sourcingVenue") } : {})
     }
   };
 }
@@ -368,6 +377,8 @@ function importListingsFromCsv(csvText, opts = {}) {
         msrp: v.listing.msrp,
         costOfGoods: v.listing.costOfGoods,
         internalNotes: v.listing.internalNotes,
+        ...(v.listing.binLocation ? { binLocation: v.listing.binLocation } : {}),
+        ...(v.listing.sourcingVenue ? { sourcingVenue: v.listing.sourcingVenue } : {}),
         _confidence: 0,          // not AI-generated -> Wave-1C review badge
         importSource: "csv"
       });
@@ -427,6 +438,150 @@ function bulkUpdateListingStatus(skus, status) {
   return { updated, results };
 }
 
+/**
+ * Builds a Whatnot Live-Auction / Buy-It-Now bulk upload CSV from listing history.
+ * @param {Array<object>} history
+ * @returns {string}
+ */
+function buildWhatnotCsv(history) {
+  const headers = [
+    'Category', 'Sub Category', 'Title', 'Description', 'Quantity',
+    'Type', 'Price', 'Shipping Profile', 'Offerable', 'Hazmat',
+    'Condition', 'Cost Per Item', 'SKU', 'Image URL 1', 'Image URL 2'
+  ];
+  const lines = [headers.join(',')];
+  for (const item of (Array.isArray(history) ? history : [])) {
+    if (item.status === 'SOLD' || item.status === 'ENDED') continue;
+    const details = item.listingDetails || {};
+    const imgs = item.imageUrls || details.imageUrls || [];
+    const plainDesc = String(item.description || details.description || item.title || '')
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 1000);
+    const weightMajor = Number(details.weightMajor) || 1;
+    const shipProfile = weightMajor <= 1 ? '1 lb' : `${Math.min(5, Math.ceil(weightMajor))} lbs`;
+    const cogs = item.costOfGoods ?? details.costOfGoods ?? '';
+    const row = [
+      'Collectibles & General',
+      item.brand || details.brand || 'General',
+      (item.title || '').slice(0, 80),
+      plainDesc,
+      details.quantity || 1,
+      'Buy It Now',
+      Number(item.price || details.suggestedPrice || 0).toFixed(2),
+      shipProfile,
+      'TRUE',
+      'Not Hazmat',
+      details.condition === 'NEW' ? 'New' : 'Used',
+      cogs !== null && cogs !== '' ? Number(cogs).toFixed(2) : '',
+      item.sku || '',
+      imgs[0] || '',
+      imgs[1] || ''
+    ];
+    lines.push(row.map(csvEscape).join(','));
+  }
+  return lines.join('\r\n') + '\r\n';
+}
+
+/**
+ * Performs bulk operations on listings in history:
+ *   - action === 'delete': deletes specified SKUs from history
+ *   - action === 'adjust_price': adjusts prices by percentDelta (e.g. -10 or +10) or amountDelta,
+ *     respecting priceLocked, priceFloor, priceCap, and COGS + 15% margin floor.
+ * @param {object} payload - { skus: string[], action: 'delete'|'adjust_price', percentDelta?: number, amountDelta?: number }
+ * @returns {{updated: number, deleted?: number, results: Array<object>}}
+ */
+function bulkListingAction(payload = {}) {
+  const { skus, action, percentDelta, amountDelta } = payload;
+  if (!Array.isArray(skus) || skus.length === 0) {
+    throw new Error('Payload must include a non-empty skus array.');
+  }
+  const skuSet = new Set(skus.map(String));
+  const history = utils.readJsonFileSecure(config.historyPath, []);
+
+  if (action === 'delete') {
+    const results = [];
+    const remaining = [];
+    let deleted = 0;
+    for (const item of history) {
+      if (skuSet.has(item.sku)) {
+        deleted++;
+        results.push({ sku: item.sku, ok: true, deleted: true });
+      } else {
+        remaining.push(item);
+      }
+    }
+    for (const reqSku of skuSet) {
+      if (!results.some(r => r.sku === reqSku)) {
+        results.push({ sku: reqSku, ok: false, error: 'SKU not found' });
+      }
+    }
+    if (deleted > 0) {
+      utils.writeJsonFileSecure(config.historyPath, remaining);
+      utils.logAudit('INFO', `Bulk delete removed ${deleted} listing(s).`);
+    }
+    return { updated: deleted, deleted, results };
+  }
+
+  if (action === 'adjust_price') {
+    const pct = Number(percentDelta);
+    const amt = Number(amountDelta);
+    if (Number.isNaN(pct) && Number.isNaN(amt)) {
+      throw new Error('adjust_price requires percentDelta or amountDelta.');
+    }
+    const results = [];
+    let updated = 0;
+    for (const sku of skus.map(String)) {
+      const item = history.find(i => i.sku === sku);
+      if (!item) {
+        results.push({ sku, ok: false, error: 'SKU not found' });
+        continue;
+      }
+      if (item.priceLocked) {
+        results.push({ sku, ok: false, error: 'Price is locked' });
+        continue;
+      }
+      const oldPrice = Number(item.price) || 0;
+      let newPrice = oldPrice;
+      if (!Number.isNaN(pct)) {
+        newPrice = oldPrice * (1 + pct / 100);
+      } else if (!Number.isNaN(amt)) {
+        newPrice = oldPrice + amt;
+      }
+      newPrice = Math.round(newPrice * 100) / 100;
+
+      // Enforce COGS + 15% minimum margin floor
+      const cogs = Number(item.costOfGoods ?? item.listingDetails?.costOfGoods) || 0;
+      if (cogs > 0) {
+        const cogsFloor = Math.round(cogs * 1.15 * 100) / 100;
+        if (newPrice < cogsFloor) newPrice = cogsFloor;
+      }
+      if (item.priceFloor && newPrice < Number(item.priceFloor)) {
+        newPrice = Number(item.priceFloor);
+      }
+      if (item.priceCap && newPrice > Number(item.priceCap)) {
+        newPrice = Number(item.priceCap);
+      }
+      newPrice = Math.max(0.99, Math.round(newPrice * 100) / 100);
+
+      item.price = newPrice;
+      if (item.listingDetails && typeof item.listingDetails === 'object') {
+        item.listingDetails.suggestedPrice = newPrice;
+      }
+      updated++;
+      results.push({ sku, ok: true, oldPrice, newPrice });
+    }
+    if (updated > 0) {
+      utils.writeJsonFileSecure(config.historyPath, history);
+      utils.logAudit('INFO', `Bulk price adjustment updated ${updated} listing(s).`);
+    }
+    return { updated, results };
+  }
+
+  throw new Error(`Invalid bulk action "${action}". Supported actions: delete, adjust_price.`);
+}
+
 /* ==========================================================================
  * [WAVE1-D] Team seats (Power Seller workspaces).
  *
@@ -441,7 +596,7 @@ function bulkUpdateListingStatus(skus, status) {
  * ========================================================================== */
 
 // [WAVE1-D] Seats granted per billing plan. Plans not listed here get no team features.
-const TEAM_SEATS_BY_PLAN = { power_seller: 3 };
+const TEAM_SEATS_BY_PLAN = { power_seller: 3, agency: 10 };
 
 /**
  * [WAVE1-D] Seats available for a billing plan (0 when the plan has no team features).
@@ -509,7 +664,8 @@ function inviteTeamMember(ownerEmail, memberEmail) {
     throw new Error("You cannot invite yourself.");
   }
   const { premium, plan } = getBillingPlan(ownerEmail);
-  if (!premium || plan !== "power_seller") {
+  const maxSeats = getTeamMaxSeats(plan);
+  if (!premium || maxSeats === 0) {
     throw new Error("Team seats require an active Power Seller subscription.");
   }
   const store = readTeamStore();
@@ -517,8 +673,9 @@ function inviteTeamMember(ownerEmail, memberEmail) {
   if (record.members.some(m => m.email === memberEmail)) {
     throw new Error(`${memberEmail} is already on the team.`);
   }
-  if (countUsedSeats(record) >= getTeamMaxSeats(plan)) {
-    throw new Error(`Seat limit reached (${getTeamMaxSeats(plan)} seats on Power Seller).`);
+  if (countUsedSeats(record) >= maxSeats) {
+    const planLabel = plan === "agency" ? "Agency" : "Power Seller";
+    throw new Error(`Seat limit reached (${maxSeats} seats on ${planLabel}).`);
   }
   const invite = { email: memberEmail, status: "invited", addedAt: new Date().toISOString() };
   record.members.push(invite);
@@ -560,7 +717,7 @@ function removeTeamMember(ownerEmail, memberEmail) {
 function acceptTeamInvite(ownerEmail, memberEmail) {
   memberEmail = String(memberEmail || "").trim().toLowerCase();
   const { premium, plan } = getBillingPlan(ownerEmail);
-  if (!premium || plan !== "power_seller") {
+  if (!premium || getTeamMaxSeats(plan) === 0) {
     throw new Error("This workspace's Power Seller subscription is no longer active.");
   }
   const store = readTeamStore();
@@ -598,7 +755,7 @@ function leaveTeam(memberEmail) {
 
 /**
  * [WAVE1-D] Resolves which workspace (if any) an email belongs to.
- * Owners qualify only while their Power Seller subscription is active; members
+ * Owners qualify only while their Power Seller or Agency subscription is active; members
  * qualify only while their seat is active AND the owner's subscription is active.
  * @param {string} email - Account email.
  * @returns {{role:"owner"|"member", owner:string}|null}
@@ -607,7 +764,7 @@ function getWorkspaceFor(email) {
   email = String(email || "").trim().toLowerCase();
   if (!email) return null;
   const self = getBillingPlan(email);
-  if (self.premium && self.plan === "power_seller") {
+  if (self.premium && getTeamMaxSeats(self.plan) > 0) {
     return { role: "owner", owner: email };
   }
   const store = readTeamStore();
@@ -615,7 +772,7 @@ function getWorkspaceFor(email) {
     const member = (record.members || []).find(m => m.email === email && m.status === "active");
     if (member) {
       const ownerBilling = getBillingPlan(ownerEmail);
-      if (ownerBilling.premium && ownerBilling.plan === "power_seller") {
+      if (ownerBilling.premium && getTeamMaxSeats(ownerBilling.plan) > 0) {
         return { role: "member", owner: ownerEmail };
       }
       return null; // owner's subscription lapsed -> seat dormant
@@ -650,7 +807,7 @@ function getWorkspaceFor(email) {
 
 // [METERING] Monthly listing allotments by billing plan. Starter's base
 // allotment is 0 — a free account generates only with its own saved key.
-const LISTING_ALLOTMENT_BY_PLAN = { starter: 0, pro: 300, power_seller: 1000 };
+const LISTING_ALLOTMENT_BY_PLAN = { starter: 0, pro: 300, power_seller: 1000, agency: 3500 };
 // [METERING] Free-tier allotment when the account has saved its own Gemini
 // key (BYOK-gated free tier). The cap is a product limit, not a cost limit:
 // free-tier generations count toward it regardless of whose key runs them.
@@ -662,11 +819,93 @@ const EXTENSION_OPERATOR_EMAIL = "extension@local.lister";
 
 // [HARDENING] The real plan lineup — the only plans checkout can sell and
 // the webhook can grant. Amounts and allotments mirror the approved
-// pricing and docs/billing-policy.md (Pro $19/300, Power Seller $49/1,000).
+// pricing and docs/billing-policy.md (Pro $19/300, Power Seller $49/1,000, Agency $149/3,500).
+// Annual billing grants 2 months free (10x monthly price billed yearly).
 const BILLING_PLANS = {
-  pro: { label: "Pro", productName: "ListAI Pro — Pro", amountCents: 1900, monthlyListings: 300 },
-  power_seller: { label: "Power Seller", productName: "ListAI Pro — Power Seller", amountCents: 4900, monthlyListings: 1000 }
+  pro: {
+    label: "Pro",
+    productName: "ListAI Pro — Pro",
+    amountCents: 1900,
+    annualAmountCents: 19000,
+    annualProductName: "ListAI Pro — Pro (Annual — 2 Months Free)",
+    monthlyListings: 300
+  },
+  power_seller: {
+    label: "Power Seller",
+    productName: "ListAI Pro — Power Seller",
+    amountCents: 4900,
+    annualAmountCents: 49000,
+    annualProductName: "ListAI Pro — Power Seller (Annual — 2 Months Free)",
+    monthlyListings: 1000
+  },
+  agency: {
+    label: "Agency",
+    productName: "ListAI Pro — Agency",
+    amountCents: 14900,
+    annualAmountCents: 149000,
+    annualProductName: "ListAI Pro — Agency (Annual — 2 Months Free)",
+    monthlyListings: 3500
+  }
 };
+
+// One-time listing credit top-up packs for burst inventory drops / seasonal sourcing hauls.
+const CREDIT_PACKS = {
+  boost_100: {
+    id: "boost_100",
+    label: "+100 AI Listings Boost",
+    productName: "ListAI Pro — 100 Listing Credits Pack",
+    amountCents: 900,
+    listings: 100
+  },
+  boost_500: {
+    id: "boost_500",
+    label: "+500 AI Listings Boost",
+    productName: "ListAI Pro — 500 Listing Credits Pack",
+    amountCents: 2900,
+    listings: 500
+  }
+};
+
+/**
+ * Returns bonus listing credits purchased by an account for the specified month.
+ * @param {string} email
+ * @param {string} [monthKey]
+ * @returns {number}
+ */
+function getBonusListings(email, monthKey = usageMonthKey()) {
+  email = String(email || "").trim().toLowerCase();
+  if (!email) return 0;
+  const billingHistory = utils.readJsonFileSecure(config.billingDbPath, {});
+  const rec = billingHistory[email];
+  const bonusMap = rec && rec.bonusListings && typeof rec.bonusListings === 'object' ? rec.bonusListings : null;
+  const val = bonusMap ? Number(bonusMap[monthKey]) : 0;
+  return Number.isFinite(val) && val > 0 ? val : 0;
+}
+
+/**
+ * Grants one-time bonus listing credits to an account for the specified month.
+ * @param {string} email
+ * @param {number} creditsToAdd
+ * @param {string} [monthKey]
+ * @returns {number} New bonus total for the month.
+ */
+function addBonusListings(email, creditsToAdd, monthKey = usageMonthKey()) {
+  email = String(email || "").trim().toLowerCase();
+  const delta = Math.max(0, Math.floor(Number(creditsToAdd) || 0));
+  if (!email || delta === 0) return 0;
+  const billingDbPath = config.billingDbPath;
+  const billingHistory = utils.readJsonFileSecure(billingDbPath, {});
+  const rec = billingHistory[email] || { premium: false, plan: 'starter' };
+  if (!rec.bonusListings || typeof rec.bonusListings !== 'object') {
+    rec.bonusListings = {};
+  }
+  const current = Number(rec.bonusListings[monthKey]) || 0;
+  rec.bonusListings[monthKey] = current + delta;
+  billingHistory[email] = rec;
+  utils.writeJsonFileSecure(billingDbPath, billingHistory);
+  utils.logAudit("INFO", `Added ${delta} bonus listing credits to ${email} for ${monthKey} (total bonus: ${rec.bonusListings[monthKey]})`);
+  return rec.bonusListings[monthKey];
+}
 
 /**
  * [HARDENING] Base URL for Stripe redirect/return URLs: the configured
@@ -771,11 +1010,14 @@ function resolveGenerationAllowance(email) {
   const billingEmail = ws ? ws.owner : email;
   const { plan } = getBillingPlan(billingEmail);
   const hasOwnKey = hasUserGeminiKey(billingEmail);
-  const allotment = getMonthlyAllotment(plan, hasOwnKey);
+  const baseAllotment = getMonthlyAllotment(plan, hasOwnKey);
+  const bonus = getBonusListings(billingEmail);
+  const allotment = baseAllotment + bonus;
   const used = getMonthlyUsage(billingEmail);
   const allowed = used < allotment;
   return {
     metered: true, billingEmail, plan, hasOwnKey, allotment, used, allowed,
+    ...(bonus > 0 ? { bonusListings: bonus } : {}),
     reason: allowed ? 'ok' : (allotment === 0 ? 'no_plan' : 'cap_reached')
   };
 }
@@ -843,7 +1085,7 @@ function generationRefusal(allowance) {
       usage
     } };
   }
-  const planName = allowance.plan === 'power_seller' ? 'Power Seller' : 'Pro';
+  const planName = allowance.plan === 'agency' ? 'Agency' : (allowance.plan === 'power_seller' ? 'Power Seller' : 'Pro');
   return { status: 403, body: {
     error: "LISTING_LIMIT_REACHED",
     message: `You've used all ${allowance.allotment} listings in your ${planName} plan for this month. Add your own Gemini API key in Settings to keep generating, or wait until next month.`,
@@ -1151,6 +1393,28 @@ function parseCookies(cookieHeader) {
  * @returns {object|null}
  */
 function getAuthenticatedUser(req) {
+  return resolveAuthenticatedUser(req);
+}
+
+/**
+ * [SHIP-SEC] True only for the deployment operator: the Chrome-extension
+ * operator identity (proven by the configured API_KEY) or an email listed in
+ * the ADMIN_EMAILS env var (comma-separated, case-insensitive).
+ * @param {object|null} user
+ * @returns {boolean}
+ */
+function isOperatorUser(user) {
+  if (!user || !user.email) return false;
+  const email = String(user.email).trim().toLowerCase();
+  if (email === EXTENSION_OPERATOR_EMAIL && config.getAPI_KEY()) return true;
+  const admins = String(process.env.ADMIN_EMAILS || '')
+    .split(',')
+    .map(e => e.trim().toLowerCase())
+    .filter(Boolean);
+  return admins.includes(email);
+}
+
+function resolveAuthenticatedUser(req) {
   // Check Chrome Extension API Key header. [HARDENING] The operator
   // identity exists only when the operator has configured API_KEY — there
   // is no shipped default key, so a bare header (or no header) never
@@ -1448,6 +1712,19 @@ async function runDiagnosticsHealth() {
   const cbStatus = ebayClient.getCircuitBreakerStatus();
   reports.circuitBreakers = cbStatus.domains || {};
 
+  const checkDbIntegrity = (filePath) => {
+    try {
+      const lockExists = fs.existsSync(`${filePath}.lock`);
+      return { status: lockExists ? "LOCKED" : "OK", locked: lockExists };
+    } catch (e) {
+      return { status: "ERROR", message: e.message };
+    }
+  };
+  reports.databases = {
+    history: checkDbIntegrity(config.historyPath),
+    pendingSyncs: checkDbIntegrity(config.pendingSyncsPath)
+  };
+
   const isHealthy = reports.storage.scratch.status === "OK" &&
                     reports.storage.uploads.status === "OK" &&
                     reports.storage.data.status === "OK";
@@ -1542,6 +1819,7 @@ function startWebGuiServer(port = 45900) {
         res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
         res.setHeader('X-XSS-Protection', '1; mode=block');
         res.setHeader('X-Permitted-Cross-Domain-Policies', 'none');
+        res.setHeader('Permissions-Policy', 'camera=(self), microphone=(), geolocation=(), payment=()');
         // [ATLAS-R4] HSTS was the one standard header missing. Browsers
         // ignore it over plain HTTP (local dev); behind HTTPS termination
         // (Railway) it pins clients to HTTPS for a year.
@@ -2263,13 +2541,15 @@ function startWebGuiServer(port = 45900) {
       req.on('data', chunk => { checkoutBody += chunk; });
       req.on('end', async () => {
         try {
-          // The plan is chosen by the caller ({ plan: "pro" | "power_seller" });
-          // absent or empty body defaults to Pro.
+          // The plan is chosen by the caller ({ plan: "pro" | "power_seller" | "agency", interval?: "month" | "year" });
+          // absent or empty body defaults to Pro monthly.
           let plan = "pro";
+          let interval = "month";
           if (checkoutBody) {
             try {
               const parsed = JSON.parse(checkoutBody);
               if (parsed && typeof parsed.plan === 'string' && parsed.plan) plan = parsed.plan;
+              if (parsed && (parsed.interval === 'year' || parsed.interval === 'annual')) interval = 'year';
             } catch (e) { /* malformed body: fall through to the plan check */ }
           }
           const planDef = BILLING_PLANS[plan];
@@ -2279,6 +2559,10 @@ function startWebGuiServer(port = 45900) {
             return;
           }
 
+          const isAnnual = interval === 'year';
+          const unitAmount = isAnnual && planDef.annualAmountCents ? planDef.annualAmountCents : planDef.amountCents;
+          const productName = isAnnual && planDef.annualProductName ? planDef.annualProductName : planDef.productName;
+
           const userEmail = user ? user.email : "customer@local.lister";
           const baseUrl = getAppBaseUrl(port);
           const stripePayload = new URLSearchParams({
@@ -2287,11 +2571,79 @@ function startWebGuiServer(port = 45900) {
             "mode": "subscription",
             "customer_email": userEmail,
             "metadata[plan]": plan,
+            "metadata[interval]": interval,
             "subscription_data[metadata][plan]": plan,
+            "subscription_data[metadata][interval]": interval,
             "line_items[0][price_data][currency]": "usd",
-            "line_items[0][price_data][product_data][name]": planDef.productName,
-            "line_items[0][price_data][unit_amount]": String(planDef.amountCents),
-            "line_items[0][price_data][recurring][interval]": "month",
+            "line_items[0][price_data][product_data][name]": productName,
+            "line_items[0][price_data][unit_amount]": String(unitAmount),
+            "line_items[0][price_data][recurring][interval]": interval,
+            "line_items[0][quantity]": "1"
+          }).toString();
+
+          const stripeRes = await ebayClient.fetchWithRetry("https://api.stripe.com/v1/checkout/sessions", {
+            method: "POST",
+            headers: {
+              "Authorization": `Basic ${Buffer.from(stripeSecret + ':').toString('base64')}`,
+              "Content-Type": "application/x-www-form-urlencoded"
+            },
+            body: stripePayload
+          });
+
+          const stripeData = await stripeRes.json();
+          if (!stripeRes.ok) {
+            throw new Error(`Stripe API error: ${JSON.stringify(stripeData)}`);
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ url: stripeData.url }));
+        } catch (err) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // API: Stripe One-Time Credit Boost Pack Checkout Session
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/billing/create-credit-pack-session') {
+      const stripeSecret = config.getSTRIPE_SECRET_KEY();
+      if (!stripeSecret) {
+        res.writeHead(503, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "BILLING_NOT_CONFIGURED", message: "Checkout is unavailable: payments are not configured on this server." }));
+        return;
+      }
+
+      let packBody = '';
+      req.on('data', chunk => { packBody += chunk; });
+      req.on('end', async () => {
+        try {
+          let packId = "boost_100";
+          if (packBody) {
+            try {
+              const parsed = JSON.parse(packBody);
+              if (parsed && typeof parsed.pack === 'string' && parsed.pack) packId = parsed.pack;
+            } catch (e) {}
+          }
+          const packDef = CREDIT_PACKS[packId];
+          if (!packDef) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "INVALID_CREDIT_PACK", message: `Unknown credit pack "${packId}".` }));
+            return;
+          }
+
+          const userEmail = user ? user.email : "customer@local.lister";
+          const baseUrl = getAppBaseUrl(port);
+          const stripePayload = new URLSearchParams({
+            "success_url": `${baseUrl}/?billing=credits-success`,
+            "cancel_url": `${baseUrl}/?billing=cancel`,
+            "mode": "payment",
+            "customer_email": userEmail,
+            "metadata[credit_pack]": packDef.id,
+            "metadata[credits]": String(packDef.listings),
+            "line_items[0][price_data][currency]": "usd",
+            "line_items[0][price_data][product_data][name]": packDef.productName,
+            "line_items[0][price_data][unit_amount]": String(packDef.amountCents),
             "line_items[0][quantity]": "1"
           }).toString();
 
@@ -2406,21 +2758,32 @@ function startWebGuiServer(port = 45900) {
             const session = event.data.object;
             const email = session.customer_email || session.customer_details?.email;
             if (email) {
-              // [WAVE1-D] Record the billing plan from checkout metadata
-              // (plan: "pro" | "power_seller") so team-seat entitlements can
-              // be enforced. Defaults to "pro" for sessions without metadata.
-              const plan = planFromMetadata(session.metadata, "pro");
-              saveRecord(email, {
-                premium: true,
-                plan,
-                subscriptionId: session.subscription || (billingHistory[email] || {}).subscriptionId,
-                customerId: session.customer || (billingHistory[email] || {}).customerId,
-                paymentStatus: "active",
-                pastDue: false,
-                cancelAtPeriodEnd: false
-              });
-              utils.logAudit("INFO", `Stripe Premium Activated for customer: ${email} (plan: ${plan})`);
-              syncSessionPremium(email, true);
+              if (session.metadata && session.metadata.credit_pack) {
+                const packDef = CREDIT_PACKS[session.metadata.credit_pack];
+                const creditsToGrant = packDef ? packDef.listings : (Number(session.metadata.credits) || 0);
+                if (creditsToGrant > 0) {
+                  addBonusListings(email, creditsToGrant);
+                  utils.logAudit("INFO", `Stripe Credit Pack (${session.metadata.credit_pack}: +${creditsToGrant} listings) granted to ${email}`);
+                }
+              } else {
+                // [WAVE1-D] Record the billing plan from checkout metadata
+                // (plan: "pro" | "power_seller" | "agency") so team-seat entitlements can
+                // be enforced. Defaults to "pro" for sessions without metadata.
+                const plan = planFromMetadata(session.metadata, "pro");
+                const billingInterval = (session.metadata && session.metadata.interval === 'year') ? 'year' : 'month';
+                saveRecord(email, {
+                  premium: true,
+                  plan,
+                  billingInterval,
+                  subscriptionId: session.subscription || (billingHistory[email] || {}).subscriptionId,
+                  customerId: session.customer || (billingHistory[email] || {}).customerId,
+                  paymentStatus: "active",
+                  pastDue: false,
+                  cancelAtPeriodEnd: false
+                });
+                utils.logAudit("INFO", `Stripe Premium Activated for customer: ${email} (plan: ${plan}, interval: ${billingInterval})`);
+                syncSessionPremium(email, true);
+              }
             }
           } else if (event.type === 'customer.subscription.created' || event.type === 'customer.subscription.updated') {
             // [HARDENING] Keep the local record in sync with Stripe: plan
@@ -2616,10 +2979,11 @@ function startWebGuiServer(port = 45900) {
       }
       const store = readTeamStore();
       const record = store[ws.owner] || { members: [] };
+      const ownerPlan = getBillingPlan(ws.owner).plan;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
         role: ws.role, owner: ws.owner, plan: billing.plan,
-        maxSeats: getTeamMaxSeats("power_seller"),
+        maxSeats: getTeamMaxSeats(ownerPlan) || getTeamMaxSeats("power_seller"),
         usedSeats: countUsedSeats(record),
         members: record.members,
         usage: buildUsageSummary(user.email)
@@ -2907,8 +3271,8 @@ function startWebGuiServer(port = 45900) {
       return;
     }
 
-    // API: Poshmark & Mercari Export Details
-    if (req.method === 'POST' && (parsedUrl.pathname === '/api/export/mercari' || parsedUrl.pathname === '/api/export/poshmark')) {
+    // API: Multi-Channel Export Details (Mercari, Poshmark, Depop, Grailed, Facebook Marketplace, Whatnot)
+    if (req.method === 'POST' && /^\/api\/export\/(mercari|poshmark|depop|grailed|facebook|whatnot)$/.test(parsedUrl.pathname)) {
       let bodyData = '';
       req.on('data', chunk => bodyData += chunk);
       req.on('end', async () => {
@@ -2923,19 +3287,54 @@ function startWebGuiServer(port = 45900) {
             return;
           }
           
-          const platform = parsedUrl.pathname.includes('mercari') ? "Mercari" : "Poshmark";
+          const slug = parsedUrl.pathname.split('/').pop();
+          const platformLabels = {
+            mercari: "Mercari",
+            poshmark: "Poshmark",
+            depop: "Depop",
+            grailed: "Grailed",
+            facebook: "Facebook Marketplace",
+            whatnot: "Whatnot"
+          };
+          const platform = platformLabels[slug] || "Mercari";
+          const details = item.listingDetails || {};
+
           // [WAVE1-A] Prefer seller-entered keywords for cross-list tags; fall back to title words.
-          // Private fields (internalNotes, costOfGoods) are never included in export payloads.
-          const storedKeywords = (item.listingDetails && Array.isArray(item.listingDetails.keywords))
-            ? item.listingDetails.keywords.filter(k => typeof k === 'string' && k.trim()).slice(0, 13)
-            : [];
+          // Private fields (internalNotes, costOfGoods, binLocation, sourcingVenue) are never included in export payloads.
+          const storedKeywords = (Array.isArray(item.keywords) && item.keywords.length > 0)
+            ? item.keywords.filter(k => typeof k === 'string' && k.trim()).slice(0, 13)
+            : ((details && Array.isArray(details.keywords))
+              ? details.keywords.filter(k => typeof k === 'string' && k.trim()).slice(0, 13)
+              : []);
+          const baseTags = storedKeywords.length > 0
+            ? storedKeywords
+            : String(item.title || '').split(' ').filter(Boolean).slice(0, 5);
+          const rawDesc = String(item.description || details.description || item.title || '')
+            .replace(/<[^>]*>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+          const hashtags = baseTags.slice(0, 5).map(t => `#${String(t).replace(/[^a-zA-Z0-9]/g, '').toLowerCase()}`).filter(h => h.length > 1).join(' ');
+
+          let formattedDescription = item.description || details.description || rawDesc;
+          if (slug === 'depop') {
+            formattedDescription = `${rawDesc.slice(0, 850)}\n\n${hashtags}`.trim();
+          } else if (slug === 'grailed') {
+            const brand = item.brand || details.brand || 'Designer';
+            const cond = details.condition || 'USED_EXCELLENT';
+            formattedDescription = `${brand} — ${item.title}\nCondition: ${cond}\n\n${rawDesc}`.trim();
+          } else if (slug === 'whatnot') {
+            formattedDescription = `${item.title} (${item.brand || details.brand || 'Authentic'})\n${rawDesc.slice(0, 500)}`.trim();
+          }
+
           const exportData = {
             title: item.title,
-            description: item.description,
+            description: formattedDescription,
             price: item.price,
             sku: item.sku,
-            brand: item.brand || "Generic",
-            suggestedTags: storedKeywords.length > 0 ? storedKeywords.join(', ') : item.title.split(' ').slice(0, 3).join(', ')
+            brand: item.brand || details.brand || "Generic",
+            condition: details.condition || "USED_EXCELLENT",
+            suggestedTags: storedKeywords.length > 0 ? storedKeywords.join(', ') : item.title.split(' ').slice(0, 3).join(', '),
+            hashtags
           };
           
           res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -2944,7 +3343,7 @@ function startWebGuiServer(port = 45900) {
             platform, 
             sku, 
             copyPaste: exportData,
-            images: item.imageUrls || [] 
+            images: item.imageUrls || details.imageUrls || [] 
           }));
         } catch (e) {
           res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -3666,6 +4065,308 @@ function startWebGuiServer(port = 45900) {
       return;
     }
 
+    // API: Bulk Listing Action (delete or adjust_price with COGS + floor/cap guard)
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/listings/bulk-action') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', async () => {
+        try {
+          let payload;
+          try {
+            payload = JSON.parse(bodyData);
+          } catch (e) {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Malformed JSON payload" }));
+            return;
+          }
+          const result = bulkListingAction(payload || {});
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, ...result }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // API: Export active/draft listings as Whatnot Live-Auction / Buy-It-Now CSV
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/listings/export-whatnot.csv') {
+      try {
+        const history = utils.readJsonFileSecure(config.historyPath, []);
+        const csv = buildWhatnotCsv(history);
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="listai-pro-whatnot-${stamp}.csv"`
+        });
+        res.end(csv, 'utf8');
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // API: Portfolio Profit, Tax, Sourcing ROI & Stale Inventory Analytics
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/analytics/pnl') {
+      try {
+        const history = utils.readJsonFileSecure(config.historyPath, []);
+        const soldOrdersPath = path.join(config.stateRoot || process.cwd(), 'data', 'sold-orders.json');
+        const soldOrders = fs.existsSync(soldOrdersPath) ? utils.readJsonFileSecure(soldOrdersPath, []) : [];
+        const staleDays = Math.max(1, parseInt(parsedUrl.searchParams.get('staleDays') || '60', 10) || 60);
+        const portfolio = analyticsEngine.computePortfolioAnalytics(history, soldOrders);
+        const venues = sourcingAnalytics.computeVenueROI(history, soldOrders);
+        const staleInventory = sourcingAnalytics.getStaleInventoryAlerts(history, soldOrders, staleDays);
+        const bins = binLocationManager.getBinInventory(history);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({
+          success: true,
+          portfolio,
+          venues,
+          staleInventory,
+          bins
+        }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // API: Schedule C / QuickBooks Online Accounting CSV Export
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/accounting/export.csv') {
+      try {
+        const history = utils.readJsonFileSecure(config.historyPath, []);
+        const soldOrdersPath = path.join(config.stateRoot || process.cwd(), 'data', 'sold-orders.json');
+        const soldOrders = fs.existsSync(soldOrdersPath) ? utils.readJsonFileSecure(soldOrdersPath, []) : [];
+        const includeActive = parsedUrl.searchParams.get('includeActive') !== 'false';
+        const orders = accountingExport.normalizeHistoryToOrders(history, soldOrders, { includeActive });
+        const csv = accountingExport.exportToCSV(orders);
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, {
+          'Content-Type': 'text/csv; charset=utf-8',
+          'Content-Disposition': `attachment; filename="listai-pro-accounting-${stamp}.csv"`
+        });
+        res.end(csv, 'utf8');
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // API: QuickBooks Desktop Double-Entry (.IIF) Accounting Export
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/accounting/export.iif') {
+      try {
+        const history = utils.readJsonFileSecure(config.historyPath, []);
+        const soldOrdersPath = path.join(config.stateRoot || process.cwd(), 'data', 'sold-orders.json');
+        const soldOrders = fs.existsSync(soldOrdersPath) ? utils.readJsonFileSecure(soldOrdersPath, []) : [];
+        const includeActive = parsedUrl.searchParams.get('includeActive') !== 'false';
+        const orders = accountingExport.normalizeHistoryToOrders(history, soldOrders, { includeActive });
+        const iif = accountingExport.exportToIIF(orders);
+        const stamp = new Date().toISOString().slice(0, 10);
+        res.writeHead(200, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Content-Disposition': `attachment; filename="listai-pro-quickbooks-${stamp}.iif"`
+        });
+        res.end(iif, 'utf8');
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // API: Warehouse Bin Inventory Summary
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/bins') {
+      try {
+        const history = utils.readJsonFileSecure(config.historyPath, []);
+        const bins = binLocationManager.getBinInventory(history);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true, ...bins }));
+      } catch (err) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // API: Print-Ready SVG Warehouse Bin Label with Code 128B Barcode
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/bins/label.svg') {
+      try {
+        const sku = parsedUrl.searchParams.get('sku') || '';
+        const history = utils.readJsonFileSecure(config.historyPath, []);
+        const item = history.find(i => i.sku === sku);
+        const details = (item && item.listingDetails) || {};
+        const binLocation = parsedUrl.searchParams.get('bin') || (item && item.binLocation) || details.binLocation || 'UNASSIGNED';
+        const title = parsedUrl.searchParams.get('title') || (item && item.title) || details.title || sku || 'Inventory Item';
+        const price = parsedUrl.searchParams.get('price') || (item && item.price) || details.suggestedPrice || null;
+        const svg = binLocationManager.generateBinLabel({
+          sku: sku || 'SKU-000',
+          title,
+          binLocation,
+          price,
+          createdAt: (item && item.timestamp) || new Date().toISOString()
+        });
+        res.writeHead(200, { 'Content-Type': 'image/svg+xml; charset=utf-8' });
+        res.end(svg, 'utf8');
+      } catch (err) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: err.message }));
+      }
+      return;
+    }
+
+    // API: Generate Sorted Warehouse Pick List
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/bins/pick-list') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(bodyData || '{}');
+          const history = utils.readJsonFileSecure(config.historyPath, []);
+          let orders = Array.isArray(payload.orders) ? payload.orders : [];
+          if (orders.length === 0 && Array.isArray(payload.skus)) {
+            orders = payload.skus.map(s => ({ sku: String(s), quantity: 1 }));
+          } else if (orders.length === 0) {
+            orders = history
+              .filter(h => h.status === 'ACTIVE' || h.status === 'SOLD')
+              .map(h => ({ sku: h.sku, quantity: 1, title: h.title, binLocation: h.binLocation || (h.listingDetails && h.listingDetails.binLocation) || 'UNASSIGNED' }));
+          }
+          const pickList = binLocationManager.generatePickList(orders, history);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, pickList }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // API: eBay Active Content & Policy Compliance Scanner
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/compliance/scan') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(bodyData || '{}');
+          if (typeof payload.html === 'string') {
+            const result = complianceScanner.scanHtml(payload.html);
+            const badge = complianceScanner.getBadgeStatus(result.violations);
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ success: true, ...result, badge }));
+            return;
+          }
+          const history = utils.readJsonFileSecure(config.historyPath, []);
+          const report = complianceScanner.scanAllListings(history);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, ...report }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // API: eBay Active Content & Policy Compliance Auto-Fixer
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/compliance/autofix') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(bodyData || '{}');
+          if (typeof payload.html !== 'string') {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: "Payload must include an html string." }));
+            return;
+          }
+          const fixed = complianceScanner.autoFix(payload.html);
+          const scan = complianceScanner.scanHtml(fixed.html);
+          const badge = complianceScanner.getBadgeStatus(scan.violations);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: true,
+            html: fixed.html,
+            fixedRules: fixed.fixedRules,
+            compliant: scan.compliant,
+            violations: scan.violations,
+            badge
+          }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // API: Multi-Quantity Inventory Reserve & Safety Buffer Calculator
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/inventory/reserve-calc') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', () => {
+        try {
+          const payload = JSON.parse(bodyData || '{}');
+          const updates = inventorySync.buildChannelUpdates(payload);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ success: true, updates }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // API: Reset Circuit Breaker (for recovering after rate limits or API hiccups)
+    if (req.method === 'POST' && parsedUrl.pathname === '/api/circuit-breaker/reset') {
+      let bodyData = '';
+      req.on('data', chunk => { bodyData += chunk; });
+      req.on('end', () => {
+        try {
+          const payload = bodyData ? JSON.parse(bodyData) : {};
+          const domain = payload.domain || 'all';
+          ebayClient.resetCircuitBreaker(domain);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            success: true,
+            domain,
+            circuitBreaker: ebayClient.getCircuitBreakerStatus()
+          }));
+        } catch (err) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: err.message }));
+        }
+      });
+      return;
+    }
+
+    // API: Read non-secret configuration + boolean secret status flags for Onboarding Wizard prefill
+    if (req.method === 'GET' && parsedUrl.pathname === '/api/config') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        EBAY_CLIENT_ID: config.getEBAY_CLIENT_ID() || '',
+        EBAY_RUNAME: config.getEBAY_RUNAME() || '',
+        EBAY_LOCATION_KEY: config.getEBAY_LOCATION_KEY() || '',
+        SHOPIFY_SHOP_NAME: config.getSHOPIFY_SHOP_NAME() || '',
+        WOOCOMMERCE_URL: config.getWOOCOMMERCE_URL() || '',
+        ETSY_SHOP_ID: config.getETSY_SHOP_ID() || '',
+        WATERMARK_TEXT: config.getWATERMARK_TEXT() || '',
+        SKU_PREFIX: config.getSKU_PREFIX() || '',
+        DEFAULT_PRICING_STRATEGY: config.getDEFAULT_PRICING_STRATEGY() || 'MARKET',
+        hasGeminiKey: !!config.getGEMINI_API_KEY(),
+        hasEbaySecret: !!config.getEBAY_CLIENT_SECRET(),
+        hasEbayRefreshToken: !!config.getEBAY_REFRESH_TOKEN(),
+        hasShopifyToken: !!config.getSHOPIFY_ACCESS_TOKEN(),
+        hasWooCommerceSecret: !!(config.getWOOCOMMERCE_KEY() && config.getWOOCOMMERCE_SECRET()),
+        hasEtsyToken: !!config.getETSY_ACCESS_TOKEN()
+      }));
+      return;
+    }
+
     // [WAVE1-B] API: List background-task error notifications (unread = all queued).
     if (req.method === 'GET' && parsedUrl.pathname === '/api/notifications') {
       try {
@@ -3731,6 +4432,19 @@ function startWebGuiServer(port = 45900) {
         res.end(JSON.stringify({ error: "LOGIN_REQUIRED", message: "Please log in to save configuration." }));
         return;
       }
+      // [SHIP-SEC] Authentication alone is not authorization. In the hosted
+      // SaaS any Google account can sign in (free tier), so "logged in" let
+      // every customer rewrite STRIPE_SECRET_KEY / GOOGLE_CLIENT_* / the
+      // house GEMINI_API_KEY for the whole deployment. Only the operator may
+      // change deployment secrets: the holder of the configured API_KEY, or
+      // an email listed in ADMIN_EMAILS (comma-separated). Fails closed when
+      // neither is configured.
+      if (!isOperatorUser(user)) {
+        utils.logAudit("WARN", `Non-operator ${user.email} attempted /api/config/save from ${clientIp}`);
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: "OPERATOR_ONLY", message: "Only the deployment operator can change server configuration." }));
+        return;
+      }
       let bodyData = '';
       req.on('data', chunk => bodyData += chunk);
       req.on('end', async () => {
@@ -3746,7 +4460,7 @@ function startWebGuiServer(port = 45900) {
           const allowedKeys = [
             'API_KEY', 'GEMINI_API_KEY', 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET',
             'GOOGLE_REDIRECT_URI', 'STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET',
-            'EBAY_CLIENT_ID', 'EBAY_CLIENT_SECRET', 'EBAY_REFRESH_TOKEN', 'EBAY_LOCATION_KEY',
+            'EBAY_CLIENT_ID', 'EBAY_CLIENT_SECRET', 'EBAY_REFRESH_TOKEN', 'EBAY_RUNAME', 'EBAY_LOCATION_KEY',
             'EBAY_FULFILLMENT_POLICY_ID', 'EBAY_PAYMENT_POLICY_ID', 'EBAY_RETURN_POLICY_ID',
             'SHOPIFY_SHOP_NAME', 'SHOPIFY_ACCESS_TOKEN',
             'WOOCOMMERCE_URL', 'WOOCOMMERCE_KEY', 'WOOCOMMERCE_SECRET',
@@ -4684,6 +5398,12 @@ function startWebGuiServer(port = 45900) {
             history[existingIndex].categoryId = finalListing.categoryId;
             history[existingIndex].brand = finalListing.brand || "Generic";
             history[existingIndex].veroWarning = veroWarning;
+            if (finalListing.costOfGoods !== undefined) history[existingIndex].costOfGoods = finalListing.costOfGoods;
+            if (finalListing.msrp !== undefined) history[existingIndex].msrp = finalListing.msrp;
+            if (Array.isArray(finalListing.keywords)) history[existingIndex].keywords = finalListing.keywords;
+            if (typeof finalListing.internalNotes === 'string') history[existingIndex].internalNotes = finalListing.internalNotes;
+            if (typeof finalListing.binLocation === 'string') history[existingIndex].binLocation = finalListing.binLocation;
+            if (typeof finalListing.sourcingVenue === 'string') history[existingIndex].sourcingVenue = finalListing.sourcingVenue;
             history[existingIndex].listingDetails = listingDetails;
             utils.writeJsonFileSecure(config.historyPath, history);
             utils.logAudit("INFO", `Updated existing draft. SKU: ${sku}`);
@@ -5448,7 +6168,9 @@ module.exports = {
   // [WAVE1-B] Wave-1 bulk/notifications helpers (exported for tests)
   csvEscape,
   buildListingsCsv,
+  buildWhatnotCsv,
   bulkUpdateListingStatus,
+  bulkListingAction,
   BULK_ALLOWED_STATUSES,
   // [WAVE1-C] Exported for unit tests
   isIsbn13,
@@ -5471,6 +6193,9 @@ module.exports = {
   // [METERING] Exported for unit tests
   LISTING_ALLOTMENT_BY_PLAN,
   STARTER_BYOK_ALLOTMENT,
+  CREDIT_PACKS,
+  getBonusListings,
+  addBonusListings,
   getUserGeminiKey,
   hasUserGeminiKey,
   getMonthlyAllotment,
@@ -5492,7 +6217,8 @@ module.exports = {
   resolveEnhanceKey,
   // [HARDENING] Exported for unit tests
   BILLING_PLANS,
-  getAppBaseUrl
+  getAppBaseUrl,
+  isOperatorUser
 };
 
 if (require.main === module) {

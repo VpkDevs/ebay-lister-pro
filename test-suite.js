@@ -5948,3 +5948,424 @@ test('§13 Atlas R4 Phase 8: email plumbing no-ops safely unconfigured; FAQ page
     }
   });
 });
+
+// ==========================================
+// 14. Monetization Expansion: Agency Plan, Annual Billing & Credit Boost Packs
+// ==========================================
+test('§14 Monetization Expansion: Agency Tier ($149/3,500/10 seats), Annual Billing (2 Months Free) & Credit Boost Packs', async (t) => {
+  const billingDbPath = config.billingDbPath;
+  const billingBackup = fs.existsSync(billingDbPath) ? fs.readFileSync(billingDbPath, 'utf8') : null;
+  const teamBackup = fs.existsSync(config.teamPath) ? fs.readFileSync(config.teamPath, 'utf8') : null;
+  const savedStripeKey = process.env.STRIPE_SECRET_KEY;
+  const savedWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  try {
+    await t.test('Agency plan grants 3,500 monthly listings and 10 team seats', () => {
+      assert.strictEqual(webServer.BILLING_PLANS.agency.amountCents, 14900);
+      assert.strictEqual(webServer.BILLING_PLANS.agency.annualAmountCents, 149000);
+      assert.strictEqual(webServer.BILLING_PLANS.agency.monthlyListings, 3500);
+      assert.strictEqual(webServer.LISTING_ALLOTMENT_BY_PLAN.agency, 3500);
+      assert.strictEqual(webServer.getTeamMaxSeats('agency'), 10);
+
+      fs.writeFileSync(billingDbPath, JSON.stringify({
+        'agency-owner@test.com': { premium: true, plan: 'agency' }
+      }), 'utf8');
+      fs.writeFileSync(config.teamPath, JSON.stringify({}), 'utf8');
+
+      // Invite 5 team members (exceeds Power Seller's 3-seat cap, succeeds under Agency's 10-seat cap)
+      for (let i = 1; i <= 5; i++) {
+        const inv = webServer.inviteTeamMember('agency-owner@test.com', `va${i}@test.com`);
+        assert.strictEqual(inv.status, 'invited');
+        webServer.acceptTeamInvite('agency-owner@test.com', `va${i}@test.com`);
+      }
+      const ws = webServer.getWorkspaceFor('va5@test.com');
+      assert.deepStrictEqual(ws, { role: 'member', owner: 'agency-owner@test.com' });
+      const allowance = webServer.resolveGenerationAllowance('va5@test.com');
+      assert.strictEqual(allowance.plan, 'agency');
+      assert.strictEqual(allowance.allotment, 3500);
+    });
+
+    await t.test('Bonus listing credit packs (+100 / +500) expand monthly generation allowance', () => {
+      assert.strictEqual(webServer.CREDIT_PACKS.boost_100.amountCents, 900);
+      assert.strictEqual(webServer.CREDIT_PACKS.boost_100.listings, 100);
+      assert.strictEqual(webServer.CREDIT_PACKS.boost_500.amountCents, 2900);
+      assert.strictEqual(webServer.CREDIT_PACKS.boost_500.listings, 500);
+
+      fs.writeFileSync(billingDbPath, JSON.stringify({
+        'burst-seller@test.com': { premium: true, plan: 'pro' }
+      }), 'utf8');
+
+      const before = webServer.resolveGenerationAllowance('burst-seller@test.com');
+      assert.strictEqual(before.allotment, 300);
+
+      const newTotalBonus = webServer.addBonusListings('burst-seller@test.com', 100);
+      assert.strictEqual(newTotalBonus, 100);
+      assert.strictEqual(webServer.getBonusListings('burst-seller@test.com'), 100);
+
+      const after = webServer.resolveGenerationAllowance('burst-seller@test.com');
+      assert.strictEqual(after.allotment, 400);
+      assert.strictEqual(after.bonusListings, 100);
+    });
+
+    await t.test('HTTP checkout supports annual billing interval and credit pack sessions + webhook grant', async () => {
+      process.env.STRIPE_SECRET_KEY = 'sk_test_monetization';
+      process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test_monetization';
+      const server = webServer.startWebGuiServer(0);
+      await new Promise((resolve) => server.on('listening', resolve));
+      const port = server.address().port;
+      const base = `http://127.0.0.1:${port}`;
+      const capturedBodies = [];
+      const originalFetchWithRetry = ebayClient.fetchWithRetry;
+      ebayClient.fetchWithRetry = async (url, options) => {
+        if (String(url).includes('api.stripe.com/v1/checkout/sessions')) {
+          capturedBodies.push(options.body);
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ id: 'cs_test_annual', url: 'https://checkout.stripe.com/c/pay/cs_test_annual' })
+          };
+        }
+        return originalFetchWithRetry(url, options);
+      };
+
+      try {
+        webServer.resetRateLimits();
+        // 1. Annual Power Seller checkout ($490/yr)
+        const resAnnual = await REAL_FETCH(`${base}/api/billing/create-checkout-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ plan: 'power_seller', interval: 'year' })
+        });
+        assert.strictEqual(resAnnual.status, 200);
+        const paramsAnnual = new URLSearchParams(capturedBodies[0]);
+        assert.strictEqual(paramsAnnual.get('line_items[0][price_data][unit_amount]'), '49000');
+        assert.strictEqual(paramsAnnual.get('line_items[0][price_data][recurring][interval]'), 'year');
+        assert.strictEqual(paramsAnnual.get('metadata[plan]'), 'power_seller');
+        assert.strictEqual(paramsAnnual.get('metadata[interval]'), 'year');
+
+        // 2. Credit Pack checkout (+500 listings for $29)
+        const resPack = await REAL_FETCH(`${base}/api/billing/create-credit-pack-session`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pack: 'boost_500' })
+        });
+        assert.strictEqual(resPack.status, 200);
+        const paramsPack = new URLSearchParams(capturedBodies[1]);
+        assert.strictEqual(paramsPack.get('mode'), 'payment');
+        assert.strictEqual(paramsPack.get('line_items[0][price_data][unit_amount]'), '2900');
+        assert.strictEqual(paramsPack.get('metadata[credit_pack]'), 'boost_500');
+        assert.strictEqual(paramsPack.get('metadata[credits]'), '500');
+
+        // 3. Webhook credit_pack completion grants +500 bonus listings without overwriting subscription plan
+        fs.writeFileSync(billingDbPath, JSON.stringify({
+          'pack-buyer@test.com': { premium: true, plan: 'pro', subscriptionId: 'sub_existing' }
+        }), 'utf8');
+        const eventBody = JSON.stringify({
+          type: 'checkout.session.completed',
+          data: {
+            object: {
+              customer_email: 'pack-buyer@test.com',
+              metadata: { credit_pack: 'boost_500', credits: '500' }
+            }
+          }
+        });
+        const ts = Math.floor(Date.now() / 1000);
+        const sig = require('crypto').createHmac('sha256', process.env.STRIPE_WEBHOOK_SECRET).update(`${ts}.${eventBody}`).digest('hex');
+        const whRes = await REAL_FETCH(`${base}/api/billing/webhook`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'stripe-signature': `t=${ts},v1=${sig}` },
+          body: eventBody
+        });
+        assert.strictEqual(whRes.status, 200);
+        const allowance = webServer.resolveGenerationAllowance('pack-buyer@test.com');
+        assert.strictEqual(allowance.plan, 'pro');
+        assert.strictEqual(allowance.allotment, 800); // 300 base + 500 bonus
+      } finally {
+        ebayClient.fetchWithRetry = originalFetchWithRetry;
+        await new Promise((resolve) => server.close(resolve));
+      }
+    });
+  } finally {
+    if (billingBackup === null) { try { fs.unlinkSync(billingDbPath); } catch (e) {} }
+    else fs.writeFileSync(billingDbPath, billingBackup, 'utf8');
+    if (teamBackup === null) { try { fs.unlinkSync(config.teamPath); } catch (e) {} }
+    else fs.writeFileSync(config.teamPath, teamBackup, 'utf8');
+    if (savedStripeKey === undefined) delete process.env.STRIPE_SECRET_KEY;
+    else process.env.STRIPE_SECRET_KEY = savedStripeKey;
+    if (savedWebhookSecret === undefined) delete process.env.STRIPE_WEBHOOK_SECRET;
+    else process.env.STRIPE_WEBHOOK_SECRET = savedWebhookSecret;
+  }
+});
+
+// ==========================================
+// 15. Enterprise Reseller Suite & Quick Wins Verification
+// ==========================================
+test('§15 Enterprise Reseller Suite: Analytics, QuickBooks/Tax, Barcode Bins, Compliance Scanner, Multi-Channel Exports & Quick Wins', async (t) => {
+  const analyticsEngine = require('./lib/analyticsEngine');
+  const accountingExport = require('./lib/accountingExport');
+  const binLocationManager = require('./lib/binLocationManager');
+  const complianceScanner = require('./lib/complianceScanner');
+  const sourcingAnalytics = require('./lib/sourcingAnalytics');
+  const inventorySync = require('./lib/inventorySync');
+  const { Repricer } = require('./lib/repricer');
+  const historyBackup = fs.existsSync(config.historyPath) ? fs.readFileSync(config.historyPath, 'utf8') : null;
+
+  await t.test('P&L Analytics Engine computes category FVF, net profit, margin, ROI, and active inventory projections', () => {
+    const pnl = analyticsEngine.computePnL({
+      soldPrice: 100,
+      cogs: 40,
+      shippingCost: 8,
+      shippingCharged: 10,
+      adFeeRate: 0.02,
+      categoryId: '9355' // Cell Phones & Smartphones (12.35%)
+    });
+    assert.ok(pnl.ebayFee > 0);
+    assert.ok(pnl.netProfit > 35);
+    assert.ok(pnl.marginPct > 30);
+    assert.ok(pnl.roiPct > 85);
+
+    const sampleHistory = [
+      { sku: 'SOLD-1', title: 'Vintage Camera', price: 120, costOfGoods: 40, status: 'SOLD', categoryId: '625', timestamp: '2026-10-01T00:00:00.000Z', sourcingVenue: 'Estate Sale', binLocation: 'A1-S1' },
+      { sku: 'ACT-1', title: 'Leather Jacket', price: 85, costOfGoods: 20, status: 'ACTIVE', categoryId: '11450', timestamp: '2026-08-01T00:00:00.000Z', sourcingVenue: 'Goodwill', binLocation: 'B2-S3' }
+    ];
+    const portfolio = analyticsEngine.computePortfolioAnalytics(sampleHistory, []);
+    assert.strictEqual(portfolio.soldCount, 1);
+    assert.ok(portfolio.totalNetProfit > 50);
+    assert.strictEqual(portfolio.activeInventory.activeCount, 1);
+    assert.strictEqual(portfolio.activeInventory.totalRetailValue, 85);
+    assert.ok(portfolio.activeInventory.projectedNetProfit > 50);
+  });
+
+  await t.test('QuickBooks (.IIF) and Schedule C Tax CSV Accounting Exports format accurately', () => {
+    const orders = [
+      { orderId: 'ORD-100', soldAt: '2026-10-15T00:00:00.000Z', sku: 'SKU-100', title: 'Sony Walkman', salePrice: 150, platformFee: 21.4, shippingCost: 7.5, cogs: 35 }
+    ];
+    const csv = accountingExport.exportToCSV(orders);
+    assert.ok(csv.includes('"Date","OrderID","Channel","BuyerName","ItemTitle"'));
+    assert.ok(csv.includes('ORD-100'));
+    assert.ok(csv.includes('Sony Walkman'));
+
+    const iif = accountingExport.exportToIIF(orders);
+    assert.ok(iif.includes('!TRNS\tTRNSTYPE\tDATE\tACCNT\tNAME\tAMOUNT\tMEMO'));
+    assert.ok(iif.includes('Sales Revenue'));
+    assert.ok(iif.includes('Cost of Goods Sold'));
+    assert.ok(iif.includes('ENDTRNS'));
+  });
+
+  await t.test('Warehouse Bin Location Manager encodes Code 128B SVG barcodes and sorts walking-order pick lists', () => {
+    const labelSvg = binLocationManager.generateBinLabel({
+      sku: 'LP-SKU-777',
+      title: 'Nintendo GameBoy Color Atomic Purple',
+      binLocation: 'A2-S1-B4',
+      price: 89.99
+    });
+    assert.ok(labelSvg.startsWith('<svg'));
+    assert.ok(labelSvg.includes('A2-S1-B4'));
+    assert.ok(labelSvg.includes('LP-SKU-777'));
+    assert.ok(labelSvg.includes('$89.99'));
+
+    const pickList = binLocationManager.generatePickList([
+      { sku: 'S2', quantity: 1, title: 'Item B', binLocation: 'B10-S2' },
+      { sku: 'S1', quantity: 2, title: 'Item A', binLocation: 'A1-S1' },
+      { sku: 'S3', quantity: 1, title: 'Item C', binLocation: 'A2-S1' }
+    ]);
+    assert.strictEqual(pickList[0].binLocation, 'A1-S1');
+    assert.strictEqual(pickList[1].binLocation, 'A2-S1');
+    assert.strictEqual(pickList[2].binLocation, 'B10-S2');
+  });
+
+  await t.test('eBay Active Content & Policy Compliance Scanner detects and auto-fixes violations', () => {
+    const dirtyHtml = '<div><script>alert(1)</script><p onclick="bad()">Call me at 555-123-4567 or email bob@example.com</p><img src="http://insecure.com/pic.jpg"></div>';
+    const scan = complianceScanner.scanHtml(dirtyHtml);
+    assert.strictEqual(scan.compliant, false);
+    assert.ok(scan.violations.length >= 4);
+
+    const fixed = complianceScanner.autoFix(dirtyHtml);
+    assert.ok(!fixed.html.includes('<script'));
+    assert.ok(!fixed.html.includes('onclick='));
+    assert.ok(!fixed.html.includes('bob@example.com'));
+    assert.ok(fixed.html.includes('https://insecure.com/pic.jpg'));
+    const reScan = complianceScanner.scanHtml(fixed.html);
+    assert.strictEqual(reScan.compliant, true);
+  });
+
+  await t.test('Sourcing Analytics, Multi-Quantity Inventory Sync & Repricer IQR + COGS Floor Guard', () => {
+    const history = [
+      { sku: 'V1', title: 'Item 1', price: 100, costOfGoods: 25, status: 'SOLD', sourcingVenue: 'Estate Sale', timestamp: '2026-01-01T00:00:00.000Z' },
+      { sku: 'V2', title: 'Item 2', price: 60, costOfGoods: 15, status: 'ACTIVE', sourcingVenue: 'Goodwill', timestamp: '2026-01-01T00:00:00.000Z' }
+    ];
+    const venues = sourcingAnalytics.computeVenueROI(history, []);
+    assert.ok(venues.length >= 2);
+    const stale = sourcingAnalytics.getStaleInventoryAlerts(history, [], 30);
+    assert.strictEqual(stale.length, 1);
+    assert.strictEqual(stale[0].sku, 'V2');
+
+    // Multi-quantity channel reserve calculation
+    const avail = inventorySync.computeChannelAvailable({
+      quantityTotal: 10,
+      quantitySold: 2,
+      buffer: 2,
+      quantityReserves: { ebay: 5, shopify: 8 }
+    });
+    assert.strictEqual(avail.ebay, 5);
+    assert.strictEqual(avail.shopify, 6);
+
+    // Repricer IQR median
+    const median = Repricer.computeIqrMedian([20, 22, 24, 25, 26, 200]); // 200 is an outlier
+    assert.ok(median >= 22 && median <= 26);
+  });
+
+  await t.test('Quick Wins: utils.sanitizeLog pattern scrubbing, estimateSellerNetProfit, private fields stripping & HTTP endpoints', async () => {
+    // 1. Pattern-based secret redaction in sanitizeLog
+    const fakeShopifyTok = 'shpat_' + '1234567890abcdef'.repeat(2);
+    const fakeGeminiTok = 'AIza' + 'SyA12345678901234567890123456789012';
+    const rawLog = `Error calling Shopify with ${fakeShopifyTok} and Gemini ${fakeGeminiTok}`;
+    const scrubbed = utils.sanitizeLog(rawLog);
+    assert.ok(!scrubbed.includes(fakeShopifyTok));
+    assert.ok(scrubbed.includes('[REDACTED_SHOPIFY_TOKEN]'));
+    assert.ok(scrubbed.includes('[REDACTED_GEMINI_KEY]'));
+
+    // 2. estimateSellerNetProfit
+    const netCalc = utils.estimateSellerNetProfit({ price: 100, cog: 30, shippingCost: 5, marketplace: 'ebay' });
+    assert.strictEqual(netCalc.fee, 13.55);
+    assert.strictEqual(netCalc.profit, 51.45);
+    assert.strictEqual(netCalc.marginPct, 51.45);
+
+    // 3. sanitizeListingForMarketplace strips binLocation and sourcingVenue
+    const sanitized = utils.sanitizeListingForMarketplace({
+      title: 'Public Item',
+      costOfGoods: 12,
+      internalNotes: 'Secret note',
+      binLocation: 'A1-B2',
+      sourcingVenue: 'Goodwill'
+    });
+    assert.strictEqual(sanitized.binLocation, undefined);
+    assert.strictEqual(sanitized.sourcingVenue, undefined);
+    assert.strictEqual(sanitized.costOfGoods, undefined);
+    assert.strictEqual(sanitized.internalNotes, undefined);
+
+    // 4. HTTP Endpoints verification
+    fs.writeFileSync(config.historyPath, JSON.stringify([
+      {
+        sku: 'QW-SKU-1',
+        title: 'Vintage Nike Windbreaker Jacket',
+        price: 60,
+        costOfGoods: 20,
+        binLocation: 'A1-S2',
+        sourcingVenue: 'Thrift Store',
+        status: 'ACTIVE',
+        categoryId: '11450',
+        timestamp: '2026-07-01T00:00:00.000Z',
+        listingDetails: {
+          title: 'Vintage Nike Windbreaker Jacket',
+          suggestedPrice: 60,
+          costOfGoods: 20,
+          binLocation: 'A1-S2',
+          sourcingVenue: 'Thrift Store',
+          keywords: ['vintage', 'nike', 'windbreaker'],
+          description: '<p>Great jacket</p>'
+        }
+      }
+    ]), 'utf8');
+
+    const server = webServer.startWebGuiServer(0);
+    await new Promise((resolve) => server.on('listening', resolve));
+    const port = server.address().port;
+    const base = `http://127.0.0.1:${port}`;
+
+    try {
+      webServer.resetRateLimits();
+      // Analytics P&L endpoint
+      let res = await REAL_FETCH(`${base}/api/analytics/pnl`);
+      assert.strictEqual(res.status, 200);
+      const pnlData = await res.json();
+      assert.strictEqual(pnlData.success, true);
+      assert.strictEqual(pnlData.portfolio.activeInventory.activeCount, 1);
+
+      // Accounting CSV & IIF endpoints
+      res = await REAL_FETCH(`${base}/api/accounting/export.csv`);
+      assert.strictEqual(res.status, 200);
+      assert.ok((await res.text()).includes('QW-SKU-1'));
+
+      res = await REAL_FETCH(`${base}/api/accounting/export.iif`);
+      assert.strictEqual(res.status, 200);
+      assert.ok((await res.text()).includes('!TRNS'));
+
+      // Barcode Bin Label SVG & Pick List endpoints
+      res = await REAL_FETCH(`${base}/api/bins/label.svg?sku=QW-SKU-1`);
+      assert.strictEqual(res.status, 200);
+      const svgText = await res.text();
+      assert.ok(svgText.includes('<svg'));
+      assert.ok(svgText.includes('A1-S2'));
+
+      res = await REAL_FETCH(`${base}/api/bins/pick-list`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skus: ['QW-SKU-1'] })
+      });
+      assert.strictEqual(res.status, 200);
+      const pickData = await res.json();
+      assert.strictEqual(pickData.pickList.length, 1);
+      assert.strictEqual(pickData.pickList[0].binLocation, 'A1-S2');
+
+      // Compliance Scan & Autofix endpoints
+      res = await REAL_FETCH(`${base}/api/compliance/scan`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: '<script>evil()</script><p>Clean text</p>' })
+      });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual((await res.json()).compliant, false);
+
+      res = await REAL_FETCH(`${base}/api/compliance/autofix`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ html: '<script>evil()</script><p>Clean text</p>' })
+      });
+      assert.strictEqual(res.status, 200);
+      const fixData = await res.json();
+      assert.strictEqual(fixData.compliant, true);
+      assert.ok(!fixData.html.includes('<script'));
+
+      // Depop, Grailed & Whatnot exports + Whatnot bulk CSV
+      for (const platform of ['depop', 'grailed', 'whatnot']) {
+        res = await REAL_FETCH(`${base}/api/export/${platform}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sku: 'QW-SKU-1' })
+        });
+        assert.strictEqual(res.status, 200);
+        const expData = await res.json();
+        assert.strictEqual(expData.success, true);
+        assert.ok(expData.copyPaste.title.includes('Vintage Nike'));
+      }
+
+      res = await REAL_FETCH(`${base}/api/listings/export-whatnot.csv`);
+      assert.strictEqual(res.status, 200);
+      const whatnotCsv = await res.text();
+      assert.ok(whatnotCsv.includes('Shipping Profile'));
+      assert.ok(whatnotCsv.includes('QW-SKU-1'));
+
+      // Bulk Price Adjust (respects COGS + 15% floor) & Bulk Delete
+      res = await REAL_FETCH(`${base}/api/listings/bulk-action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skus: ['QW-SKU-1'], action: 'adjust_price', percentDelta: -90 })
+      });
+      assert.strictEqual(res.status, 200);
+      const adjData = await res.json();
+      assert.strictEqual(adjData.updated, 1);
+      assert.strictEqual(adjData.results[0].newPrice, 23); // 20 COGS * 1.15 floor = $23.00
+
+      // GET /api/config returns non-secret config + boolean flags
+      res = await REAL_FETCH(`${base}/api/config`);
+      assert.strictEqual(res.status, 200);
+      const cfgData = await res.json();
+      assert.strictEqual(typeof cfgData.hasGeminiKey, 'boolean');
+    } finally {
+      await new Promise((resolve) => server.close(resolve));
+      if (historyBackup === null) { try { fs.unlinkSync(config.historyPath); } catch (e) {} }
+      else fs.writeFileSync(config.historyPath, historyBackup, 'utf8');
+    }
+  });
+});
