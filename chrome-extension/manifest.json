@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "eBay Multi-Lister Cross-posting Companion",
+  "name": "ListAI Pro — Multi-Channel Cross-Listing Companion (ebay-lister-pro)",
   "version": "1.0.0",
   "description": "Scrapes product pages from Amazon, eBay, Shopify, Poshmark, and Mercari, and saves them directly as drafts on your local multichannel dashboard.",
   "permissions": [

@@ -9,7 +9,7 @@ const readline = require('readline');
 const crypto = require('crypto');
 
 console.log("=========================================================================");
-console.log("🚀 eBay Multi-Channel Lister - Bootstrap Configurator Wizard");
+console.log("🚀 ListAI Pro (ebay-lister-pro) - Bootstrap Configurator Wizard");
 console.log("=========================================================================");
 
 // 1. Check Node.js Version

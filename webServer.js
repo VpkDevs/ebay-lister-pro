@@ -5776,7 +5776,7 @@ function startWebGuiServer(port = 45900) {
   // Strictly bind only to localhost loopback '127.0.0.1' for security
   server.listen(port, '127.0.0.1', () => {
     console.log(`\n======================================================`);
-    console.log(`🚀 eBay Personal Lister GUI server started!`);
+    console.log(`🚀 ListAI Pro (ebay-lister-pro) GUI server started!`);
     console.log(`🔗 Access Dashboard: http://127.0.0.1:${port}`);
     console.log(`======================================================\n`);
     
